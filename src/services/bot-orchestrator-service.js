@@ -7,6 +7,11 @@
 const prisma = require("../database/prisma");
 const { interpret } = require("./bot-interpreter-service");
 const { decide } = require("./bot-decision-service");
+const { plan } = require("./bot-agent-planner-service");
+const { clarificationFor } = require("./bot-tool-orchestrator-service");
+const {
+  normalizeCaseState, mergeCaseState, recordQuestionAsked,
+} = require("./bot-case-state-service");
 const { computeResponse, isPersonalityEligible } = require("./bot-response-service");
 const { applyPersonality } = require("./bot-personality-service");
 const {
@@ -57,6 +62,63 @@ async function respondWithPersonality({ bot, decision, interpretation, message }
       assistantName: styled.assistantName || null, usage: styled.usage || null,
     },
   };
+}
+
+// Traduz a saída do Agent Planner (bot-agent-planner-service.js — action:
+// RESPOND/ASK/CLARIFY/SEARCH_KNOWLEDGE/USE_TOOL/HANDOFF/WAIT/RESOLVE) para o
+// MESMO formato de decisão que bot-decision-service.js#decide() sempre
+// devolveu (action: RESPOND/ASK_CLARIFICATION/HANDOFF_HUMAN/QUERY_TOOL/
+// NO_ACTION). É só isto que permite o Planner ser plugado sem duplicar Flow
+// Engine/Tools/Knowledge: o resto do pipeline abaixo (startFlow,
+// resolveToolDecision, resolveKnowledgeResponse) continua lendo
+// `decision.action` exatamente como sempre leu, sem saber que o Planner
+// existe. `plannerResult` completo fica pendurado na decisão só para
+// diagnóstico (Observação/Simulador — item 12), nunca usado para decidir
+// nada além do que já foi mapeado aqui.
+function planToLegacyDecision(plannerResult, interpretation) {
+  const shared = {
+    categoryId: plannerResult.categoryId || null,
+    withinHours: true,
+    socialBehavior: interpretation.socialBehavior || null,
+    greetingReply: interpretation.greetingReply || null,
+    summary: plannerResult.reason,
+    plannerResult,
+  };
+
+  switch (plannerResult.action) {
+    case "HANDOFF":
+      return { ...shared, action: "HANDOFF_HUMAN", needsClarification: false, shouldHandoff: true };
+    case "ASK": {
+      const question = clarificationFor([plannerResult.requiredInformation]);
+      return {
+        ...shared, action: "ASK_CLARIFICATION", needsClarification: true, shouldHandoff: false,
+        clarificationQuestion: question,
+      };
+    }
+    case "CLARIFY": {
+      const candidates = plannerResult.candidates || [];
+      const clarificationQuestion = candidates.length >= 2
+        ? `Você quis dizer "${candidates[0].intentName}" ou "${candidates[1].intentName}"? Pode confirmar ou me dar mais detalhes?`
+        : undefined;
+      return {
+        ...shared, action: "ASK_CLARIFICATION", needsClarification: true, shouldHandoff: false,
+        ...(clarificationQuestion ? { clarificationQuestion } : {}),
+      };
+    }
+    case "USE_TOOL":
+      return {
+        ...shared, action: "QUERY_TOOL", needsClarification: false, shouldHandoff: false,
+        toolName: plannerResult.toolName, entities: plannerResult.knownEntities,
+      };
+    case "WAIT":
+      return { ...shared, action: "NO_ACTION", needsClarification: false, shouldHandoff: false };
+    // RESOLVE/SEARCH_KNOWLEDGE/RESPOND: todos viram RESPOND — o texto real é
+    // resolvido a seguir por resolveKnowledgeResponse (Knowledge)/
+    // bot-response-service.js (resposta configurada da intenção/fallback),
+    // exatamente como o decide() legado já fazia para RESPOND.
+    default:
+      return { ...shared, action: "RESPOND", needsClarification: false, shouldHandoff: false };
+  }
 }
 
 // Um Bot atende um canal pelo campo legado `channel` (single-channel,
@@ -227,9 +289,42 @@ async function runDecisionPipeline({
     }
   }
 
+  let caseStateUpdate = null;
+
   if (!decision) {
     interpretation = await interpret({ bot, message, context, state, flags });
-    decision = decide({ bot, interpretation, message, state, now, flags });
+
+    if (flags.agentPlannerEnabled === true) {
+      // Intent como sinal (item 2): o candidato top-1 já vem com o reforço
+      // semântico de bot-semantic-normalizer.js/bot-intent-ranking-service.js
+      // (typo/abreviação/paráfrase) — o `interpretation.intentId` legado,
+      // usado por resolveKnowledgeResponse/Flow Engine logo abaixo, não
+      // tinha esse reforço. Só promove quando o status é "OK" (um candidato
+      // claro) e só quando o Planner está ligado — um Bot que não ligou a
+      // flag continua com intentId exatamente como sempre foi.
+      if (interpretation.intentStatus === "OK" && interpretation.intentCandidates[0]) {
+        const top = interpretation.intentCandidates[0];
+        interpretation = { ...interpretation, intentId: top.intentId, intentName: top.intentName, confidence: top.confidence };
+      }
+
+      // Contexto real (item 4): lido do MESMO `state` que já alimenta
+      // contextEntities/flow* — nunca uma consulta extra ao banco. No
+      // simulador, `state` é o objeto transitório da sessão de teste; numa
+      // conversa real, é o ConversationBotState já carregado por
+      // orchestrate(). Ambos os casos tratam ausência como caso vazio.
+      const caseState = normalizeCaseState(state?.caseState);
+      const plannerResult = plan({ bot, interpretation, caseState });
+      decision = planToLegacyDecision(plannerResult, interpretation);
+
+      // Registra a pergunta feita (ASK/CLARIFY) para nunca repeti-la
+      // enquanto a resposta não chegar — mesma ideia de "não perguntar de
+      // novo o que já é conhecido", agora também para PERGUNTAS já feitas,
+      // não só para entidades já capturadas.
+      const askedQuestion = decision.clarificationQuestion || null;
+      caseStateUpdate = askedQuestion ? recordQuestionAsked(caseState, askedQuestion) : caseState;
+    } else {
+      decision = decide({ bot, interpretation, message, state, now, flags });
+    }
 
     // Uma intenção com etapas configuradas (Fluxo de atendimento) é
     // conduzida pelo Flow Engine em vez da resposta/Tool/conhecimento de
@@ -341,9 +436,18 @@ async function runDecisionPipeline({
     lastResponseRepeatCount: finalLoop.repeatCount,
   };
 
+  // Captura de entidade no Case State (item 4): só quando o Planner rodou
+  // (caseStateUpdate só é setado nesse caminho) — produto é a primeira
+  // entidade "promovida" do bag genérico de intepretation.entities para o
+  // caso estruturado; mesma regra de nunca sobrescrever um fato já sabido
+  // com vazio (ver mergeCaseState).
+  if (caseStateUpdate) {
+    caseStateUpdate = mergeCaseState(caseStateUpdate, { product: interpretation.entities?.productName || null });
+  }
+
   return {
     interpretation, decision, targetBot, responseText, operational, flow: flowUpdate,
-    flowStackUpdate, topicSwitchDetected, personalityInfo,
+    flowStackUpdate, topicSwitchDetected, personalityInfo, caseStateUpdate,
   };
 }
 
@@ -434,7 +538,7 @@ async function orchestrate({
 
   const {
     interpretation, decision, targetBot, responseText, operational, flow, flowStackUpdate, topicSwitchDetected,
-    personalityInfo,
+    personalityInfo, caseStateUpdate,
   } = await runDecisionPipeline({
     bot, message, context, state: conversationalState, guardState: operationalState,
     previousIntroducedAt: state?.introducedAt || null, flags, now, channel, client, sessionExpired, toolMode,
@@ -510,6 +614,7 @@ async function orchestrate({
     flow: flowToPersist,
     contextEntities: contextEntitiesUpdate,
     flowStack: flowStackUpdate,
+    caseState: caseStateUpdate !== null ? caseStateUpdate : undefined,
   }, client);
 
   // Item 15 (custo/uso de IA): registra a chamada real ao provider externo,
@@ -557,6 +662,11 @@ async function orchestrate({
       personalityApplied: Boolean(personalityInfo?.applied),
       personalityProvider: personalityInfo?.provider || null,
       personalityAssistantName: personalityInfo?.assistantName || null,
+      // Agent Planner (item 3): só preenchido quando agentPlannerEnabled
+      // está ligado neste Bot — auditoria leve, o detalhe completo
+      // (candidatos/case state) fica só no simulador (item 12).
+      plannerAction: decision.plannerResult?.action || null,
+      plannerReason: decision.plannerResult?.reason || null,
     },
   });
 }
@@ -573,7 +683,7 @@ async function simulateOrchestration({ bot, message, context = [], state = null,
 
   const {
     interpretation, decision, targetBot: simulatedTargetBot, responseText, operational, flow, flowStackUpdate,
-    topicSwitchDetected, personalityInfo,
+    topicSwitchDetected, personalityInfo, caseStateUpdate,
   } = await runDecisionPipeline({
     bot: simulationBot, message, context, state, guardState: state, flags, now, channel: bot.channel, client: prisma,
     sessionExpired: false, flowStack: state?.flowStack || [], seedEntities: priorContextEntities,
@@ -613,6 +723,10 @@ async function simulateOrchestration({ bot, message, context = [], state = null,
     flowFailedSteps: flow ? flow.failedSteps : (state?.flowFailedSteps ?? null),
     flowResolutionStatus: flow ? flow.resolutionStatus : (state?.flowResolutionStatus ?? null),
     pendingQuestion: flow ? (flow.pendingQuestion ?? null) : (state?.pendingQuestion ?? null),
+    // Case State (item 4/12): só atualizado quando o Agent Planner rodou
+    // (flags.agentPlannerEnabled=true nesta simulação) — senão mantém o que
+    // já existia na sessão de teste, igual aos campos flow* acima.
+    caseState: caseStateUpdate !== null ? caseStateUpdate : (state?.caseState ?? null),
   };
 
   return {
@@ -629,6 +743,20 @@ async function simulateOrchestration({ bot, message, context = [], state = null,
         personalityProvider: personalityInfo?.provider || null,
         personalityAssistantName: personalityInfo?.assistantName || null,
         personalitySystemPrompt: personalityInfo?.systemPrompt || null,
+        // Simulador como diagnóstico (item 12): cada estágio do pipeline
+        // fica visível — normalização semântica, candidatos de intent (com
+        // evidência), e a decisão estruturada do Agent Planner (quando
+        // ligado). `intentCandidates`/`semantic` existem sempre (Fase 1,
+        // independente da flag); `plannerResult` só quando
+        // agentPlannerEnabled está ligado neste Bot.
+        normalizedMessage: interpretation.semantic?.normalized || null,
+        detectedConcepts: interpretation.semantic?.concepts || [],
+        intentCandidates: interpretation.intentCandidates || [],
+        intentStatus: interpretation.intentStatus || null,
+        plannerAction: decision.plannerResult?.action || null,
+        plannerReason: decision.plannerResult?.reason || null,
+        plannerResult: decision.plannerResult || null,
+        caseState: caseStateUpdate !== null ? caseStateUpdate : (state?.caseState ?? null),
       },
     }),
     nextState,

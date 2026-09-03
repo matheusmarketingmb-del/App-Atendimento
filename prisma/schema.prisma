@@ -1027,6 +1027,17 @@ model ConversationBotState {
   // modelo mesmo em uma intenção nova sem fluxo nenhum.
   contextEntities Json?
 
+  // Contexto real / "Case State" (plano de Inteligência de Bots, item 4):
+  // memória estruturada do CASO em nível de CONVERSA — sintoma, produto,
+  // aplicativo, sistema operacional, perguntas já feitas, soluções já
+  // tentadas/falhadas, ferramentas usadas, pendências. Diferente de
+  // `contextEntities` (bag chave/valor genérico) e dos campos `flow*`
+  // (memória de UM fluxo específico, descartada quando ele termina): isto
+  // sobrevive à troca de intenção/fluxo, no mesmo ciclo de vida/TTL de
+  // `contextEntities` (resetado junto quando a sessão expira). Shape
+  // validado em bot-case-state-service.js, nunca lido cru por outro módulo.
+  caseState Json?
+
   // Item 5 (múltiplas intenções): pilha de fluxos PAUSADOS por troca de
   // assunto (item 4) — cada item é um snapshot igual ao persistido em
   // flow*/pendingQuestion. Vazio/nulo = nenhum fluxo em espera. Nunca cresce

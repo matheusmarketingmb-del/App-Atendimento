@@ -157,12 +157,19 @@ const FEATURE_FLAG_DEFAULTS = Object.freeze({
   contextExpirationMinutes: 120,
   maxSwitchesPerWindow: 3,
   switchWindowMinutes: 10,
+  // Plano de Inteligência de Bots (item 3 — Agent Planner): desligado por
+  // padrão. Ligado, bot-orchestrator-service.js troca decide() pelo
+  // Agent Planner (bot-agent-planner-service.js) para o caminho comum
+  // (fora de Flow Engine) — Tools/Knowledge/Flow continuam exatamente pelos
+  // mesmos serviços de sempre, nunca duplicados. Um Bot que nunca ligar isto
+  // continua se comportando byte a byte como antes.
+  agentPlannerEnabled: false,
 });
 const BOOLEAN_FEATURE_FLAG_KEYS = Object.freeze([
   "interpretationEnabled", "conversationalBehaviorEnabled", "contextEnabled", "autoSwitchEnabled",
   "observationEnabled", "learningEnabled", "agentSuggestionsEnabled", "knowledgeSuggestionsEnabled", "knowledgeBaseEnabled",
   "handoffAutoPauseEnabled", "handoffEnabled", "toolsFeatureEnabled", "flowEngineEnabled",
-  "autoFinalizeOnResolution", "externalAiFallbackEnabled",
+  "autoFinalizeOnResolution", "externalAiFallbackEnabled", "agentPlannerEnabled",
 ]);
 const NUMERIC_FEATURE_FLAG_RANGES = Object.freeze({
   contextMaxMessages: { min: 1, max: 30 },

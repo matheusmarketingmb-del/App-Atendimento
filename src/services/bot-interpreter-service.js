@@ -7,6 +7,7 @@ const { extractEntities, mergeEntities } = require("./bot-entity-extractor");
 const { getPrimaryProvider, getFallbackProvider } = require("./ai/get-ai-provider");
 const { DEFAULT_HIGH_CONFIDENCE_THRESHOLD, DEFAULT_EXTERNAL_AI_THRESHOLD } = require("./bot-constants");
 const { detectSocialBehavior } = require("./bot-social-behavior-service");
+const { rankIntentCandidates } = require("./bot-intent-ranking-service");
 
 function findIntent(bot, intentId) {
   if (!intentId) return null;
@@ -137,7 +138,7 @@ async function interpretWithProviders({ bot, message, context = [], state = null
 //     tenta o externo).
 // Nunca troca um resultado local válido por um resultado externo pior: só
 // substitui quando o provider externo realmente classificou algo.
-async function interpret({ bot, message, context = [], state = null, flags = {} }) {
+async function interpretCore({ bot, message, context = [], state = null, flags = {} }) {
   const local = getFallbackProvider();
   const localResult = await interpretWithProviders({ bot, message, context, state, primary: local, fallback: local });
 
@@ -172,6 +173,26 @@ async function interpret({ bot, message, context = [], state = null, flags = {} 
     externalStatus: aiOutcome.status,
     externalErrorCode: aiOutcome.errorCode,
     aiUsage: aiOutcome.usage || null,
+  };
+}
+
+// Fase 1 (item 2 do plano de Inteligência): "Intent não é resposta" — a
+// interpretação passa a carregar, ALÉM do vencedor único de sempre
+// (intentId/confidence, consumido sem mudança por bot-decision-service.js),
+// os candidatos top-N com evidência e um status OK/AMBIGUOUS/UNKNOWN
+// (bot-intent-ranking-service.js). Puramente ADITIVO: nenhum campo existente
+// muda de valor/formato, então nada que já lê `interpretation.intentId`
+// quebra. Quem quiser decidir com mais nuance (bot-agent-planner-service.js,
+// fase 2) usa `intentCandidates`/`status`/`semantic`; o resto do motor
+// continua ignorando esses campos como sempre ignorou campos novos.
+async function interpret(input) {
+  const result = await interpretCore(input);
+  const ranking = rankIntentCandidates(input.bot, input.message);
+  return {
+    ...result,
+    intentCandidates: ranking.candidates,
+    intentStatus: ranking.status,
+    semantic: { normalized: ranking.semantic.normalized, concepts: ranking.semantic.concepts },
   };
 }
 

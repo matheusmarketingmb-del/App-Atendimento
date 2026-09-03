@@ -32,7 +32,8 @@ function mergeContextEntities(existing, incoming) {
 // `flowStack` (item 5, opcional): quando informado (mesmo `[]`), sobrescreve
 // a pilha de fluxos pausados — undefined = não mexer na pilha atual.
 async function persistDecision({
-  conversationId, bot, interpretation, decision, operational = {}, flow = null, contextEntities = undefined, flowStack = undefined,
+  conversationId, bot, interpretation, decision, operational = {}, flow = null, contextEntities = undefined,
+  flowStack = undefined, caseState = undefined,
 }, client = prisma) {
   const failedInterpretations = decision.action === "ASK_CLARIFICATION" || decision.action === "HANDOFF_HUMAN"
     ? (decision.failureCount ?? 0)
@@ -50,6 +51,7 @@ async function persistDecision({
     ...operational,
     ...(contextEntities !== undefined ? { contextEntities } : {}),
     ...(flowStack !== undefined ? { flowStack } : {}),
+    ...(caseState !== undefined ? { caseState } : {}),
     ...(flow ? {
       activeFlowIntentId: flow.intentId,
       currentFlowStepId: flow.currentStepId,
