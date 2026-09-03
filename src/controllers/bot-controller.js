@@ -13,6 +13,7 @@ const authorization = require("../services/authorization-service");
 const suggestions = require("../services/bot-suggestion-service");
 const quality = require("../services/bot-quality-service");
 const aiCredentials = require("../services/ai/ai-credential-service");
+const personality = require("../services/bot-personality-service");
 
 module.exports = {
   async list(req, res, next) {
@@ -381,5 +382,33 @@ module.exports = {
   async qualityAlerts(req, res, next) {
     try { return res.json(await quality.qualityAlerts(req.params.botId, req.user)); }
     catch (error) { return next(error); }
+  },
+
+  // Personalidade (Bot -> Personalidade, item deste plano). Preview/teste
+  // reaproveita o simulador já existente (botController.simulate acima) —
+  // o resultado já traz response/knowledgeSourceTitle/provider/intentName e,
+  // adicionalmente, personalityApplied/personalityProvider/
+  // personalitySystemPrompt.
+  async getPersonality(req, res, next) {
+    try { return res.json(await personality.getPersonality(req.params.botId, req.user)); }
+    catch (error) { return next(error); }
+  },
+  async updatePersonality(req, res, next) {
+    try { return res.json(await personality.upsertPersonality(req.params.botId, req.body, req.user)); }
+    catch (error) { return next(error); }
+  },
+  async applyPersonalityPreset(req, res, next) {
+    try { return res.json(await personality.applyPreset(req.params.botId, req.body.preset, req.user)); }
+    catch (error) { return next(error); }
+  },
+  async copyPersonality(req, res, next) {
+    try { return res.json(await personality.copyPersonality(req.body.sourceBotId, req.params.botId, req.user)); }
+    catch (error) { return next(error); }
+  },
+  async listPersonalityPresets(req, res, next) {
+    try {
+      if (!authorization.isMaster(req.user)) throw authorization.forbidden("Somente uma conta Master pode gerenciar Bots.");
+      return res.json(personality.listPresets());
+    } catch (error) { return next(error); }
   },
 };

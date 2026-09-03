@@ -7,7 +7,8 @@
 const prisma = require("../database/prisma");
 const { interpret } = require("./bot-interpreter-service");
 const { decide } = require("./bot-decision-service");
-const { respond } = require("./bot-response-service");
+const { computeResponse, isPersonalityEligible } = require("./bot-response-service");
+const { applyPersonality } = require("./bot-personality-service");
 const {
   getState, getRecentContext, persistDecision, mergeContextEntities,
 } = require("./bot-conversation-state-service");
@@ -32,7 +33,31 @@ const botInclude = {
     },
     orderBy: [{ priority: "desc" }, { createdAt: "asc" }],
   },
+  personality: true,
 };
+
+// Camada de ESTILO (Personalidade), sempre DEPOIS de respond() já ter
+// decidido o texto: só reescreve o TOM quando a origem é elegível (resposta
+// de Base de Conhecimento ou de intenção/fallback — nunca Flow Engine, Tool,
+// handoff, esclarecimento, social ou fora do horário, ver
+// isPersonalityEligible em bot-response-service.js). Nunca lança e nunca
+// muda o CONTEÚDO: em qualquer falha ou quando a personalidade não se aplica
+// (flag desligada, sem provider externo configurado), devolve o texto
+// original de computeResponse() inalterado.
+async function respondWithPersonality({ bot, decision, interpretation, message }) {
+  const computed = computeResponse({ bot, decision, interpretation });
+  if (!computed.text || !isPersonalityEligible(computed.source)) {
+    return { text: computed.text, personality: { applied: false, provider: null, systemPrompt: null } };
+  }
+  const styled = await applyPersonality({ bot, text: computed.text, message });
+  return {
+    text: styled.text,
+    personality: {
+      applied: styled.applied, provider: styled.provider, systemPrompt: styled.systemPrompt,
+      assistantName: styled.assistantName || null, usage: styled.usage || null,
+    },
+  };
+}
 
 // Um Bot atende um canal pelo campo legado `channel` (single-channel,
 // comportamento original intocado) OU pelo array aditivo `channels`
@@ -275,7 +300,9 @@ async function runDecisionPipeline({
     }
   }
 
-  let responseText = respond({ bot: targetBot, decision, interpretation });
+  let { text: responseText, personality: personalityInfo } = await respondWithPersonality({
+    bot: targetBot, decision, interpretation, message,
+  });
 
   // Item 5: sinaliza ao cliente que o assunto anterior não foi esquecido.
   if (resumedFromStack?.pendingQuestion) {
@@ -298,7 +325,12 @@ async function runDecisionPipeline({
       ...decision, action: "HANDOFF_HUMAN", shouldHandoff: true,
       summary: `${decision.summary} A mesma resposta se repetiu; proteção contra loop encaminhou para humano.`,
     };
-    responseText = respond({ bot: targetBot, decision, interpretation });
+    // HANDOFF_HUMAN nunca é elegível para reescrita de personalidade (ver
+    // isPersonalityEligible) — usa computeResponse() direto, sem chamar IA
+    // de novo à toa para um texto que já sabemos que sai palavra por
+    // palavra.
+    responseText = computeResponse({ bot: targetBot, decision, interpretation }).text;
+    personalityInfo = { applied: false, provider: null, systemPrompt: null };
   }
   const finalLoop = checkResponseLoop(guardState, responseText);
 
@@ -311,7 +343,7 @@ async function runDecisionPipeline({
 
   return {
     interpretation, decision, targetBot, responseText, operational, flow: flowUpdate,
-    flowStackUpdate, topicSwitchDetected,
+    flowStackUpdate, topicSwitchDetected, personalityInfo,
   };
 }
 
@@ -402,6 +434,7 @@ async function orchestrate({
 
   const {
     interpretation, decision, targetBot, responseText, operational, flow, flowStackUpdate, topicSwitchDetected,
+    personalityInfo,
   } = await runDecisionPipeline({
     bot, message, context, state: conversationalState, guardState: operationalState,
     previousIntroducedAt: state?.introducedAt || null, flags, now, channel, client, sessionExpired, toolMode,
@@ -489,6 +522,15 @@ async function orchestrate({
       usage: interpretation.aiUsage,
     }, client);
   }
+  // Mesmo item 15, para a reescrita de personalidade: só quando ela
+  // realmente chamou um provider externo (nunca para o simulador, que usa
+  // simulateOrchestration() e não passa por este bloco).
+  if (personalityInfo?.applied) {
+    await recordAiUsage({
+      botId: targetBot.id, provider: personalityInfo.provider, reason: "PERSONALITY_REPHRASE",
+      usage: personalityInfo.usage,
+    }, client);
+  }
 
   // A finalização só pode ocorrer DEPOIS que uma futura camada de envio
   // confirmar a entrega da resposta. Hoje o orquestrador também é chamado
@@ -509,6 +551,12 @@ async function orchestrate({
       // fica sempre disponível aqui (mesmo em modo observação) — quem
       // decide persistir/mostrar ao atendente é bot-observation-service.js.
       suggestedResponseText: targetFlags.agentSuggestionsEnabled ? (finalResponseText || null) : null,
+      // Personalidade (Bot -> Personalidade): mostra se o texto acima saiu
+      // reescrito no tom configurado, e por qual provider — nunca indica
+      // QUAL foi o conteúdo original (isso é auditoria, não UI de cliente).
+      personalityApplied: Boolean(personalityInfo?.applied),
+      personalityProvider: personalityInfo?.provider || null,
+      personalityAssistantName: personalityInfo?.assistantName || null,
     },
   });
 }
@@ -524,7 +572,8 @@ async function simulateOrchestration({ bot, message, context = [], state = null,
   const priorContextEntities = state?.contextEntities || {};
 
   const {
-    interpretation, decision, targetBot: simulatedTargetBot, responseText, operational, flow, flowStackUpdate, topicSwitchDetected,
+    interpretation, decision, targetBot: simulatedTargetBot, responseText, operational, flow, flowStackUpdate,
+    topicSwitchDetected, personalityInfo,
   } = await runDecisionPipeline({
     bot: simulationBot, message, context, state, guardState: state, flags, now, channel: bot.channel, client: prisma,
     sessionExpired: false, flowStack: state?.flowStack || [], seedEntities: priorContextEntities,
@@ -567,7 +616,21 @@ async function simulateOrchestration({ bot, message, context = [], state = null,
   };
 
   return {
-    ...toStandardResult({ bot, targetBot, interpretation, decision, responseText, extras: { topicSwitchDetected } }),
+    ...toStandardResult({
+      bot, targetBot, interpretation, decision, responseText,
+      extras: {
+        topicSwitchDetected,
+        // Item "Adicionar preview/teste": o simulador é o ÚNICO lugar que
+        // expõe o system prompt de personalidade completo (útil para o
+        // Master conferir exatamente o que seria enviado ao provider de IA
+        // antes das mensagens) — nunca exposto em conversas reais
+        // (orchestrate()) por não ser algo que o atendente precisa ver.
+        personalityApplied: Boolean(personalityInfo?.applied),
+        personalityProvider: personalityInfo?.provider || null,
+        personalityAssistantName: personalityInfo?.assistantName || null,
+        personalitySystemPrompt: personalityInfo?.systemPrompt || null,
+      },
+    }),
     nextState,
   };
 }

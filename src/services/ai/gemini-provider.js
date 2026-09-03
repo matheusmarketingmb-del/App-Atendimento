@@ -9,7 +9,7 @@ const axios = require("axios");
 const { AIProvider } = require("./ai-provider");
 const { extractEntities: extractEntitiesLocally } = require("../bot-entity-extractor");
 const { parseJsonResponse, validateClassification } = require("./classification-utils");
-const { buildIntentPrompt } = require("./anthropic-provider");
+const { buildIntentPrompt, buildRephrasePrompt } = require("./anthropic-provider");
 
 const DEFAULT_MODEL = "gemini-3.6-flash";
 const DEFAULT_TIMEOUT_MS = 15000;
@@ -124,8 +124,31 @@ class GeminiProvider extends AIProvider {
     return extractEntitiesLocally(message);
   }
 
-  async generateResponse({ bot, intent }) {
-    return intent?.responseMessage || bot.fallbackMessage;
+  async generateResponse({ systemPrompt, groundingText, userMessage, bot, intent }) {
+    if (!systemPrompt || !groundingText) return intent?.responseMessage || bot?.fallbackMessage || groundingText || "";
+    const prompt = buildRephrasePrompt({ groundingText, userMessage });
+    let response;
+    try {
+      response = await axios.post(`${API_BASE}/${this.model}:generateContent`, {
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        systemInstruction: { parts: [{ text: systemPrompt }] },
+        generationConfig: { maxOutputTokens: 500 },
+      }, {
+        timeout: this.timeoutMs,
+        headers: {
+          "x-goog-api-key": this.apiKey,
+          "content-type": "application/json",
+        },
+      });
+    } catch (error) {
+      throw mapGeminiError(error);
+    }
+    const text = extractCandidateText(response) || "";
+    const rawUsage = response.data?.usageMetadata;
+    const usage = rawUsage
+      ? { inputTokens: rawUsage.promptTokenCount ?? null, outputTokens: rawUsage.candidatesTokenCount ?? null }
+      : null;
+    return { text: text.trim(), usage };
   }
 }
 

@@ -606,10 +606,59 @@ model Bot {
   suggestionFeedback      BotSuggestionFeedback[]
   campaigns               Campaign[]
   triageOptions           BotTriageOption[]
+  personality             BotPersonality?
 
   @@index([status, channel])
   @@index([defaultCategoryId])
   @@index([type])
+}
+
+// Personalidade configurável por Bot ("Bot → Personalidade"). Define só
+// COMO o Bot responde (tom, estilo, comportamentos, tamanho preferido) —
+// nunca O QUE ele responde: isso continua vindo de KnowledgeSource
+// (Base de Conhecimento), Tools, Flow Engine e das respostas configuradas da
+// intenção (ver bot-response-service.js/bot-personality-service.js). Um Bot
+// sem este registro usa o preset padrão da Mibro Brasil (ver
+// DEFAULT_PERSONALITY em bot-personality-constants.js) — nunca fica "sem
+// personalidade nenhuma".
+enum BotPersonalityPreset {
+  TRIAGEM
+  SUPORTE
+  COMERCIAL
+  POS_VENDA
+  PERSONALIZADO
+}
+
+enum BotResponseLength {
+  SHORT
+  MEDIUM
+  LONG
+}
+
+model BotPersonality {
+  id     String @id @default(cuid())
+  botId  String @unique
+  bot    Bot    @relation(fields: [botId], references: [id], onDelete: Cascade)
+
+  // Preset usado como ponto de partida (item "Adicionar presets"). Continua
+  // editável depois de aplicado — vira PERSONALIZADO assim que um campo é
+  // alterado manualmente na tela (ver bot-personality-service.js), mas o
+  // valor aqui é só rótulo/rastreio, nunca reaplicado sozinho.
+  preset BotPersonalityPreset @default(PERSONALIZADO)
+
+  assistantName          String?
+  roleDescription        String?           @db.Text
+  tone                   String[]          @default([])
+  responseStyle          String[]          @default([])
+  mandatoryBehaviors     String[]          @default([])
+  forbiddenBehaviors     String[]          @default([])
+  additionalInstructions String?           @db.Text
+  responseLength         BotResponseLength @default(MEDIUM)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([preset])
 }
 
 // Opções/setores da lista interativa do Bot de Triagem (item "Fluxo /

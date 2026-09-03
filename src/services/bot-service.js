@@ -49,6 +49,7 @@ const botInclude = {
     orderBy: [{ order: "asc" }, { createdAt: "asc" }],
     include: { category: { select: categorySelection } },
   },
+  personality: true,
 };
 
 function fail(message, statusCode = 400) {

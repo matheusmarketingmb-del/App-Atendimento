@@ -9,7 +9,7 @@ const axios = require("axios");
 const { AIProvider } = require("./ai-provider");
 const { extractEntities: extractEntitiesLocally } = require("../bot-entity-extractor");
 const { parseJsonResponse, validateClassification } = require("./classification-utils");
-const { buildIntentPrompt } = require("./anthropic-provider");
+const { buildIntentPrompt, buildRephrasePrompt } = require("./anthropic-provider");
 
 const DEFAULT_MODEL = "gpt-4o-mini";
 const DEFAULT_TIMEOUT_MS = 8000;
@@ -87,8 +87,34 @@ class OpenAiProvider extends AIProvider {
     return extractEntitiesLocally(message);
   }
 
-  async generateResponse({ bot, intent }) {
-    return intent?.responseMessage || bot.fallbackMessage;
+  async generateResponse({ systemPrompt, groundingText, userMessage, bot, intent }) {
+    if (!systemPrompt || !groundingText) return intent?.responseMessage || bot?.fallbackMessage || groundingText || "";
+    const prompt = buildRephrasePrompt({ groundingText, userMessage });
+    let response;
+    try {
+      response = await axios.post(API_URL, {
+        model: this.model,
+        max_tokens: 500,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: prompt },
+        ],
+      }, {
+        timeout: this.timeoutMs,
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          "content-type": "application/json",
+        },
+      });
+    } catch (error) {
+      throw mapOpenAiError(error);
+    }
+    const text = response.data?.choices?.[0]?.message?.content || "";
+    const rawUsage = response.data?.usage;
+    const usage = rawUsage
+      ? { inputTokens: rawUsage.prompt_tokens ?? null, outputTokens: rawUsage.completion_tokens ?? null }
+      : null;
+    return { text: text.trim(), usage };
   }
 }
 

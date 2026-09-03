@@ -72,8 +72,13 @@ class LocalFallbackProvider extends AIProvider {
     return extractEntities(message);
   }
 
-  async generateResponse({ bot, intent }) {
-    return intent?.responseMessage || bot.fallbackMessage;
+  // Provider LOCAL nunca reescreve estilo (não tem LLM por trás) — mas
+  // getPrimaryProvider() só devolve LOCAL_FALLBACK quando não há credencial
+  // externa configurada, e bot-personality-service.js já trata
+  // name === "LOCAL_FALLBACK" como "não aplicável" antes de sequer chamar
+  // isto. Mantido aqui só por completude do contrato AIProvider.
+  async generateResponse({ groundingText, bot, intent }) {
+    return groundingText || intent?.responseMessage || bot?.fallbackMessage || "";
   }
 }
 

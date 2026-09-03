@@ -456,6 +456,14 @@ app.post(
   app.get("/api/bots/:botId/quality-metrics", botController.qualityMetrics);
   app.get("/api/bots/:botId/quality-alerts", botController.qualityAlerts);
 
+  // Personalidade configurável por Bot ("Bot -> Personalidade"). Preview/
+  // teste reaproveita POST /api/bots/:botId/simulate (já registrado acima).
+  app.get("/api/bot-personality-presets", botController.listPersonalityPresets);
+  app.get("/api/bots/:botId/personality", botController.getPersonality);
+  app.put("/api/bots/:botId/personality", botController.updatePersonality);
+  app.post("/api/bots/:botId/personality/preset", botController.applyPersonalityPreset);
+  app.post("/api/bots/:botId/personality/copy", botController.copyPersonality);
+
   // Tools (itens 5-7): listagem só de leitura.
   app.get("/api/bot-tools", botController.listTools);
 
