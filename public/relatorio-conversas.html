@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#0a0b0d">
+  <link rel="icon" type="image/png" sizes="192x192" href="/assets/app-icon-192.png">
+  <title>Relatório de Conversas &bull; Central de Atendimento</title>
+  <script>try{const saved=localStorage.getItem("mibro-theme");document.documentElement.dataset.theme=saved||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light")}catch{}</script>
+  <link rel="stylesheet" href="/css/relatorio-conversas.css">
+</head>
+<body class="rp-body">
+  <header class="rp-topbar">
+    <a class="rp-brand" href="/"><img src="/assets/mibro-logo.png" alt="Mibro"><small>Relatório de Conversas</small></a>
+    <a class="rp-back" href="/configuracoes.html">&larr; Configurações</a>
+    <div class="rp-topbar-right">
+      <button id="theme-toggle" class="rp-icon-btn" type="button" title="Alternar tema">&#9790;</button>
+      <button id="refresh" class="rp-icon-btn" type="button" title="Atualizar">&#8635;</button>
+    </div>
+  </header>
+
+  <main class="rp-shell">
+    <!-- Filtros -->
+    <section class="rp-filters" id="filters-bar">
+      <select id="f-period">
+        <option value="today">Hoje</option>
+        <option value="yesterday">Ontem</option>
+        <option value="7d" selected>Últimos 7 dias</option>
+        <option value="30d">Últimos 30 dias</option>
+        <option value="this_month">Este mês</option>
+        <option value="last_month">Mês anterior</option>
+        <option value="all">Todo histórico</option>
+        <option value="custom">Personalizado…</option>
+      </select>
+      <input id="f-start" type="date" hidden>
+      <input id="f-end" type="date" hidden>
+      <select id="f-agent"><option value="">Vendedor: todos</option></select>
+      <select id="f-channel"><option value="">Canal: todos</option></select>
+      <select id="f-category"><option value="">Categoria: todas</option></select>
+      <select id="f-status"><option value="">Status: todos</option></select>
+      <select id="f-priority"><option value="">Prioridade: todas</option></select>
+      <button id="f-clear" class="rp-filter-clear" type="button">Limpar filtros</button>
+    </section>
+    <div id="filter-chips" class="rp-chips"></div>
+
+    <!-- KPIs principais -->
+    <section class="rp-kpi-grid" id="kpi-main"></section>
+    <!-- KPIs de qualidade -->
+    <section class="rp-kpi-grid compact" id="kpi-quality"></section>
+
+    <!-- Gráfico principal -->
+    <section class="rp-card">
+      <div class="rp-card-head">
+        <div><h3>Volume de conversas</h3><p>Recebidas, resolvidas ou mensagens — por hora, dia, semana ou mês.</p></div>
+        <div class="rp-head-controls">
+          <div class="rp-seg" id="chart-metric">
+            <button data-value="conversations_received" class="active">Recebidas</button>
+            <button data-value="resolved">Resolvidas</button>
+            <button data-value="messages_received">Msgs recebidas</button>
+            <button data-value="messages_sent">Msgs enviadas</button>
+          </div>
+          <div class="rp-seg" id="chart-granularity"></div>
+          <label class="rp-check"><input id="chart-compare" type="checkbox"> Comparar período anterior</label>
+        </div>
+      </div>
+      <div class="rp-chart-wrap"><svg class="rp-chart-svg" id="main-chart"></svg><div class="rp-chart-tooltip" id="chart-tooltip"></div></div>
+      <div class="rp-legend" id="chart-legend"></div>
+    </section>
+
+    <div class="rp-grid-2">
+      <section class="rp-card">
+        <div class="rp-card-head"><div><h3>Situação das conversas</h3><p>Clique para filtrar a tabela.</p></div></div>
+        <div class="rp-donut-wrap">
+          <svg id="status-donut" width="180" height="180" viewBox="0 0 180 180"></svg>
+          <div class="rp-donut-list" id="status-list"></div>
+        </div>
+      </section>
+      <section class="rp-card">
+        <div class="rp-card-head"><div><h3>Conversas por canal</h3><p>Quantidade, resolvidas e 1ª resposta média.</p></div></div>
+        <div class="rp-rank" id="channel-rank"></div>
+      </section>
+    </div>
+
+    <section class="rp-card">
+      <div class="rp-card-head"><div><h3>Categorias mais demandadas</h3><p>Tempo médio de resolução por categoria.</p></div></div>
+      <div class="rp-rank" id="category-rank"></div>
+    </section>
+
+    <section class="rp-card">
+      <div class="rp-card-head">
+        <div><h3>Desempenho dos vendedores</h3><p>Clique numa linha para o detalhe; selecione até 3 para comparar.</p></div>
+        <div class="rp-head-controls">
+          <button id="agents-compare-btn" class="rp-btn" type="button" disabled>Comparar selecionados</button>
+          <button id="agents-export" class="rp-btn" type="button">Exportar CSV</button>
+        </div>
+      </div>
+      <div class="rp-table-wrap">
+        <table class="rp-table" id="agents-table">
+          <thead><tr>
+            <th></th><th data-sort="name">Vendedor</th><th data-sort="attended">Atendidas</th><th data-sort="claimed">Assumidas</th>
+            <th data-sort="resolved">Resolvidas</th><th data-sort="finalized">Finalizadas</th><th data-sort="messagesSent">Mensagens</th>
+            <th data-sort="firstResponseAvgSeconds">1ª resposta</th><th data-sort="responseAvgSeconds">Resposta</th>
+            <th data-sort="resolutionAvgSeconds">Resolução</th><th data-sort="resolutionRate">Taxa resolução</th>
+            <th data-sort="slaMetPercent">SLA</th><th data-sort="neverAnswered">Nunca respondidas</th>
+          </tr></thead>
+          <tbody id="agents-tbody"></tbody>
+        </table>
+      </div>
+      <div id="agents-compare-result" class="rp-table-wrap" hidden></div>
+    </section>
+
+    <div class="rp-grid-2">
+      <section class="rp-card">
+        <div class="rp-card-head"><div><h3>Horários com maior volume</h3><p>Mensagens de clientes por dia da semana e hora.</p></div></div>
+        <div id="heatmap"></div>
+      </section>
+      <section class="rp-card">
+        <div class="rp-card-head"><div><h3>Tempo até a 1ª resposta</h3><p>Distribuição das conversas respondidas no período.</p></div></div>
+        <div class="rp-rank" id="wait-buckets"></div>
+      </section>
+    </div>
+
+    <section class="rp-card">
+      <div class="rp-card-head"><div><h3>Precisam de atenção</h3></div></div>
+      <div class="rp-alerts" id="alerts"></div>
+    </section>
+
+    <section class="rp-card">
+      <div class="rp-card-head">
+        <div><h3>Conversas do período</h3><p id="conversations-count"></p></div>
+        <div class="rp-head-controls"><button id="conversations-export" class="rp-btn primary" type="button">Exportar CSV</button></div>
+      </div>
+      <div class="rp-table-toolbar">
+        <input id="conversations-search" class="rp-search" type="search" placeholder="Buscar por nome, telefone ou e-mail…">
+        <select id="conversations-page-size"><option value="25">25 por página</option><option value="50">50 por página</option><option value="100">100 por página</option></select>
+      </div>
+      <div class="rp-table-wrap">
+        <table class="rp-table" id="conversations-table">
+          <thead><tr>
+            <th>Contato</th><th>Canal</th><th>Categoria</th><th>Última mensagem</th><th data-sort="createdAt">Início</th>
+            <th data-sort="lastMessageAt">Última atividade</th><th data-sort="status">Status</th><th>Atendente</th><th>Situação</th>
+          </tr></thead>
+          <tbody id="conversations-tbody"></tbody>
+        </table>
+      </div>
+      <div class="rp-pagination" id="conversations-pagination"></div>
+    </section>
+  </main>
+
+  <div class="rp-drawer-backdrop" id="drawer-backdrop"></div>
+  <aside class="rp-drawer" id="conversation-drawer"></aside>
+  <aside class="rp-drawer" id="agent-drawer"></aside>
+
+  <div id="toast" class="rp-toast"></div>
+  <script src="/js/relatorio-conversas.js"></script>
+</body>
+</html>

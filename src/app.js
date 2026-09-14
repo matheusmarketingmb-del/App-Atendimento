@@ -15,6 +15,7 @@ const {
   authenticate, requireCampaignsPage, requireConversationSettingsPage, requireMasterPage, requirePageAuth,
 } = require("./middleware/auth");
 const conversationSettingsController = require("./controllers/conversation-settings-controller");
+const conversationReportController = require("./controllers/conversation-report-controller");
 const verifyMetaSignature = require("./middleware/meta-signature");
 const integrationAuth = require("./middleware/integration-auth");
 const { registerExternalLead } = require("./services/external-lead-service");
@@ -297,6 +298,9 @@ function createApp({ channel = new MetaCloudChannel() } = {}) {
   app.get(["/campaigns", "/campaigns.html"], requireCampaignsPage, (_req, res) => (
     res.sendFile(path.join(process.cwd(), "public", "campaigns.html"))
   ));
+  app.get(["/relatorio-conversas", "/relatorio-conversas.html"], requireMasterPage, (_req, res) => (
+    res.sendFile(path.join(process.cwd(), "public", "relatorio-conversas.html"))
+  ));
   app.get(["/configuracoes", "/configuracoes.html"], requireConversationSettingsPage, (_req, res) => (
     res.sendFile(path.join(process.cwd(), "public", "configuracoes.html"))
   ));
@@ -523,7 +527,24 @@ app.post(
 
   app.get("/api/conversation-settings", conversationSettingsController.getSettings);
   app.patch("/api/conversation-settings", conversationSettingsController.updateSettings);
-  app.get("/api/conversation-settings/weekly-report", conversationSettingsController.weeklyReport);
+
+  // Relatório de Conversas (dashboard completo, só Master) — substitui o
+  // antigo relatório semanal embutido em Configurações → Conversas.
+  app.get("/api/reports/conversations/summary", conversationReportController.summary);
+  app.get("/api/reports/conversations/timeseries", conversationReportController.timeseries);
+  app.get("/api/reports/conversations/status-breakdown", conversationReportController.statusBreakdown);
+  app.get("/api/reports/conversations/channel-breakdown", conversationReportController.channelBreakdown);
+  app.get("/api/reports/conversations/category-breakdown", conversationReportController.categoryBreakdown);
+  app.get("/api/reports/conversations/agents", conversationReportController.agentRanking);
+  app.get("/api/reports/conversations/agents/compare", conversationReportController.compareAgents);
+  app.get("/api/reports/conversations/agents/export", conversationReportController.exportAgentsCsv);
+  app.get("/api/reports/conversations/agents/:userId", conversationReportController.agentDetail);
+  app.get("/api/reports/conversations/heatmap", conversationReportController.heatmap);
+  app.get("/api/reports/conversations/wait-time-buckets", conversationReportController.waitTimeBuckets);
+  app.get("/api/reports/conversations/alerts", conversationReportController.alerts);
+  app.get("/api/reports/conversations/export", conversationReportController.exportCsv);
+  app.get("/api/reports/conversations/:conversationId", conversationReportController.conversationDetail);
+  app.get("/api/reports/conversations", conversationReportController.listConversations);
   app.get("/api/campaign-opt-outs", campaignController.listOptOuts);
   app.post("/api/campaign-opt-outs/:phone/remove", campaignController.removeOptOut);
   app.get("/api/campaigns", campaignController.list);
