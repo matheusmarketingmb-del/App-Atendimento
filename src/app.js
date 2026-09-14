@@ -523,6 +523,7 @@ app.post(
 
   app.get("/api/conversation-settings", conversationSettingsController.getSettings);
   app.patch("/api/conversation-settings", conversationSettingsController.updateSettings);
+  app.get("/api/conversation-settings/weekly-report", conversationSettingsController.weeklyReport);
   app.get("/api/campaign-opt-outs", campaignController.listOptOuts);
   app.post("/api/campaign-opt-outs/:phone/remove", campaignController.removeOptOut);
   app.get("/api/campaigns", campaignController.list);

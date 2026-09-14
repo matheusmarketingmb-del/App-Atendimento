@@ -86,6 +86,52 @@
         <button id="save-settings" type="submit">Salvar configurações</button>
       </div>
     </form>
+
+    <section id="weekly-report-section" class="weekly-report" hidden>
+      <div class="settings-heading">
+        <div><span>RELATÓRIO &bull; SOMENTE MASTER</span><h1>Conversas por semana</h1><p>Calculado na hora a partir do estado atual das conversas — sempre reflete a semana escolhida, sem depender de nenhum processo em segundo plano.</p></div>
+      </div>
+
+      <div class="report-nav">
+        <button id="report-prev-week" type="button" class="round-button" title="Semana anterior">&larr;</button>
+        <strong id="report-week-label">—</strong>
+        <button id="report-next-week" type="button" class="round-button" title="Próxima semana">&rarr;</button>
+        <button id="report-current-week" type="button" class="link-button">Semana atual</button>
+      </div>
+
+      <div class="report-tiles">
+        <div class="report-tile"><span id="report-tile-new">0</span><small>Novas conversas</small></div>
+        <div class="report-tile"><span id="report-tile-resolved">0</span><small>Resolvidas</small></div>
+        <div class="report-tile"><span id="report-tile-finalized">0</span><small>Finalizadas (total)</small></div>
+        <div class="report-tile warn"><span id="report-tile-unanswered">0</span><small>Nunca respondidas (nem Bot)</small></div>
+        <div class="report-tile warn"><span id="report-tile-no-agent">0</span><small>Finalizadas sem resposta do vendedor</small></div>
+      </div>
+
+      <div class="report-columns">
+        <div class="card">
+          <div class="card-heading"><h3>Mensagens enviadas por vendedor</h3></div>
+          <div id="report-agent-bars" class="report-bars"><p class="report-empty">Sem atividade nesta semana.</p></div>
+        </div>
+        <div class="card">
+          <div class="card-heading"><h3>Conversas finalizadas por vendedor</h3></div>
+          <div id="report-agent-finalized" class="report-bars"><p class="report-empty">Sem atividade nesta semana.</p></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-heading"><h3>Conversas da semana</h3><span id="report-table-count" class="report-table-count"></span></div>
+        <div class="report-table-wrap">
+          <table class="report-table">
+            <thead>
+              <tr>
+                <th>Contato</th><th>Última mensagem</th><th>Quando</th><th>Status</th><th>Vendedor</th><th>Situação</th>
+              </tr>
+            </thead>
+            <tbody id="report-table-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
   </main>
 
   <div id="toast" class="toast"></div>
