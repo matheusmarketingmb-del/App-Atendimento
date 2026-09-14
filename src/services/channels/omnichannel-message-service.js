@@ -101,7 +101,10 @@ async function persistInboundMessage(normalized, client = prisma) {
       status: normalized.direction === "RECEBIDA" ? "RECEBIDA" : "ENVIADA",
       type: normalized.type,
       text: normalized.text,
-      ...(storedMedia ? { mediaStorageKey: storedMedia.storageKey, mediaMimeType: storedMedia.mimeType, mediaFileName: storedMedia.fileName, mediaSize: storedMedia.size } : {}),
+      ...(storedMedia ? {
+        mediaStorageKey: storedMedia.storageKey, mediaMimeType: storedMedia.mimeType, mediaFileName: storedMedia.fileName,
+        mediaSize: storedMedia.size, mediaSuspicious: Boolean(storedMedia.suspicious), mediaSuspiciousReason: storedMedia.suspiciousReason || null,
+      } : {}),
       occurredAt: normalized.occurredAt,
       rawPayload: normalized.externalMessageId || normalized.senderExternalId
         ? {

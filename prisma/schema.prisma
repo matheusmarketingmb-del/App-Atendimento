@@ -366,6 +366,15 @@ model Message {
   mediaMimeType    String?
   mediaFileName    String?
   mediaSize        Int?
+  // Item de segurança (file-risk-service.js#assessFileRisk): mídia recebida
+  // de canais sem allowlist estrito de MIME (chat interno + canais além do
+  // WhatsApp/Meta — ver media-storage-service.js#validateInternalFile) que
+  // não foi bloqueada, mas merece atenção antes de confiar no conteúdo (ex.:
+  // JSON, planilha com macro, tipo não identificado). Nunca marca mídia do
+  // WhatsApp/Meta (essa já passa por um allowlist estrito por assinatura
+  // binária, nunca fica "suspeita").
+  mediaSuspicious       Boolean @default(false)
+  mediaSuspiciousReason String? @db.Text
   occurredAt       DateTime
   sentByUserId     String?
   rawPayload       Json?

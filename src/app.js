@@ -38,6 +38,7 @@ const externalEventService = require("./services/channels/external-event-service
 const { normalizeInboundMessage } = require("./services/channels/channel-event-normalizer");
 const omnichannelMessageService = require("./services/channels/omnichannel-message-service");
 const { getGlobalSettings } = require("./services/channels/integration-global-settings-service");
+const { checkInboundFlood, startPeriodicCleanup } = require("./services/inbound-flood-guard-service");
 
 function decryptAccountSecretsSafe(account) {
   try { return decryptSecrets(account); }
@@ -110,54 +111,89 @@ function createApp({ channel = new MetaCloudChannel() } = {}) {
   }));
   app.use(cookieParser());
 
-  app.get("/webhook/whatsapp", (req, res) => {
+  // Item de segurança (flood/DoS): limita por IP a taxa de requisições nas
+  // rotas de webhook, públicas por natureza (recebem tráfego de fora sem
+  // autenticação de sessão — só a assinatura HMAC/token as protege de
+  // conteúdo forjado, nunca de VOLUME). Generoso o bastante para o tráfego
+  // real da Meta (rajadas de eventos em lote continuam cabendo), baixo o
+  // bastante para nunca deixar um flood de requisições consumir CPU/memória
+  // do processo (JSON parsing + HMAC + banco por requisição) até derrubar o
+  // serviço. Complementado por checkInboundFlood (por CONTATO, não por IP —
+  // ver inbound-flood-guard-service.js) logo abaixo, porque o IP de origem
+  // aqui é o da Meta/do provedor, compartilhado entre muitos remetentes.
+  const webhookLimiter = rateLimit({ windowMs: 60 * 1000, limit: 300, standardHeaders: true, legacyHeaders: false });
+  startPeriodicCleanup();
+
+  app.get("/webhook/whatsapp", webhookLimiter, (req, res) => {
     if (req.query["hub.mode"] === "subscribe" && req.query["hub.verify_token"] === process.env.VERIFY_TOKEN) {
       return res.status(200).send(req.query["hub.challenge"]);
     }
     return res.sendStatus(403);
   });
 
-  app.post("/webhook/whatsapp", verifyMetaSignature, async (req, res) => {
+  app.post("/webhook/whatsapp", webhookLimiter, verifyMetaSignature, async (req, res) => {
     try {
       const events = channel.parseWebhook(req.body);
       let changed = false;
       for (const event of events) {
-        if (event.kind === "message") {
-          if (["image", "audio", "video", "sticker", "document"].includes(event.type) && event.mediaId) {
-            const existing = await prisma.message.findUnique({ where: { externalId: event.externalId }, select: { id: true } });
-            if (existing) continue;
-            const media = await channel.downloadMedia(event.mediaId, {
-              maxSize: event.type === "sticker" ? 500 * 1024
-                : (event.type === "image" ? 5 * 1024 * 1024
-                  : (event.type === "document" ? 100 * 1024 * 1024 : 16 * 1024 * 1024)),
-            });
-            event.mediaBuffer = media.buffer;
-            event.mediaMimeType = media.mimeType;
-            event.mediaFileName ||= media.fileName;
-          }
-          const result = await saveIncoming(event);
-          if (!result.duplicate) {
-            if (event.type !== "reaction") {
-              await handleIncomingTriage(event, result.message, channel);
-              observeIncomingMessage(event, result.message).catch(() => {});
-              pushService.notifyIncomingMessage(result.message).catch(() => {});
-              // Campanhas (itens 9/13): nunca bloqueia o atendimento normal —
-              // só reage em paralelo (opt-out por palavra-chave, resposta
-              // vinculada à campanha de origem).
-              if (event.type === "text" && event.text) {
-                campaignReplyService.handleInboundMessage({
-                  phone: event.phone || event.contactExternalId, text: event.text,
-                  conversationId: result.message.conversationId,
-                }).catch(() => {});
-              }
+        // Item de segurança (resiliência do lote): uma falha ao processar UM
+        // evento (ex.: mídia deliberadamente malformada — ver
+        // media-storage-service.js#validateDocument, que agora pode lançar
+        // por conteúdo suspeito) nunca pode abortar o restante do lote nem
+        // devolver 500 — um 500 aqui faz a Meta reentregar o webhook inteiro
+        // repetidamente (retry automático), o que por si só já é um vetor de
+        // negação de serviço amplificado por um único evento malicioso.
+        try {
+          if (event.kind === "message") {
+            if (["image", "audio", "video", "sticker", "document"].includes(event.type) && event.mediaId) {
+              const existing = await prisma.message.findUnique({ where: { externalId: event.externalId }, select: { id: true } });
+              if (existing) continue;
+              const media = await channel.downloadMedia(event.mediaId, {
+                maxSize: event.type === "sticker" ? 500 * 1024
+                  : (event.type === "image" ? 5 * 1024 * 1024
+                    : (event.type === "document" ? 100 * 1024 * 1024 : 16 * 1024 * 1024)),
+              });
+              event.mediaBuffer = media.buffer;
+              event.mediaMimeType = media.mimeType;
+              event.mediaFileName ||= media.fileName;
             }
-            changed = true;
+            const result = await saveIncoming(event);
+            if (!result.duplicate) {
+              if (event.type !== "reaction") {
+                // Item de segurança (flood por contato): processamento caro
+                // (Bot/IA/Tools) é pulado além do limite por remetente — a
+                // mensagem em si já foi salva acima, nunca perdida, só o
+                // atendimento automático/observação é que espera a janela
+                // passar (ver inbound-flood-guard-service.js).
+                const floodKey = event.phone || event.contactExternalId || null;
+                const flood = checkInboundFlood(floodKey);
+                if (flood.throttled) {
+                  console.warn(`[SECURITY] limite de mensagens por contato excedido (${flood.count} na janela) — processamento automático pulado para este turno. key=${floodKey}`);
+                } else {
+                  await handleIncomingTriage(event, result.message, channel);
+                  observeIncomingMessage(event, result.message).catch(() => {});
+                  pushService.notifyIncomingMessage(result.message).catch(() => {});
+                  // Campanhas (itens 9/13): nunca bloqueia o atendimento normal —
+                  // só reage em paralelo (opt-out por palavra-chave, resposta
+                  // vinculada à campanha de origem).
+                  if (event.type === "text" && event.text) {
+                    campaignReplyService.handleInboundMessage({
+                      phone: event.phone || event.contactExternalId, text: event.text,
+                      conversationId: result.message.conversationId,
+                    }).catch(() => {});
+                  }
+                }
+              }
+              changed = true;
+            }
           }
-        }
-        if (event.kind === "status") {
-          const result = await updateStatus(event);
-          if (result?.count) changed = true;
-          campaignReplyService.handleCampaignStatusEvent(event).catch(() => {});
+          if (event.kind === "status") {
+            const result = await updateStatus(event);
+            if (result?.count) changed = true;
+            campaignReplyService.handleCampaignStatusEvent(event).catch(() => {});
+          }
+        } catch (eventError) {
+          console.error("[WEBHOOK] falha ao processar um evento do lote (ignorado, lote continua):", eventError.message);
         }
       }
       if (changed) inboxEvents.publish();
@@ -171,7 +207,7 @@ function createApp({ channel = new MetaCloudChannel() } = {}) {
   // Webhook genérico dos canais novos (item 8/16) — Meta continua com sua
   // rota própria acima, intocada. Só canais com supportsWebhook real
   // processam algo; os demais respondem 404 sem vazar detalhe interno.
-  app.post("/webhooks/channels/:channel", async (req, res) => {
+  app.post("/webhooks/channels/:channel", webhookLimiter, async (req, res) => {
     const channel = req.params.channel;
     if (!NEW_CHANNELS.includes(channel)) return res.sendStatus(404);
     try {

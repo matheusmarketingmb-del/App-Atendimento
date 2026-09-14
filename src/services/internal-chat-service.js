@@ -522,6 +522,13 @@ async function sendFile(chatId, file, caption, viewer) {
           fileName: media.fileName,
           size: media.size,
           safeImage: media.safeImage,
+          // Item de segurança (file-risk-service.js): nunca bloqueia um
+          // arquivo de negócio legítimo (JSON, planilha com macro, tipo não
+          // identificado), só marca para quem for abrir saber que merece
+          // atenção antes de confiar no conteúdo. Executáveis/scripts já
+          // foram recusados antes de chegar aqui (storeInternalFile lança).
+          suspicious: media.suspicious,
+          suspiciousReason: media.suspiciousReason,
         },
       },
     },

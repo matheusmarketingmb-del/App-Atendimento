@@ -1,6 +1,7 @@
 const crypto = require("node:crypto");
 const fs = require("node:fs/promises");
 const path = require("node:path");
+const { assessFileRisk } = require("./file-risk-service");
 
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
 const MAX_STICKER_SIZE = 500 * 1024;
@@ -155,11 +156,12 @@ function detectSafeImageMimeType(buffer) {
 
 async function storeMedia({ buffer, mimeType, fileName, stableId, kind }) {
   mimeType = normalizeMimeType(mimeType);
+  let fileRisk = null;
   if (kind === "audio") validateAudio({ buffer, mimeType });
   else if (kind === "video") validateVideo({ buffer, mimeType });
   else if (kind === "sticker") validateSticker({ buffer, mimeType });
   else if (kind === "document") validateDocument({ buffer, mimeType });
-  else if (kind === "internal") validateInternalFile({ buffer });
+  else if (kind === "internal") fileRisk = validateInternalFile({ buffer, mimeType, fileName });
   else validateImage({ buffer, mimeType });
   const safeImageMimeType = kind === "internal" ? detectSafeImageMimeType(buffer) : null;
   if (safeImageMimeType) mimeType = safeImageMimeType;
@@ -175,7 +177,11 @@ async function storeMedia({ buffer, mimeType, fileName, stableId, kind }) {
     mimeType: mimeType || "application/octet-stream",
     fileName: safeFileName(fileName, mimeType),
     size: buffer.length,
-    ...(kind === "internal" ? { safeImage: Boolean(safeImageMimeType) } : {}),
+    ...(kind === "internal" ? {
+      safeImage: Boolean(safeImageMimeType),
+      suspicious: Boolean(fileRisk?.suspicious),
+      suspiciousReason: fileRisk?.suspiciousReason || null,
+    } : {}),
   };
 }
 
@@ -190,13 +196,31 @@ async function storeAudio(options) {
 async function storeVideo(options) {
   return storeMedia({ ...options, kind: "video" });
 }
-function validateInternalFile({ buffer }) {
+// Único ponto de upload/recebimento do sistema sem allowlist de tipo (chat
+// interno entre atendentes + mídia recebida de canais além do WhatsApp/Meta
+// — ver omnichannel-message-service.js): qualquer formato de arquivo de
+// negócio legítimo precisa continuar passando (não dá para restringir por
+// MIME como as demais categorias). A defesa aqui é por CONTEÚDO
+// (file-risk-service.js#assessFileRisk) — nunca confia só no Content-Type
+// que o remetente declarou. Retorna o resultado da avaliação (nunca lança
+// para o caso "suspeito, mas não bloqueado") para quem chamou anexar o aviso
+// à mensagem armazenada.
+function validateInternalFile({ buffer, mimeType, fileName }) {
   if (!Buffer.isBuffer(buffer) || !buffer.length) {
     throw Object.assign(new Error("O arquivo está vazio."), { statusCode: 400 });
   }
   if (buffer.length > MAX_INTERNAL_FILE_SIZE) {
     throw Object.assign(new Error("O arquivo deve ter no máximo 100 MB."), { statusCode: 413 });
   }
+  const risk = assessFileRisk({ buffer, mimeType, fileName });
+  if (risk.blocked) {
+    console.warn(`[SECURITY] upload bloqueado (arquivo suspeito): ${risk.blockedReason} — fileName=${fileName || "(sem nome)"} mimeType=${mimeType || "(nenhum)"}`);
+    throw Object.assign(new Error(`Arquivo bloqueado por segurança: ${risk.blockedReason}`), { statusCode: 400, code: "SUSPICIOUS_FILE" });
+  }
+  if (risk.suspicious) {
+    console.warn(`[SECURITY] upload suspeito (permitido, marcado para revisão): ${risk.suspiciousReason} — fileName=${fileName || "(sem nome)"} mimeType=${mimeType || "(nenhum)"}`);
+  }
+  return risk;
 }
 
 async function storeInternalFile(options) { return storeMedia({ ...options, kind: "internal" }); }
