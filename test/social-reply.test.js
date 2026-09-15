@@ -112,22 +112,32 @@ test("responder sem conta de canal associada falha com erro claro (nunca envia �
   await prisma.contact.deleteMany({ where: { externalId: "orphan-test:igsid-orphan" } });
 });
 
-test("capabilities dos adapters sociais nunca afirmam moderação/ação não implementada", () => {
+test("capabilities dos adapters sociais nunca afirmam ação não implementada de verdade", () => {
   const { createAdapter } = require("../src/services/channels/channel-adapter-registry");
   for (const channel of ["INSTAGRAM_DIRECT", "FACEBOOK_MESSENGER"]) {
     const caps = createAdapter(channel, null).capabilities();
     assert.equal(caps.canPrivateReply, true);
     assert.equal(caps.canPublicReply, false);
+    // Direct/Messenger são conversa privada — moderação de "comentário" não
+    // se aplica a este tipo de interação.
     assert.equal(caps.canDelete, false);
     assert.equal(caps.canHide, false);
     assert.equal(caps.canLike, false);
   }
-  for (const channel of ["INSTAGRAM_COMMENTS", "FACEBOOK_COMMENTS"]) {
-    const caps = createAdapter(channel, null).capabilities();
-    assert.equal(caps.canPublicReply, true);
-    assert.equal(caps.canPrivateReply, false);
-    assert.equal(caps.canDelete, false);
-    assert.equal(caps.canHide, false);
-    assert.equal(caps.canLike, false);
-  }
+  // Delete/hide existem para os dois; "curtir comentário" só existe na
+  // Graph API do Facebook — Instagram não tem esse endpoint (ver
+  // meta-graph-messaging.js).
+  const igCaps = createAdapter("INSTAGRAM_COMMENTS", null).capabilities();
+  assert.equal(igCaps.canPublicReply, true);
+  assert.equal(igCaps.canPrivateReply, false);
+  assert.equal(igCaps.canDelete, true);
+  assert.equal(igCaps.canHide, true);
+  assert.equal(igCaps.canLike, false);
+
+  const fbCaps = createAdapter("FACEBOOK_COMMENTS", null).capabilities();
+  assert.equal(fbCaps.canPublicReply, true);
+  assert.equal(fbCaps.canPrivateReply, false);
+  assert.equal(fbCaps.canDelete, true);
+  assert.equal(fbCaps.canHide, true);
+  assert.equal(fbCaps.canLike, true);
 });

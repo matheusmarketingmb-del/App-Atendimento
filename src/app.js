@@ -430,6 +430,7 @@ app.post(
   app.post("/api/conversations/:id/finalize", inbox.finalize);
   app.post("/api/conversations/:id/bot-feedback", inbox.botFeedback);
   app.get("/api/messages/:messageId/media", inbox.media);
+  app.post("/api/messages/:messageId/moderate", inbox.moderateComment);
   app.get("/api/categories", inbox.categories);
   app.get("/api/category-visibility", inbox.categoryVisibility);
   app.patch("/api/category-visibility", inbox.updateCategoryVisibility);

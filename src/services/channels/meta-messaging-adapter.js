@@ -174,7 +174,9 @@ class FacebookCommentsAdapter extends ChannelAdapter {
       canReceiveMessages: true, canSendMessages: true, canReceiveMedia: false, canSendMedia: false,
       canMarkRead: false, supportsPublicQuestions: true, supportsReviews: false,
       supportsOAuth: true, supportsWebhook: true,
-      canPublicReply: true, canPrivateReply: false, canDelete: false, canHide: false, canLike: false,
+      // Facebook é o único dos dois com endpoint de "curtir comentário"
+      // (POST /{comment-id}/likes) — Instagram não tem isso na Graph API.
+      canPublicReply: true, canPrivateReply: false, canDelete: true, canHide: true, canLike: true,
     };
   }
 
@@ -194,6 +196,21 @@ class FacebookCommentsAdapter extends ChannelAdapter {
   async sendMessage({ commentId, text }) {
     if (!commentId || !text) throw channelError("INVALID_PAYLOAD", "commentId e text são obrigatórios para responder um comentário do Facebook.");
     return buildChannel(this.account).replyToFacebookComment(commentId, text);
+  }
+
+  async deleteComment({ commentId }) {
+    if (!commentId) throw channelError("INVALID_PAYLOAD", "commentId é obrigatório para apagar um comentário do Facebook.");
+    return buildChannel(this.account).deleteFacebookComment(commentId);
+  }
+
+  async hideComment({ commentId, hidden = true }) {
+    if (!commentId) throw channelError("INVALID_PAYLOAD", "commentId é obrigatório para ocultar um comentário do Facebook.");
+    return buildChannel(this.account).setFacebookCommentHidden(commentId, hidden);
+  }
+
+  async likeComment({ commentId, liked = true }) {
+    if (!commentId) throw channelError("INVALID_PAYLOAD", "commentId é obrigatório para curtir um comentário do Facebook.");
+    return buildChannel(this.account).setFacebookCommentLiked(commentId, liked);
   }
 
   normalizeInboundEvent(rawPayload) {
@@ -233,7 +250,7 @@ class InstagramCommentsAdapter extends ChannelAdapter {
       canReceiveMessages: true, canSendMessages: true, canReceiveMedia: false, canSendMedia: false,
       canMarkRead: false, supportsPublicQuestions: true, supportsReviews: false,
       supportsOAuth: true, supportsWebhook: true,
-      canPublicReply: true, canPrivateReply: false, canDelete: false, canHide: false, canLike: false,
+      canPublicReply: true, canPrivateReply: false, canDelete: true, canHide: true, canLike: false,
     };
   }
 
@@ -252,6 +269,16 @@ class InstagramCommentsAdapter extends ChannelAdapter {
   async sendMessage({ commentId, text }) {
     if (!commentId || !text) throw channelError("INVALID_PAYLOAD", "commentId e text são obrigatórios para responder um comentário do Instagram.");
     return buildChannel(this.account).replyToInstagramComment(commentId, text);
+  }
+
+  async deleteComment({ commentId }) {
+    if (!commentId) throw channelError("INVALID_PAYLOAD", "commentId é obrigatório para apagar um comentário do Instagram.");
+    return buildChannel(this.account).deleteInstagramComment(commentId);
+  }
+
+  async hideComment({ commentId, hidden = true }) {
+    if (!commentId) throw channelError("INVALID_PAYLOAD", "commentId é obrigatório para ocultar um comentário do Instagram.");
+    return buildChannel(this.account).setInstagramCommentHidden(commentId, hidden);
   }
 
   normalizeInboundEvent(rawPayload) {

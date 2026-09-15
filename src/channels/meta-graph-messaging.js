@@ -160,6 +160,67 @@ class MetaGraphMessagingChannel {
     }
   }
 
+  // Moderação (item 27/42 do plano Social) — só os endpoints que a Graph API
+  // de fato documenta para comentário de Página/Instagram. Instagram NÃO tem
+  // endpoint de "curtir comentário" pela API — por isso não existe
+  // likeInstagramComment aqui (capabilities.canLike do adapter reflete isso).
+  async deleteFacebookComment(commentId) {
+    this.assertMessenger();
+    try {
+      const response = await axios.delete(apiUrl(commentId), { params: { access_token: this.pageAccessToken } });
+      return { data: response.data };
+    } catch (error) {
+      throw providerFailure(error, "A Meta não aceitou apagar o comentário do Facebook.");
+    }
+  }
+
+  async setFacebookCommentHidden(commentId, hidden) {
+    this.assertMessenger();
+    try {
+      const response = await axios.post(apiUrl(commentId), null, {
+        params: { is_hidden: Boolean(hidden), access_token: this.pageAccessToken },
+      });
+      return { data: response.data };
+    } catch (error) {
+      throw providerFailure(error, "A Meta não aceitou ocultar/reexibir o comentário do Facebook.");
+    }
+  }
+
+  async setFacebookCommentLiked(commentId, liked) {
+    this.assertMessenger();
+    try {
+      const config = { params: { access_token: this.pageAccessToken } };
+      const response = liked
+        ? await axios.post(apiUrl(`${commentId}/likes`), null, config)
+        : await axios.delete(apiUrl(`${commentId}/likes`), config);
+      return { data: response.data };
+    } catch (error) {
+      throw providerFailure(error, "A Meta não aceitou curtir/descurtir o comentário do Facebook.");
+    }
+  }
+
+  async deleteInstagramComment(commentId) {
+    this.assertInstagram();
+    try {
+      const response = await axios.delete(apiUrl(commentId), { params: { access_token: this.igAccessToken } });
+      return { data: response.data };
+    } catch (error) {
+      throw providerFailure(error, "A Meta não aceitou apagar o comentário do Instagram.");
+    }
+  }
+
+  async setInstagramCommentHidden(commentId, hidden) {
+    this.assertInstagram();
+    try {
+      const response = await axios.post(apiUrl(commentId), null, {
+        params: { hide: Boolean(hidden), access_token: this.igAccessToken },
+      });
+      return { data: response.data };
+    } catch (error) {
+      throw providerFailure(error, "A Meta não aceitou ocultar/reexibir o comentário do Instagram.");
+    }
+  }
+
   // entry[].messaging[] — formato comum a Messenger e Instagram Direct
   // (webhook object "page" ou "instagram"). Ignora silenciosamente subtipos
   // que não são mensagem de texto/mídia (delivery/read/postback) nesta fase.

@@ -72,4 +72,21 @@ async function markAsRead({ channel, channelAccountId, ...params }) {
   return adapter.markAsRead(params);
 }
 
-module.exports = { markAsRead, send };
+// Moderação de comentário (item 27/42) — mesmo esqueleto de send/markAsRead:
+// nunca assume capability, sempre confere capabilities() primeiro. `op` é o
+// método do adapter a chamar (deleteComment/hideComment/likeComment) e
+// `capabilityKey` a capability correspondente que precisa estar ligada.
+async function moderateComment({ channel, channelAccountId, op, capabilityKey, ...params }) {
+  await assertNewChannelEnabled(channel);
+  if (NEW_CHANNELS.includes(channel) && !channelAccountId) {
+    throw channelError("INVALID_PAYLOAD", "Conta de canal é obrigatória para novos canais.");
+  }
+  const account = await refreshAccountIfNeeded(await loadAccount(channelAccountId, channel));
+  if (account?.status === "RECONNECT_REQUIRED") throw channelError("TOKEN_EXPIRED", "Reconecte a conta antes de continuar.");
+  if (account && !account.enabled) throw channelError("NOT_SUPPORTED", "Conta de canal está desativada.");
+  const adapter = buildAdapter(channel, account);
+  if (!adapter.capabilities()[capabilityKey]) throw channelError("NOT_SUPPORTED", `Canal ${channel} não suporta esta ação de moderação.`);
+  return adapter[op](params);
+}
+
+module.exports = { markAsRead, moderateComment, send };

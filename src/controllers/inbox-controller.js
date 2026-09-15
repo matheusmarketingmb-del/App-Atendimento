@@ -13,6 +13,7 @@ const { Channel: ChannelEnum } = require("@prisma/client");
 const contactMerge = require("../services/contact-merge-service");
 const { createAdapter } = require("../services/channels/channel-adapter-registry");
 const { resolveForPost } = require("../services/channels/social-content-mapping-service");
+const { moderateMessage } = require("../services/channels/social-moderation-service");
 
 const SOCIAL_COMMENT_CHANNELS = new Set(["INSTAGRAM_COMMENTS", "FACEBOOK_COMMENTS"]);
 
@@ -268,6 +269,13 @@ async signalTransfer(req, res, next) {
         });
         inboxEvents.publish();
         if (!result.alreadyFinalized) analyzeConversation(req.params.id).catch(() => {});
+        return res.json(result);
+      } catch (error) { return next(error); }
+    },
+    async moderateComment(req, res, next) {
+      try {
+        const result = await moderateMessage({ messageId: req.params.messageId, action: req.body.action, actor: req.user });
+        inboxEvents.publish();
         return res.json(result);
       } catch (error) { return next(error); }
     },

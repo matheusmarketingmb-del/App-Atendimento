@@ -26,6 +26,21 @@ class ChannelAdapter {
     throw channelError("NOT_SUPPORTED", `${this.constructor.name} não suporta marcar como lido.`);
   }
 
+  // Moderação de comentário público (item 27/42) — cada método corresponde
+  // 1:1 a uma capability (canDelete/canHide/canLike). Nunca sobrescrever sem
+  // ligar a capability correspondente, e vice-versa.
+  async deleteComment(_params) {
+    throw channelError("NOT_SUPPORTED", `${this.constructor.name} não suporta apagar comentário.`);
+  }
+
+  async hideComment(_params) {
+    throw channelError("NOT_SUPPORTED", `${this.constructor.name} não suporta ocultar comentário.`);
+  }
+
+  async likeComment(_params) {
+    throw channelError("NOT_SUPPORTED", `${this.constructor.name} não suporta curtir comentário.`);
+  }
+
   async fetchConversation(_params) {
     throw channelError("NOT_SUPPORTED", `${this.constructor.name} não suporta buscar conversa.`);
   }

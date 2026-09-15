@@ -1679,6 +1679,16 @@ html[data-theme="dark"] .bubble { box-shadow:var(--shadow-xs); }
 .context-detail-label { color:var(--text-3); font-size:10px; font-weight:800; letter-spacing:.1em; text-transform:uppercase; }
 .post-context-block a { display:inline-block; margin-top:6px; font-size:11px; font-weight:700; color:var(--orange); text-decoration:none; }
 .post-context-block a:hover { text-decoration:underline; }
+
+/* Item 27/42 do plano Social — ações de moderação por comentário, só
+   aparecem quando a capability real do canal permite (ver
+   moderationActionsMarkup em app.js). */
+.moderation-actions { display:flex; gap:6px; margin-top:8px; flex-wrap:wrap; }
+.moderate-comment { border:1px solid var(--border-subtle); background:transparent; color:inherit; border-radius:8px; padding:4px 10px; font-size:10px; font-weight:700; cursor:pointer; }
+.moderate-comment:hover { border-color:var(--orange); color:var(--orange); }
+.moderate-comment.danger { border-color:#d6493b; color:#d6493b; }
+.moderate-comment.danger:hover { background:#d6493b; color:#fff; }
+.moderate-comment:disabled { opacity:.5; cursor:default; }
 .context-info-list { display:flex; flex-direction:column; gap:1px; border:1px solid var(--border-subtle); border-radius:var(--radius-md); overflow:hidden; }
 .context-info-row { padding:10px 13px; display:flex; align-items:center; justify-content:space-between; gap:10px; background:var(--surface-0); font-size:12px; }
 .context-info-row span { color:var(--text-3); }

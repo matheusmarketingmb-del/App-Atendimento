@@ -310,9 +310,24 @@ function messageContent(message) {
   return `<p>${escapeHtml(message.text || `[${message.type}]`)}</p>`;
 }
 
+// Item 27/42 do plano Social — botões de moderação só aparecem quando a
+// capability correspondente é realmente true (nunca por omissão) e a
+// mensagem tem um id externo (é um comentário real na Graph API, não um
+// registro interno). "Apagar" fica escondido para quem não é Master — o
+// backend barra de qualquer forma, mas evita o atendente clicar e levar 403.
+function moderationActionsMarkup(message) {
+  if (!SOCIAL_COMMENT_CHANNELS.has(state.selectedChannel) || !message.externalId) return "";
+  const caps = state.selectedChannelCapabilities || {};
+  const buttons = [];
+  if (caps.canHide) buttons.push(`<button type="button" class="moderate-comment" data-message-id="${escapeHtml(message.id)}" data-action="hide" title="Ocultar comentário">Ocultar</button>`);
+  if (caps.canLike) buttons.push(`<button type="button" class="moderate-comment" data-message-id="${escapeHtml(message.id)}" data-action="like" title="Curtir comentário">Curtir</button>`);
+  if (caps.canDelete && state.currentUser?.isMaster) buttons.push(`<button type="button" class="moderate-comment danger" data-message-id="${escapeHtml(message.id)}" data-action="delete" title="Apagar comentário (irreversível)">Apagar</button>`);
+  return buttons.length ? `<div class="moderation-actions">${buttons.join("")}</div>` : "";
+}
+
 function messageRowMarkup(message) {
   const [symbol, label, statusClass] = deliveryStatus(message.status);
-  return `<div class="message-row ${message.direction === "ENVIADA" ? "sent" : "received"}" data-message-id="${escapeHtml(message.id)}"><div class="bubble ${["image", "audio", "video", "sticker", "document"].includes(message.type) ? `${message.type}-bubble` : ""} ${message.reactionEmoji ? "has-reaction" : ""}">${messageContent(message)}<footer>${message.sentByUser ? `<span class="author">${escapeHtml(message.sentByUser.name)}</span>` : ""}<span>${time(message.occurredAt)}</span>${message.direction === "ENVIADA" ? `<span class="delivery-status ${statusClass}" title="${label}" aria-label="${label}">${symbol}</span>` : ""}</footer>${message.reactionEmoji ? `<span class="message-reaction" title="Reação do cliente">${escapeHtml(message.reactionEmoji)}</span>` : ""}</div></div>`;
+  return `<div class="message-row ${message.direction === "ENVIADA" ? "sent" : "received"}" data-message-id="${escapeHtml(message.id)}"><div class="bubble ${["image", "audio", "video", "sticker", "document"].includes(message.type) ? `${message.type}-bubble` : ""} ${message.reactionEmoji ? "has-reaction" : ""}">${messageContent(message)}<footer>${message.sentByUser ? `<span class="author">${escapeHtml(message.sentByUser.name)}</span>` : ""}<span>${time(message.occurredAt)}</span>${message.direction === "ENVIADA" ? `<span class="delivery-status ${statusClass}" title="${label}" aria-label="${label}">${symbol}</span>` : ""}</footer>${message.reactionEmoji ? `<span class="message-reaction" title="Reação do cliente">${escapeHtml(message.reactionEmoji)}</span>` : ""}${moderationActionsMarkup(message)}</div></div>`;
 }
 
 function messageDateKey(value) {
@@ -532,6 +547,33 @@ function syncSocialReplyMode(channel, capabilities) {
   const canAttach = capabilities ? Boolean(capabilities.canSendMedia) : true;
   $("#attachment-input").closest(".attach-image").hidden = isComment && !canAttach;
 }
+
+const MODERATION_CONFIRM_TEXT = {
+  delete: "Apagar este comentário na plataforma? Esta ação é irreversível e afeta o que o público vê.",
+  hide: "Ocultar este comentário do público?", like: null, unlike: null,
+};
+
+$("#messages").addEventListener("click", async (event) => {
+  const button = event.target.closest(".moderate-comment");
+  if (!button) return;
+  const { messageId, action } = button.dataset;
+  const confirmText = MODERATION_CONFIRM_TEXT[action];
+  if (confirmText && !confirm(confirmText)) return;
+  button.disabled = true;
+  try {
+    await api(`/api/messages/${encodeURIComponent(messageId)}/moderate`, { method: "POST", body: JSON.stringify({ action }) });
+    toast({ delete: "Comentário apagado.", hide: "Comentário ocultado.", unhide: "Comentário reexibido novamente.", like: "Comentário curtido.", unlike: "Curtida removida." }[action] || "Ação concluída.");
+    if (action === "hide") { button.textContent = "Reexibir"; button.dataset.action = "unhide"; }
+    else if (action === "unhide") { button.textContent = "Ocultar"; button.dataset.action = "hide"; }
+    else if (action === "like") { button.textContent = "Descurtir"; button.dataset.action = "unlike"; }
+    else if (action === "unlike") { button.textContent = "Curtir"; button.dataset.action = "like"; }
+    else if (action === "delete") { button.closest(".message-row")?.remove(); }
+  } catch (error) {
+    toast(error.message, true);
+  } finally {
+    button.disabled = false;
+  }
+});
 
 function templatePreview(template) {
   let preview = template.previewTemplate || template.preview || "";
@@ -965,6 +1007,8 @@ async function openConversation(id, { refreshList = true, markRead = true } = {}
   const activitiesSignature = JSON.stringify((c.activities || []).map((activity) => [activity.id, activity.action, activity.details, activity.createdAt, activity.actorUser?.name]));
   state.selectedContactId = c.contact.id;
   state.customerServiceWindow = c.customerServiceWindow;
+  state.selectedChannel = c.channel;
+  state.selectedChannelCapabilities = c.channelCapabilities || null;
   syncCustomerServiceWindow();
   syncSocialReplyMode(c.channel, c.channelCapabilities);
   renderContextDetails(c);
