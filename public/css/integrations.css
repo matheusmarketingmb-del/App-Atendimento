@@ -6,6 +6,17 @@
 .global-switch input{width:16px;height:16px;accent-color:var(--orange)}
 .integrations-toolbar h2{margin:0 0 4px;font-size:15px}
 .social-flags-switches{display:flex;flex-wrap:wrap;gap:10px}
+.social-mapping-section{margin-top:24px;padding-top:20px;border-top:1px solid var(--line)}
+.social-mapping-form{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px}
+.social-mapping-form select,.social-mapping-form input{height:38px;padding:0 10px;border:1px solid var(--line);border-radius:10px;background:var(--surface);color:var(--ink);font-size:11px}
+.social-mapping-form input{flex:1;min-width:160px}
+.social-mapping-form button{height:38px;padding:0 18px;border:0;border-radius:10px;background:var(--orange);color:#fff;font-weight:800;cursor:pointer}
+.social-mapping-list{display:flex;flex-direction:column;gap:8px}
+.social-mapping-row{display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:10px 14px;border:1px solid var(--line);border-radius:12px;background:var(--surface);font-size:11px}
+.social-mapping-row[data-active="false"]{opacity:.5}
+.social-mapping-row b{font-size:12px}
+.social-mapping-row .mapping-meta{color:var(--muted);flex:1;min-width:160px}
+.social-mapping-row button{border:1px solid var(--line);background:transparent;color:var(--ink);border-radius:8px;padding:5px 10px;font-size:10px;font-weight:700;cursor:pointer}
 
 .channel-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:14px}
 .channel-card{padding:16px;border:1px solid var(--line);border-radius:14px;background:var(--surface);box-shadow:0 5px 18px #17202a08}

@@ -436,12 +436,62 @@ $("#logout").addEventListener("click", async () => {
   location.replace("/login.html");
 });
 
+const MAPPING_CHANNEL_LABELS = {
+  INSTAGRAM_COMMENTS: "Instagram · Comentários", FACEBOOK_COMMENTS: "Facebook · Comentários",
+  INSTAGRAM_DIRECT: "Instagram · Direct", FACEBOOK_MESSENGER: "Facebook · Messenger",
+};
+
+async function loadSocialMappings() {
+  state.socialMappings = await api("/api/social-content-mappings");
+  renderSocialMappings();
+}
+
+function renderSocialMappings() {
+  const list = $("#social-mapping-list");
+  if (!state.socialMappings?.length) { list.innerHTML = `<div class="empty-list">Nenhuma publicação mapeada ainda.</div>`; return; }
+  list.innerHTML = state.socialMappings.map((mapping) => `
+    <div class="social-mapping-row" data-active="${mapping.active}">
+      <b>${escapeHtml(mapping.title || mapping.externalPostId)}</b>
+      <span class="mapping-meta">${escapeHtml(MAPPING_CHANNEL_LABELS[mapping.channel] || mapping.channel)} &bull; produto: ${escapeHtml(mapping.product || "—")} &bull; post: ${escapeHtml(mapping.externalPostId)}</span>
+      <button type="button" data-toggle-mapping="${mapping.id}" data-active="${mapping.active}">${mapping.active ? "Desativar" : "Reativar"}</button>
+      <button type="button" data-remove-mapping="${mapping.id}">Remover</button>
+    </div>`).join("");
+}
+
+$("#social-mapping-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    await api("/api/social-content-mappings", { method: "POST", body: JSON.stringify({
+      channel: $("#mapping-channel").value, externalPostId: $("#mapping-post-id").value.trim(),
+      title: $("#mapping-title").value.trim(), product: $("#mapping-product").value.trim(),
+      permalink: $("#mapping-permalink").value.trim(),
+    }) });
+    event.target.reset();
+    toast("Publicação mapeada.");
+    await loadSocialMappings();
+  } catch (error) { toast(error.message, true); }
+});
+
+$("#social-mapping-list").addEventListener("click", async (event) => {
+  const toggleId = event.target.dataset.toggleMapping;
+  const removeId = event.target.dataset.removeMapping;
+  try {
+    if (toggleId) {
+      await api(`/api/social-content-mappings/${toggleId}/active`, { method: "PATCH", body: JSON.stringify({ active: event.target.dataset.active !== "true" }) });
+      await loadSocialMappings();
+    } else if (removeId) {
+      await api(`/api/social-content-mappings/${removeId}`, { method: "DELETE" });
+      await loadSocialMappings();
+    }
+  } catch (error) { toast(error.message, true); }
+});
+
 (async () => {
   try {
     const status = await api("/api/auth/status");
     if (!status.authenticated || !status.user.isMaster) return location.replace("/");
     $("#current-user").textContent = status.user.name;
-    await Promise.all([loadOverview(), loadSettings(), loadUsers()]);
+    await Promise.all([loadOverview(), loadSettings(), loadUsers(), loadSocialMappings()]);
   } catch (error) {
     if ($("#channel-cards").querySelector(".skeleton-list")) $("#channel-cards").innerHTML = `<div class="empty-list">Não foi possível carregar as integrações.</div>`;
     toast(error.message, true);

@@ -442,6 +442,7 @@ model User {
   campaignImports              CampaignImport[]         @relation("CampaignImportedBy")
   optOutsRemoved               OptOut[]                 @relation("OptOutRemovedBy")
   aiProviderCredentialsUpdated AiProviderCredential[]   @relation("AiProviderCredentialUpdatedBy")
+  socialContentMappingsCreated SocialContentMapping[]
 }
 
 model PushSubscription {
@@ -1380,6 +1381,32 @@ model ChannelOAuthState {
   channelAccount ChannelAccount? @relation(fields: [channelAccountId], references: [id], onDelete: SetNull)
 
   @@index([channel, createdAt])
+}
+
+// Mapeamento manual post/reel -> produto (item 10/11 do plano Social) —
+// SEMPRE cadastro manual (Master), nunca inferido automaticamente com baixa
+// confiança. externalPostId é o mediaId/postId cru da Graph API, o mesmo
+// valor gravado em Conversation.externalConversationId para comentários
+// (ver omnichannel-message-service.js#conversationKindFor). `product` é uma
+// String livre (mesmo padrão de KnowledgeSource.product) — não existe
+// catálogo de produto relacional neste sistema, não é o caso de inventar um
+// aqui só para isto.
+model SocialContentMapping {
+  id              String   @id @default(cuid())
+  channel         Channel
+  externalPostId  String
+  title           String?
+  product         String?
+  permalink       String?
+  active          Boolean  @default(true)
+  createdByUserId String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  createdByUser User? @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  @@unique([channel, externalPostId])
+  @@index([channel, active])
 }
 
 // Ledger de idempotência (item 16) — uma notificação repetida da plataforma

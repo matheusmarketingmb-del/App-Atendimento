@@ -1108,6 +1108,21 @@ function renderContextDetails(c) {
       <div class="context-info-row"><span>Responsável</span><strong>${escapeHtml(c.assignedUser?.name || "Sem responsável")}</strong></div>
       ${c.priority && c.priority !== "NORMAL" ? `<div class="context-info-row"><span>Prioridade</span><strong>${escapeHtml(priorityLabel(c.priority))}</strong></div>` : ""}
       <div class="context-info-row"><span>Fixada</span><strong>${c.isPinned ? "Sim" : "Não"}</strong></div>
+    </div>
+    ${postContextMarkup(c.postContext)}`;
+}
+
+// Item 10 do plano Social — comentário nunca chega "pelado": quando existe
+// mapeamento manual (Integrações > Publicações), mostra a publicação/
+// produto relacionado no painel de contexto, nunca inferido aqui na UI.
+function postContextMarkup(postContext) {
+  if (!postContext) return "";
+  return `
+    <div class="context-detail-block post-context-block">
+      <span class="context-detail-label">Publicação relacionada</span>
+      <strong>${escapeHtml(postContext.title || postContext.externalPostId)}</strong>
+      ${postContext.product ? `<small>Produto: ${escapeHtml(postContext.product)}</small>` : ""}
+      ${postContext.permalink ? `<a href="${escapeHtml(postContext.permalink)}" target="_blank" rel="noopener">Ver publicação ↗</a>` : ""}
     </div>`;
 }
 

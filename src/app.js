@@ -27,6 +27,7 @@ const { documentMimeTypes } = require("./services/media-storage-service");
 const botController = require("./controllers/bot-controller");
 const internalChatController = require("./controllers/internal-chat-controller");
 const integrationsController = require("./controllers/integrations-controller");
+const socialContentMappingController = require("./controllers/social-content-mapping-controller");
 const quickReplyController = require("./controllers/quick-reply-controller");
 const pushController = require("./controllers/push-controller");
 const pushService = require("./services/push-service");
@@ -40,6 +41,8 @@ const { normalizeInboundMessage } = require("./services/channels/channel-event-n
 const omnichannelMessageService = require("./services/channels/omnichannel-message-service");
 const { getGlobalSettings } = require("./services/channels/integration-global-settings-service");
 const { checkInboundFlood, startPeriodicCleanup } = require("./services/inbound-flood-guard-service");
+const { verifyMediaToken } = require("./services/channels/social-media-link-service");
+const { resolveMedia } = require("./services/media-storage-service");
 
 function decryptAccountSecretsSafe(account) {
   try { return decryptSecrets(account); }
@@ -261,6 +264,22 @@ function createApp({ channel = new MetaCloudChannel() } = {}) {
     } catch (error) {
       console.error(`[CHANNEL] provider=${channel} event=webhook status=error`, error.message);
       return res.sendStatus(200);
+    }
+  });
+
+  // Link público e temporário de mídia (item 46) — só assim o Instagram
+  // Direct/Facebook Messenger conseguem enviar anexo (a Send API da Meta
+  // busca a URL sozinha, sem sessão nossa). Token HMAC de curta duração
+  // (social-media-link-service.js); nunca autenticado por cookie/JWT de
+  // propósito — as próprias servidoras da Meta é quem busca este link.
+  const publicMediaLimiter = rateLimit({ windowMs: 60 * 1000, limit: 120, standardHeaders: true, legacyHeaders: false });
+  app.get("/public/media/:storageKey/:expiresAt/:token", publicMediaLimiter, (req, res) => {
+    const { storageKey, expiresAt, token } = req.params;
+    if (!verifyMediaToken(storageKey, expiresAt, token)) return res.sendStatus(404);
+    try {
+      return res.sendFile(resolveMedia(storageKey));
+    } catch (_error) {
+      return res.sendStatus(404);
     }
   });
 
@@ -588,6 +607,10 @@ app.post(
   app.post("/api/integrations/oauth/start", integrationsController.oauthStart);
   app.post("/api/integrations/oauth/callback", integrationsController.oauthCallback);
   app.post("/api/integrations/oauth/accounts/:accountId/select", integrationsController.oauthSelect);
+  app.get("/api/social-content-mappings", socialContentMappingController.list);
+  app.post("/api/social-content-mappings", socialContentMappingController.create);
+  app.patch("/api/social-content-mappings/:id/active", socialContentMappingController.setActive);
+  app.delete("/api/social-content-mappings/:id", socialContentMappingController.remove);
 
   app.get("/api/quick-replies/composer", quickReplyController.listForComposer);
   app.get("/api/quick-replies/suggestions", quickReplyController.suggestions);

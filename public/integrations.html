@@ -55,6 +55,29 @@
     </div>
 
     <div id="channel-cards" class="channel-cards"><div class="skeleton-list"><div class="skeleton skeleton-card"></div><div class="skeleton skeleton-card"></div></div></div>
+
+    <section class="social-mapping-section">
+      <div class="integrations-toolbar">
+        <div>
+          <h2>Publicações &bull; Instagram/Facebook</h2>
+          <p>Item 10/11 do plano: liga manualmente um post/reel a um produto, para o comentário chegar com contexto. Nunca inferido automaticamente.</p>
+        </div>
+      </div>
+      <form id="social-mapping-form" class="social-mapping-form">
+        <select id="mapping-channel" required>
+          <option value="INSTAGRAM_COMMENTS">Instagram &bull; Comentários</option>
+          <option value="FACEBOOK_COMMENTS">Facebook &bull; Comentários</option>
+          <option value="INSTAGRAM_DIRECT">Instagram &bull; Direct</option>
+          <option value="FACEBOOK_MESSENGER">Facebook &bull; Messenger</option>
+        </select>
+        <input id="mapping-post-id" type="text" placeholder="ID do post/mídia (postId/mediaId)" required>
+        <input id="mapping-title" type="text" placeholder="Título (ex.: Mibro GS Pro 2)">
+        <input id="mapping-product" type="text" placeholder="Produto (ex.: GS_PRO_2)">
+        <input id="mapping-permalink" type="url" placeholder="Link da publicação (opcional)">
+        <button type="submit">Salvar</button>
+      </form>
+      <div id="social-mapping-list" class="social-mapping-list"></div>
+    </section>
   </main>
 
   <dialog id="account-dialog" class="account-dialog">

@@ -4,6 +4,7 @@ const { removeImage, storeAudio, storeDocument, storeImage, storeSticker, storeV
 const { formatTeamMessage } = require("./team-message-formatter");
 const { getConversationSettings } = require("./conversation-settings-service");
 const channelMessageService = require("./channels/channel-message-service");
+const { buildPublicMediaUrl } = require("./channels/social-media-link-service");
 const statuses = { sent: "ENVIADA", delivered: "ENTREGUE", read: "LIDA", failed: "FALHOU" };
 const closingMessage = "Agradecemos pelo seu contato. Se precisar de qualquer ajuda, estamos à disposição. Você pode voltar a falar conosco quando quiser.";
 
@@ -201,6 +202,42 @@ async function socialReplyContext(conversation) {
   return { to: metadata.senderExternalId };
 }
 
+// Graph API usa "image"/"video"/"file" no attachment (ver
+// meta-graph-messaging.js) — nossos tipos internos usam "document" para
+// arquivo genérico, daí o mapeamento explícito (nunca adivinhar).
+const SOCIAL_MEDIA_GRAPH_TYPE = Object.freeze({ image: "image", video: "video", document: "file" });
+
+// Item 46 do plano Social — Direct/Messenger não aceitam upload de buffer
+// como o WhatsApp, só uma URL pública (ver social-media-link-service.js).
+// Comentários (canSendMedia: false na capability matrix) são recusados pelo
+// próprio channelMessageService.send antes de chegar aqui.
+async function sendSocialMedia({ conversation, buffer, mimeType, fileName, caption, sentByUserId, type, store }) {
+  const cleanCaption = caption?.trim() || null;
+  const socialContext = await socialReplyContext(conversation);
+  const media = await store({ buffer, mimeType, fileName });
+  let result;
+  try {
+    const publicUrl = buildPublicMediaUrl(media.storageKey);
+    result = await channelMessageService.send({
+      channel: conversation.channel, channelAccountId: conversation.channelAccountId, kind: "media",
+      ...socialContext, type: SOCIAL_MEDIA_GRAPH_TYPE[type] || "file", url: publicUrl,
+    });
+  } catch (error) {
+    await removeImage(media.storageKey);
+    throw error;
+  }
+  const occurredAt = new Date();
+  const providerExternalId = result.externalId ? `${conversation.channelAccountId}:${result.externalId}` : null;
+  const message = await prisma.message.create({ data: {
+    conversationId: conversation.id, externalId: providerExternalId, channel: conversation.channel,
+    channelAccountId: conversation.channelAccountId, direction: "ENVIADA", status: "ENVIADA", type, text: cleanCaption,
+    mediaStorageKey: media.storageKey, mediaMimeType: media.mimeType, mediaFileName: media.fileName, mediaSize: media.size,
+    occurredAt, sentByUserId: sentByUserId || null, rawPayload: result.data || null,
+  } });
+  await updateConversationAfterSending({ conversationId: conversation.id, sentByUserId, occurredAt });
+  return { message, providerData: result.data };
+}
+
 async function sendText({ conversationId, text, sentByUserId, channel }) {
   const conversation = await prisma.conversation.findUnique({ where: { id: conversationId }, include: { contact: true, category: { include: { parent: true } } } });
   if (!conversation) throw Object.assign(new Error("Conversa não encontrada."), { statusCode: 404 });
@@ -282,6 +319,9 @@ async function sendImage({ conversationId, buffer, mimeType, fileName, caption, 
   if (conversation.channel === "EMAIL") {
     return sendEmailMedia({ conversation, buffer, mimeType, fileName, caption, sentByUserId, type: "image", store: storeImage });
   }
+  if (SOCIAL_CHANNELS.includes(conversation.channel)) {
+    return sendSocialMedia({ conversation, buffer, mimeType, fileName, caption, sentByUserId, type: "image", store: storeImage });
+  }
   if (conversation.channel !== "META") throw Object.assign(new Error("Este canal ainda não está liberado para anexos pela Central."), { statusCode: 409 });
   await require("./meta-template-service").assertFreeFormAllowed(conversationId);
   const cleanCaption = caption?.trim() || null;
@@ -318,6 +358,9 @@ async function sendVideo({ conversationId, buffer, mimeType, fileName, caption, 
   if (conversation.channel === "EMAIL") {
     return sendEmailMedia({ conversation, buffer, mimeType, fileName, caption, sentByUserId, type: "video", store: storeVideo });
   }
+  if (SOCIAL_CHANNELS.includes(conversation.channel)) {
+    return sendSocialMedia({ conversation, buffer, mimeType, fileName, caption, sentByUserId, type: "video", store: storeVideo });
+  }
   if (conversation.channel !== "META") throw Object.assign(new Error("Este canal ainda não está liberado para anexos pela Central."), { statusCode: 409 });
   await require("./meta-template-service").assertFreeFormAllowed(conversationId);
   const cleanCaption = caption?.trim() || null;
@@ -353,6 +396,9 @@ async function sendDocument({ conversationId, buffer, mimeType, fileName, captio
   if (!conversation) throw Object.assign(new Error("Conversa não encontrada."), { statusCode: 404 });
   if (conversation.channel === "EMAIL") {
     return sendEmailMedia({ conversation, buffer, mimeType, fileName, caption, sentByUserId, type: "document", store: storeDocument });
+  }
+  if (SOCIAL_CHANNELS.includes(conversation.channel)) {
+    return sendSocialMedia({ conversation, buffer, mimeType, fileName, caption, sentByUserId, type: "document", store: storeDocument });
   }
   if (conversation.channel !== "META") throw Object.assign(new Error("Este canal ainda não está liberado para anexos pela Central."), { statusCode: 409 });
   await require("./meta-template-service").assertFreeFormAllowed(conversationId);
