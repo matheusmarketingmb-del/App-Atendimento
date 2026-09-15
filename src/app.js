@@ -242,8 +242,16 @@ function createApp({ channel = new MetaCloudChannel() } = {}) {
         });
         if (isDuplicate) continue;
         try {
-          await omnichannelMessageService.persistInboundMessage(normalized);
+          const persisted = await omnichannelMessageService.persistInboundMessage(normalized);
           await externalEventService.markProcessed(event.id);
+          // Paridade com o WhatsApp (item 26/33 do plano Social): observação
+          // do Bot (só sugestão, nunca envia nada sozinho) e push notification
+          // para o atendente responsável. Nunca pode derrubar o webhook —
+          // mesmo padrão de .catch silencioso usado no handler do WhatsApp.
+          if (!persisted.duplicate && normalized.direction === "RECEBIDA") {
+            observeIncomingMessage(normalized, persisted.message, { channel: normalized.channel }).catch(() => {});
+            pushService.notifyIncomingMessage(persisted.message).catch(() => {});
+          }
           inboxEvents.publish();
         } catch (error) {
           await externalEventService.markError(event.id, error.channelErrorCode || "PROVIDER_ERROR");
@@ -568,6 +576,7 @@ app.post(
   app.get("/api/integrations/overview", integrationsController.overview);
   app.get("/api/integrations/settings", integrationsController.getGlobalSettings);
   app.patch("/api/integrations/settings", integrationsController.setGlobalSettings);
+  app.patch("/api/integrations/settings/social-reply", integrationsController.setSocialReplyFlags);
   app.get("/api/integrations/accounts", integrationsController.list);
   app.post("/api/integrations/accounts", integrationsController.create);
   app.get("/api/integrations/accounts/:accountId", integrationsController.detail);

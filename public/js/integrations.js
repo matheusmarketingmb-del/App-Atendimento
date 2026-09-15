@@ -386,6 +386,9 @@ async function loadOverview() {
 async function loadSettings() {
   state.settings = await api("/api/integrations/settings");
   $("#new-channels-toggle").checked = Boolean(state.settings.newChannelsEnabled);
+  $("#social-auto-reply-toggle").checked = Boolean(state.settings.socialAutoReplyEnabled);
+  $("#social-comment-auto-reply-toggle").checked = Boolean(state.settings.socialCommentAutoReplyEnabled);
+  $("#social-private-auto-reply-toggle").checked = Boolean(state.settings.socialPrivateAutoReplyEnabled);
 }
 
 $("#account-form").addEventListener("submit", saveAccount);
@@ -406,6 +409,21 @@ $("#new-channels-toggle").addEventListener("change", async (event) => {
     toast(error.message, true);
   }
 });
+
+function socialReplyFlagToggle(elementId, key, label) {
+  $(elementId).addEventListener("change", async (event) => {
+    try {
+      await api("/api/integrations/settings/social-reply", { method: "PATCH", body: JSON.stringify({ [key]: event.target.checked }) });
+      toast(`${label} ${event.target.checked ? "ativado" : "desativado"}.`);
+    } catch (error) {
+      event.target.checked = !event.target.checked;
+      toast(error.message, true);
+    }
+  });
+}
+socialReplyFlagToggle("#social-auto-reply-toggle", "socialAutoReplyEnabled", "Auto-reply social");
+socialReplyFlagToggle("#social-comment-auto-reply-toggle", "socialCommentAutoReplyEnabled", "Auto-reply em comentários");
+socialReplyFlagToggle("#social-private-auto-reply-toggle", "socialPrivateAutoReplyEnabled", "Auto-reply em Direct/Messenger");
 
 $("#theme-toggle").addEventListener("click", () => {
   const dark = document.documentElement.dataset.theme !== "dark";

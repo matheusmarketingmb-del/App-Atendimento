@@ -71,6 +71,15 @@ const DEFAULT_CAPABILITIES = Object.freeze({
   supportsReviews: false,
   supportsOAuth: false,
   supportsWebhook: false,
+  // Matriz de ações (item 6/23 — Social): resposta pública, resposta
+  // privada e moderação (delete/hide/like) são capacidades independentes
+  // de canSendMessages — um adapter pode enviar mensagem sem poder
+  // moderar. Default false em tudo; cada adapter só liga o que implementa.
+  canPublicReply: false,
+  canPrivateReply: false,
+  canDelete: false,
+  canHide: false,
+  canLike: false,
 });
 
 module.exports = {

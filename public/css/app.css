@@ -1297,6 +1297,21 @@ html[data-theme="dark"] .changelog-release-heading b {
 .service-window-notice[hidden] { display: none; }
 .service-window-notice span { display: grid; gap: 2px; }
 .service-window-notice small { color: #89513e; }
+
+/* Item 24/48 do plano Social — nunca deixar ambíguo se a resposta será
+   pública (comentário do Instagram/Facebook) ou privada (Direct/Messenger).
+   Cores propositalmente opostas ao aviso de janela encerrada acima (laranja
+   de alerta) para não serem confundidas visualmente. */
+.social-reply-mode-notice {
+  display: flex; align-items: center; gap: 10px; padding: 9px 18px;
+  border-top: 1px solid var(--line); font-size: 12px; font-weight: 700;
+}
+.social-reply-mode-notice[hidden] { display: none; }
+.social-reply-mode-icon { font-size: 14px; line-height: 1; }
+.social-reply-mode-notice[data-mode="public"] { background: #fff4ef; color: #8a3b1c; border-color: #f0c5b8; }
+.social-reply-mode-notice[data-mode="private"] { background: #eef6ff; color: #1c4d8a; border-color: #bcd8f5; }
+html[data-theme="dark"] .social-reply-mode-notice[data-mode="public"] { background: #382219; color: #ffb98f; border-color: #75412e; }
+html[data-theme="dark"] .social-reply-mode-notice[data-mode="private"] { background: #17263a; color: #9cc7f7; border-color: #2d4a6e; }
 .service-window-notice button,.template-form > div > button {
   border: 0; border-radius: 999px; padding: 11px 18px; background: var(--orange); color: #fff; font-weight: 800; cursor: pointer;
 }

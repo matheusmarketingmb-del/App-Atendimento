@@ -1407,6 +1407,14 @@ model ExternalChannelEvent {
 model IntegrationGlobalSettings {
   id                 String   @id @default("singleton")
   newChannelsEnabled Boolean  @default(false)
+  // Flags do módulo Social (Instagram/Facebook) — cada uma controla um tipo
+  // de resposta automática distinto, todas OFF por padrão (item 26 do plano:
+  // primeiro só SUGGESTED_REPLY, nunca auto-envio sem ligar explicitamente).
+  // socialAutoReplyEnabled é a chave-mestra do grupo; as duas específicas só
+  // têm efeito se a chave-mestra também estiver ligada.
+  socialAutoReplyEnabled        Boolean  @default(false)
+  socialCommentAutoReplyEnabled Boolean  @default(false)
+  socialPrivateAutoReplyEnabled Boolean  @default(false)
   updatedAt          DateTime @updatedAt
   createdAt          DateTime @default(now())
 }

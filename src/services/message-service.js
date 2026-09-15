@@ -169,6 +169,38 @@ async function emailReplyContext(conversation) {
   };
 }
 
+const SOCIAL_CHANNELS = Object.freeze(["INSTAGRAM_DIRECT", "INSTAGRAM_COMMENTS", "FACEBOOK_MESSENGER", "FACEBOOK_COMMENTS"]);
+const SOCIAL_COMMENT_CHANNELS = Object.freeze(["INSTAGRAM_COMMENTS", "FACEBOOK_COMMENTS"]);
+
+// Igual a emailReplyContext acima, mas para Instagram/Facebook (item 3/9 do
+// plano Social): DM responde ao remetente (PSID/IGSID), comentário responde
+// ao COMENTÁRIO ORIGINAL mais recente da thread (nunca ao post em si — a
+// Graph API não permite "comentar no post" por aqui, só responder a um
+// comentário existente). Os dois IDs vêm de rawPayload da última mensagem
+// RECEBIDA (mesmo padrão do e-mail), nunca de Contact.externalId (que leva
+// o prefixo channelScope: e não é o ID cru esperado pela Graph API).
+async function socialReplyContext(conversation) {
+  if (!conversation.channelAccountId) {
+    throw Object.assign(new Error("A conversa não possui conta de canal social configurada."), { statusCode: 400 });
+  }
+  const latest = await prisma.message.findFirst({
+    where: { conversationId: conversation.id, direction: "RECEBIDA" },
+    orderBy: { occurredAt: "desc" },
+    select: { rawPayload: true },
+  });
+  const metadata = latest?.rawPayload && typeof latest.rawPayload === "object" ? latest.rawPayload : {};
+  if (SOCIAL_COMMENT_CHANNELS.includes(conversation.channel)) {
+    if (!metadata.externalMessageId) {
+      throw Object.assign(new Error("Não foi possível localizar o comentário original para responder publicamente."), { statusCode: 409 });
+    }
+    return { commentId: metadata.externalMessageId };
+  }
+  if (!metadata.senderExternalId) {
+    throw Object.assign(new Error("Não foi possível localizar o destinatário da mensagem direta."), { statusCode: 409 });
+  }
+  return { to: metadata.senderExternalId };
+}
+
 async function sendText({ conversationId, text, sentByUserId, channel }) {
   const conversation = await prisma.conversation.findUnique({ where: { id: conversationId }, include: { contact: true, category: { include: { parent: true } } } });
   if (!conversation) throw Object.assign(new Error("Conversa não encontrada."), { statusCode: 404 });
@@ -188,6 +220,12 @@ async function sendText({ conversationId, text, sentByUserId, channel }) {
       throw Object.assign(new Error("A mensagem ficou acima do limite após adicionar o nome da equipe."), { statusCode: 400 });
     }
     result = await channel.sendText(conversation.contact.phone, providerText);
+  } else if (SOCIAL_CHANNELS.includes(conversation.channel)) {
+    const socialContext = await socialReplyContext(conversation);
+    result = await channelMessageService.send({
+      channel: conversation.channel, channelAccountId: conversation.channelAccountId, kind: "text",
+      ...socialContext, text,
+    });
   } else {
     throw Object.assign(new Error("Este canal ainda não está liberado para respostas pela Central."), { statusCode: 409 });
   }

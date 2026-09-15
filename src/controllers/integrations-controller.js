@@ -66,6 +66,10 @@ module.exports = {
     try { return res.json(await globalSettings.setNewChannelsEnabled(req.body.newChannelsEnabled, req.user)); }
     catch (error) { return next(error); }
   },
+  async setSocialReplyFlags(req, res, next) {
+    try { return res.json(await globalSettings.setSocialReplyFlags(req.body, req.user)); }
+    catch (error) { return next(error); }
+  },
 
   async oauthStart(req, res, next) {
     try {

@@ -511,6 +511,28 @@ function syncCustomerServiceWindow() {
   $("#message-input").placeholder = closed ? "Use um template aprovado para retomar o contato" : "Digite uma mensagem...";
 }
 
+// Item 2/24 do plano Social — nunca deixar ambíguo se a resposta vai ficar
+// pública (comentário do Instagram/Facebook) ou privada (Direct/Messenger).
+const SOCIAL_COMMENT_CHANNELS = new Set(["INSTAGRAM_COMMENTS", "FACEBOOK_COMMENTS"]);
+const SOCIAL_DIRECT_CHANNELS = new Set(["INSTAGRAM_DIRECT", "FACEBOOK_MESSENGER"]);
+
+function syncSocialReplyMode(channel, capabilities) {
+  const notice = $("#social-reply-mode-notice");
+  const isComment = SOCIAL_COMMENT_CHANNELS.has(channel);
+  const isDirect = SOCIAL_DIRECT_CHANNELS.has(channel);
+  if (!isComment && !isDirect) { notice.hidden = true; notice.removeAttribute("data-mode"); return; }
+  notice.hidden = false;
+  notice.dataset.mode = isComment ? "public" : "private";
+  $("#social-reply-mode-icon").textContent = isComment ? "🌐" : "🔒";
+  $("#social-reply-mode-text").textContent = isComment
+    ? "Resposta pública — esta resposta ficará visível para qualquer pessoa no comentário."
+    : "Resposta privada — esta mensagem é visível somente para este cliente.";
+  // Comentários não suportam mídia pela API (capabilities.canSendMedia) —
+  // esconder o anexo evita o atendente tentar e só descobrir pelo erro.
+  const canAttach = capabilities ? Boolean(capabilities.canSendMedia) : true;
+  $("#attachment-input").closest(".attach-image").hidden = isComment && !canAttach;
+}
+
 function templatePreview(template) {
   let preview = template.previewTemplate || template.preview || "";
   for (const variable of template.variables || []) {
@@ -944,6 +966,7 @@ async function openConversation(id, { refreshList = true, markRead = true } = {}
   state.selectedContactId = c.contact.id;
   state.customerServiceWindow = c.customerServiceWindow;
   syncCustomerServiceWindow();
+  syncSocialReplyMode(c.channel, c.channelCapabilities);
   renderContextDetails(c);
   renderSlaTab(c);
   $("#empty-state").hidden = true; $("#chat-content").hidden = false; $("#chat-panel").classList.add("open");

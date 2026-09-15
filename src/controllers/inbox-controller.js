@@ -11,8 +11,19 @@ const { analyzeConversation } = require("../services/bot-learning-service");
 const { submitAgentFeedback } = require("../services/bot-agent-feedback-service");
 const { Channel: ChannelEnum } = require("@prisma/client");
 const contactMerge = require("../services/contact-merge-service");
+const { createAdapter } = require("../services/channels/channel-adapter-registry");
 
 const knownChannels = new Set(Object.values(ChannelEnum));
+
+// Capacidades reais do canal (item 6/23 do plano Social) — estático por
+// classe de adapter, não depende de conta/segredo, então dá para calcular
+// sem I/O extra a cada detalhe de conversa. A UI só pode mostrar um botão
+// de ação (responder publicamente/no privado/moderar) quando o campo
+// correspondente aqui for true; nunca assume suporte por omissão.
+function channelCapabilities(channel) {
+  const adapter = createAdapter(channel, null);
+  return adapter ? adapter.capabilities() : null;
+}
 
 function createInboxController(channel) {
   return {
@@ -39,7 +50,8 @@ function createInboxController(channel) {
           ? await getCustomerServiceWindow(conversation.id)
           : customerServiceWindowFrom(null, new Date(), false);
         const mergedDestinations = await contactMerge.getMergedDestinations(conversation.contact.id, req.user);
-        return res.json({ ...conversation, customerServiceWindow, mergedDestinations });
+        const channelCaps = channelCapabilities(conversation.channel);
+        return res.json({ ...conversation, customerServiceWindow, mergedDestinations, channelCapabilities: channelCaps });
       } catch (error) { return next(error); }
     },
     async mergeCandidates(req, res, next) {

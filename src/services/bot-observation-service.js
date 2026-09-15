@@ -16,14 +16,14 @@ async function suggestQuickReplySafely(intentId) {
 // nunca chama uma tool externa e nunca pode derrubar o processamento real
 // do webhook. Evolução do observador da Fase 2 (mesma responsabilidade,
 // agora orientada pelo motor de interpretação em vez de match literal puro).
-async function observeIncomingMessage(event, message, { now = new Date() } = {}) {
+async function observeIncomingMessage(event, message, { now = new Date(), channel = "META" } = {}) {
   try {
     if (event.type !== "text" || !event.text) return null;
 
     const result = await orchestrate({
       conversationId: message.conversationId,
       messageId: message.id,
-      channel: "META",
+      channel,
       message: event.text,
       now,
       executionMode: "OBSERVATION",

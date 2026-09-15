@@ -25,12 +25,18 @@ function mapTestConnectionError(error) {
   throw channelError("PROVIDER_ERROR", "Não foi possível validar a conta na Meta agora.");
 }
 
+// canPublicReply/canPrivateReply/canDelete/canHide/canLike (item 6/23 do
+// plano Social) — matriz explícita do que cada adapter de fato implementa
+// (ver meta-graph-messaging.js), nunca por omissão. A UI só pode mostrar um
+// botão de ação quando o campo correspondente aqui for true; moderação
+// (delete/hide/like) não está implementada em nenhum dos 4 adapters ainda.
 class FacebookMessengerAdapter extends ChannelAdapter {
   capabilities() {
     return {
       canReceiveMessages: true, canSendMessages: true, canReceiveMedia: true, canSendMedia: true,
       canMarkRead: true, supportsPublicQuestions: false, supportsReviews: false,
       supportsOAuth: true, supportsWebhook: true,
+      canPublicReply: false, canPrivateReply: true, canDelete: false, canHide: false, canLike: false,
     };
   }
 
@@ -100,6 +106,7 @@ class InstagramDirectAdapter extends ChannelAdapter {
       canReceiveMessages: true, canSendMessages: true, canReceiveMedia: true, canSendMedia: true,
       canMarkRead: true, supportsPublicQuestions: false, supportsReviews: false,
       supportsOAuth: true, supportsWebhook: true,
+      canPublicReply: false, canPrivateReply: true, canDelete: false, canHide: false, canLike: false,
     };
   }
 
@@ -167,6 +174,7 @@ class FacebookCommentsAdapter extends ChannelAdapter {
       canReceiveMessages: true, canSendMessages: true, canReceiveMedia: false, canSendMedia: false,
       canMarkRead: false, supportsPublicQuestions: true, supportsReviews: false,
       supportsOAuth: true, supportsWebhook: true,
+      canPublicReply: true, canPrivateReply: false, canDelete: false, canHide: false, canLike: false,
     };
   }
 
@@ -225,6 +233,7 @@ class InstagramCommentsAdapter extends ChannelAdapter {
       canReceiveMessages: true, canSendMessages: true, canReceiveMedia: false, canSendMedia: false,
       canMarkRead: false, supportsPublicQuestions: true, supportsReviews: false,
       supportsOAuth: true, supportsWebhook: true,
+      canPublicReply: true, canPrivateReply: false, canDelete: false, canHide: false, canLike: false,
     };
   }
 

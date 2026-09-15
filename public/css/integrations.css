@@ -4,6 +4,8 @@
 .integrations-toolbar p{margin:0;color:var(--muted);font-size:11px}
 .global-switch{display:flex;align-items:center;gap:8px;padding:10px 14px;border:1px solid var(--line);border-radius:14px;background:var(--surface);color:var(--ink);font-size:10px;font-weight:800}
 .global-switch input{width:16px;height:16px;accent-color:var(--orange)}
+.integrations-toolbar h2{margin:0 0 4px;font-size:15px}
+.social-flags-switches{display:flex;flex-wrap:wrap;gap:10px}
 
 .channel-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:14px}
 .channel-card{padding:16px;border:1px solid var(--line);border-radius:14px;background:var(--surface);box-shadow:0 5px 18px #17202a08}
