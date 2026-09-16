@@ -15,6 +15,35 @@ const { scheduleState } = require("./bot-simulator-service");
 // para não duplicar sistema de horário.
 const categoryReplyPrefix = "triage_category:";
 
+// Reclassificação dentro da categoria Atendimento (pedido do usuário, sem
+// depender do motor de IA em modo sombra — ver comentário acima): ao invés de
+// só confirmar o encaminhamento genérico, o Bot pergunta o que o cliente
+// precisa e, se a resposta em texto livre bater com alguma palavra-chave
+// abaixo, troca a categoria da conversa silenciosamente (sem repetir a
+// recepção/saudação — essa só acontece uma vez, na entrada pelo Bot de
+// Triagem). Sem correspondência, a conversa permanece em Atendimento e segue
+// para um atendente humano normalmente. Ajuste as listas abaixo conforme a
+// necessidade do negócio, sem precisar tocar na lógica.
+const ATENDIMENTO_CATEGORY_CODE = "ATENDIMENTO";
+const ATENDIMENTO_ASK_MESSAGE = "Claro! Me conta rapidinho o que você precisa, assim eu já te direciono para o time certo 🙂";
+const ATENDIMENTO_REROUTE_MESSAGE = "Entendido! Vou repassar seu atendimento para o setor correto — um atendente vai falar com você em breve.";
+const atendimentoRoutingKeywords = [
+  { code: "ATACADO", patterns: ["revend", "atacad", "distribuid"] },
+  { code: "PARCERIAS", patterns: ["parceria", "parceiro"] },
+  { code: "COMERCIAL", patterns: ["compr", "orçament", "orcament", "preç", "prec"] },
+  { code: "SUPORTE", patterns: ["problema", "defeito", "quebrad", "não funciona", "nao funciona", "erro"] },
+  { code: "GARANTIA", patterns: ["garantia"] },
+  { code: "PEDIDOS", patterns: ["pedido", "rastre", "entrega"] },
+  { code: "TROCAS_DEVOLUCOES", patterns: ["troca", "devolu", "cancelar"] },
+];
+
+function matchAtendimentoCategoryCode(text) {
+  const normalized = String(text || "").toLowerCase();
+  if (!normalized) return null;
+  const match = atendimentoRoutingKeywords.find(({ patterns }) => patterns.some((pattern) => normalized.includes(pattern)));
+  return match?.code || null;
+}
+
 function contactFirstName(contact) {
   const name = contact?.name?.trim();
   if (!name || name === contact?.phone) return "Olá";
@@ -166,16 +195,21 @@ async function completeTriage(conversation, categoryId, channel, bot) {
   if (!claimed.count) return false;
 
   try {
-    const text = renderTemplate(bot.handoffMessage, {
-      ...greetingVars(conversation.contact), categoria: category.name,
-    });
+    // Atendimento não recebe a confirmação genérica de encaminhamento: em vez
+    // disso, pergunta o que o cliente precisa (a resposta é interpretada em
+    // handleIncomingTriage/tryAtendimentoRerouting, sem repetir recepção).
+    const isAtendimento = category.code === ATENDIMENTO_CATEGORY_CODE;
+    const text = isAtendimento
+      ? ATENDIMENTO_ASK_MESSAGE
+      : renderTemplate(bot.handoffMessage, { ...greetingVars(conversation.contact), categoria: category.name });
+    const system = isAtendimento ? "atendimento_ask" : "triage_confirmation";
     const result = await channel.sendText(conversation.contact.phone, text);
     const occurredAt = new Date();
     await prisma.$transaction(async (transaction) => {
       await transaction.message.create({ data: {
         conversationId: conversation.id, externalId: result.externalId || null, channel: "META",
         direction: "ENVIADA", status: "ENVIADA", type: "text", text, occurredAt,
-        rawPayload: { message: result.data, system: "triage_confirmation" },
+        rawPayload: { message: result.data, system },
       } });
       await transaction.conversation.update({ where: { id: conversation.id }, data: { lastMessageAt: occurredAt } });
       await transaction.conversationActivity.create({ data: {
@@ -222,11 +256,69 @@ async function isReopenedConversation(conversationId) {
   return count > 0;
 }
 
+// Reclassificação da categoria Atendimento (ver constantes acima): só age
+// quando a última mensagem enviada foi exatamente a pergunta "o que você
+// precisa" (senão a conversa já seguiu para outra coisa/atendente humano) e
+// ninguém assumiu a conversa ainda. Retorna null quando a regra nem se
+// aplica (não é o caso de Atendimento pendente) — nesse caso o chamador
+// segue com o "Human takeover / já triado." de sempre.
+async function tryAtendimentoRerouting(conversation, message, channel) {
+  if (conversation.category?.code !== ATENDIMENTO_CATEGORY_CODE) return null;
+  if (conversation.assignedUserId || conversation.status === "FINALIZADO") return null;
+  if (conversation.messages[0]?.rawPayload?.system !== "atendimento_ask") return null;
+
+  const targetCode = matchAtendimentoCategoryCode(message.text);
+  if (!targetCode) return false; // Sem correspondência: segue normalmente para o atendente em Atendimento.
+
+  const targetCategory = await prisma.category.findFirst({ where: { code: targetCode, active: true } });
+  if (!targetCategory) return false;
+
+  const moved = await prisma.conversation.updateMany({
+    where: { id: conversation.id, categoryId: conversation.categoryId, assignedUserId: null },
+    data: { categoryId: targetCategory.id },
+  });
+  if (!moved.count) return false;
+
+  const result = await channel.sendText(conversation.contact.phone, ATENDIMENTO_REROUTE_MESSAGE);
+  const occurredAt = new Date();
+  await prisma.$transaction(async (transaction) => {
+    await transaction.message.create({ data: {
+      conversationId: conversation.id, externalId: result.externalId || null, channel: "META",
+      direction: "ENVIADA", status: "ENVIADA", type: "text", text: ATENDIMENTO_REROUTE_MESSAGE, occurredAt,
+      rawPayload: { message: result.data, system: "atendimento_reroute" },
+    } });
+    await transaction.conversation.update({ where: { id: conversation.id }, data: { lastMessageAt: occurredAt } });
+    await transaction.conversationActivity.create({ data: {
+      conversationId: conversation.id, action: "BOT_TRIAGE_COMPLETED",
+      details: { categoryId: targetCategory.id, categoryName: targetCategory.name, reroutedFromAtendimento: true },
+    } });
+    await audit.recordAudit({
+      actor: null,
+      action: "CONVERSATION_CATEGORY_CHANGED",
+      entityType: "CONVERSATION",
+      entityId: conversation.id,
+      summary: `Bot reclassificou a conversa de ${conversation.contact.customName || conversation.contact.name || conversation.contact.phone} de Atendimento para ${targetCategory.name}`,
+      details: {
+        conversationId: conversation.id,
+        contactCustomName: conversation.contact.customName || null,
+        contactName: conversation.contact.name || null,
+        contactPhone: conversation.contact.phone,
+        from: "Atendimento",
+        to: targetCategory.name,
+        fromCategoryId: conversation.categoryId,
+        toCategoryId: targetCategory.id,
+      },
+    }, transaction);
+  });
+  return true;
+}
+
 async function handleIncomingTriage(event, message, channel, { now = new Date() } = {}) {
   const conversation = await prisma.conversation.findUnique({
     where: { id: message.conversationId },
     include: {
       contact: true,
+      category: { select: { id: true, code: true } },
       messages: {
         where: { direction: "ENVIADA" }, orderBy: { occurredAt: "desc" }, take: 1,
         select: { rawPayload: true },
@@ -234,7 +326,10 @@ async function handleIncomingTriage(event, message, channel, { now = new Date() 
     },
   });
   if (!conversation) return false;
-  if (conversation.categoryId) return false; // Human takeover / já triado.
+  if (conversation.categoryId) {
+    const rerouted = await tryAtendimentoRerouting(conversation, message, channel);
+    return rerouted === null ? false : rerouted; // null = regra não se aplica -> Human takeover / já triado.
+  }
 
   const bot = await getTriageBot();
   if (!bot) {
