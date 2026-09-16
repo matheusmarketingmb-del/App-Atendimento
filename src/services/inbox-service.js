@@ -483,11 +483,15 @@ async function getConversation(id, viewer) {
         orderBy: { createdAt: "desc" },
         take: 100,
       } : false,
+      botState: { select: { humanPausedAt: true } },
     },
   }).then((conversation) => {
     if (!conversation) return null;
-    const { pins, ...result } = conversation;
-    return { ...result, isPinned: pins.length > 0, canViewHistory, messageHistoryLimited: messageVisibility.limited };
+    const { pins, botState, ...result } = conversation;
+    return {
+      ...result, isPinned: pins.length > 0, canViewHistory, messageHistoryLimited: messageVisibility.limited,
+      botPausedAt: botState?.humanPausedAt || null,
+    };
   });
 }
 

@@ -481,13 +481,18 @@ async function orchestrate({
   // estar atendendo enquanto o Flow Engine/Tools continuavam avançando (e
   // até executando Tools reais) por baixo, só porque a resposta final não
   // era enviada — o estado ficava fora de sincronia com o que o humano via.
-  let humanPaused = false;
-  if (flags.handoffAutoPauseEnabled) {
-    const conversation = await client.conversation.findUnique({
-      where: { id: conversationId }, select: { assignedUserId: true, status: true },
-    });
-    humanPaused = Boolean(conversation?.assignedUserId)
-      && ["EM_ATENDIMENTO", "AGUARDANDO_EQUIPE", "AGUARDANDO_CLIENTE"].includes(conversation?.status);
+  // Segurança (pedido explícito do usuário): pausa manual ("Cancelar Bot",
+  // ConversationBotState.humanPausedAt) e conversa FINALIZADO sempre pausam,
+  // mesmo sem handoffAutoPauseEnabled — nenhum bot pode responder por cima
+  // de um humano responsável nem numa conversa encerrada.
+  let humanPaused = Boolean(state?.humanPausedAt);
+  const gateConversation = await client.conversation.findUnique({
+    where: { id: conversationId }, select: { assignedUserId: true, status: true },
+  });
+  if (gateConversation?.status === "FINALIZADO") humanPaused = true;
+  if (!humanPaused && flags.handoffAutoPauseEnabled) {
+    humanPaused = Boolean(gateConversation?.assignedUserId)
+      && ["EM_ATENDIMENTO", "AGUARDANDO_EQUIPE", "AGUARDANDO_CLIENTE"].includes(gateConversation?.status);
   }
 
   // Item 9 (avaliação do cliente): se a mensagem anterior pediu uma nota e

@@ -313,12 +313,27 @@ async function tryAtendimentoRerouting(conversation, message, channel) {
   return true;
 }
 
+// Segurança (pedido explícito do usuário): nenhum Bot pode responder por
+// cima de um humano já responsável, nem em conversa finalizada, nem depois
+// que o atendente aperta "Cancelar Bot" — mesmo que o bot ainda esteja no
+// meio de um fluxo (ex.: aguardando resposta da pergunta de Atendimento).
+// Checado ANTES de qualquer outra decisão em handleIncomingTriage, então
+// nenhum caminho abaixo (menu inicial, fora de horário, confirmação,
+// reclassificação) pode contornar esta regra.
+function botIsAllowedToRespond(conversation) {
+  if (conversation.status === "FINALIZADO") return false;
+  if (conversation.assignedUserId) return false;
+  if (conversation.botState?.humanPausedAt) return false;
+  return true;
+}
+
 async function handleIncomingTriage(event, message, channel, { now = new Date() } = {}) {
   const conversation = await prisma.conversation.findUnique({
     where: { id: message.conversationId },
     include: {
       contact: true,
       category: { select: { id: true, code: true } },
+      botState: { select: { humanPausedAt: true } },
       messages: {
         where: { direction: "ENVIADA" }, orderBy: { occurredAt: "desc" }, take: 1,
         select: { rawPayload: true },
@@ -326,6 +341,7 @@ async function handleIncomingTriage(event, message, channel, { now = new Date() 
     },
   });
   if (!conversation) return false;
+  if (!botIsAllowedToRespond(conversation)) return false;
   if (conversation.categoryId) {
     const rerouted = await tryAtendimentoRerouting(conversation, message, channel);
     return rerouted === null ? false : rerouted; // null = regra não se aplica -> Human takeover / já triado.

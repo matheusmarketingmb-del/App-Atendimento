@@ -301,6 +301,10 @@ module.exports = {
     try { return res.json(await handoff.listHandoffContexts(req.params.conversationId, req.user)); }
     catch (error) { return next(error); }
   },
+  async pauseBot(req, res, next) {
+    try { return res.json(await handoff.pauseBot(req.params.conversationId, req.user)); }
+    catch (error) { return next(error); }
+  },
   async resumeBot(req, res, next) {
     try { return res.json(await handoff.resumeBot(req.params.conversationId, req.user)); }
     catch (error) { return next(error); }

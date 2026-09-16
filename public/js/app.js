@@ -1042,6 +1042,8 @@ async function openConversation(id, { refreshList = true, markRead = true } = {}
     $("#priority-select").value = c.priority || "NORMAL";
     $("#claim-conversation").hidden = c.assignedUserId === state.currentUser?.id;
     $("#toggle-finalized").textContent = c.status === "FINALIZADO" ? "Reabrir" : "Finalizar"; $("#toggle-finalized").dataset.status = c.status;
+    $("#toggle-bot-pause").textContent = c.botPausedAt ? "Reativar bot" : "Cancelar bot";
+    $("#toggle-bot-pause").dataset.paused = String(Boolean(c.botPausedAt));
     $("#delete-conversation").hidden = !state.currentUser?.isMaster;
     $("#pin-conversation").textContent = c.isPinned ? "★ Fixada" : "☆ Fixar";
     $("#pin-conversation").dataset.pinned = String(Boolean(c.isPinned));
@@ -1828,6 +1830,16 @@ $("#category-dialog").addEventListener("click", (event) => { if (event.target ==
 $("#category-form").addEventListener("submit", async (event) => { event.preventDefault(); const name = $("#category-name").value.trim(); const color = $("#category-color").value; const parentId = $("#category-parent").value || null; try { await api("/api/categories", { method:"POST", body:JSON.stringify({ name, color, parentId }) }); $("#category-name").value = ""; await loadCategories(); await loadConversations(); toast(parentId ? "Subcategoria criada." : "Categoria criada."); } catch (e) { toast(e.message, true); } });
 $("#category-manager-list").addEventListener("submit", async (event) => { event.preventDefault(); const row = event.target.closest("[data-category-id]"); const name = row.querySelector(".managed-name").value.trim(); const color = row.querySelector(".managed-color").value; const parentId = row.querySelector(".managed-parent").value || null; const active = row.querySelector(".managed-active").checked; try { await api(`/api/categories/${row.dataset.categoryId}`, { method:"PATCH", body:JSON.stringify({ name, color, parentId, active }) }); await loadCategories(); await loadConversations(); toast("Categoria atualizada."); } catch (e) { toast(e.message, true); } });
 $("#category-manager-list").addEventListener("change", (event) => { if (event.target.classList.contains("managed-active")) event.target.closest("label").querySelector("span").textContent = event.target.checked ? "Ativa" : "Inativa"; });
+$("#toggle-bot-pause").addEventListener("click", async (event) => {
+  const button = event.currentTarget; const resuming = button.dataset.paused === "true";
+  button.disabled = true;
+  try {
+    await api(`/api/conversations/${state.selectedId}/bot-handoff/${resuming ? "resume" : "pause"}`, { method:"POST" });
+    toast(resuming ? "Bot reativado nesta conversa." : "Bot cancelado — só você responde nesta conversa agora.");
+    await openConversation(state.selectedId);
+  } catch (e) { toast(e.message, true); }
+  finally { button.disabled = false; }
+});
 $("#toggle-finalized").addEventListener("click", async (event) => {
   const button = event.currentTarget; const reopening = button.dataset.status === "FINALIZADO";
   button.disabled = true;

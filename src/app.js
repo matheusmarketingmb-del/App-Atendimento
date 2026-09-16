@@ -514,6 +514,7 @@ app.post(
 
   // Handoff humano (item 2).
   app.get("/api/conversations/:conversationId/bot-handoff", botController.listHandoffContexts);
+  app.post("/api/conversations/:conversationId/bot-handoff/pause", botController.pauseBot);
   app.post("/api/conversations/:conversationId/bot-handoff/resume", botController.resumeBot);
 
   // Sugestão de resposta para o atendente + feedback (itens 7/8).

@@ -111,19 +111,35 @@ async function getLatestHandoffContext(conversationId, client = prisma) {
   return client.botHandoffContext.findFirst({ where: { conversationId }, orderBy: { createdAt: "desc" } });
 }
 
+// "[Cancelar Bot]": ação humana explícita — o atendente força a pausa mesmo
+// que ninguém tenha assumido a conversa ainda (ex.: bot de triagem ainda
+// tentando classificar). Grava ConversationBotState.humanPausedAt; todo
+// mecanismo de envio de bot (triage-bot-service.js e, quando deixar de ser
+// sombra, bot-orchestrator-service.js) passa a checar esse campo antes de
+// responder — ver botIsAllowedToRespond em triage-bot-service.js. Usa upsert
+// porque uma conversa que nunca rodou o orquestrador não tem
+// ConversationBotState ainda.
+async function pauseBot(conversationId, actor) {
+  await authorization.assertCanViewConversation(actor, conversationId);
+  return prisma.conversationBotState.upsert({
+    where: { conversationId },
+    update: { humanPausedAt: new Date() },
+    create: { conversationId, humanPausedAt: new Date() },
+  });
+}
+
 // "[Retomar Bot]" (item 2): ação humana explícita — nunca automática, nunca
 // disparada pelo motor de decisão. Só limpa a pausa (ConversationBotState.
 // humanPausedAt); o Bot volta a poder responder na PRÓXIMA mensagem, nunca
-// reenvia nada retroativamente.
+// reenvia nada retroativamente. Upsert pelo mesmo motivo de pauseBot: pode
+// ser chamado numa conversa que nunca teve o estado criado.
 async function resumeBot(conversationId, actor) {
   await authorization.assertCanViewConversation(actor, conversationId);
 
-  const state = await prisma.conversationBotState.findUnique({ where: { conversationId } });
-  if (!state) throw Object.assign(new Error("Conversa sem estado de Bot registrado."), { statusCode: 404 });
-
-  const updated = await prisma.conversationBotState.update({
+  const updated = await prisma.conversationBotState.upsert({
     where: { conversationId },
-    data: { humanPausedAt: null },
+    update: { humanPausedAt: null },
+    create: { conversationId, humanPausedAt: null },
   });
 
   const latestHandoff = await getLatestHandoffContext(conversationId);
@@ -137,4 +153,6 @@ async function resumeBot(conversationId, actor) {
   return updated;
 }
 
-module.exports = { captureHandoffContext, deriveConversationSignals, getLatestHandoffContext, listHandoffContexts, resumeBot };
+module.exports = {
+  captureHandoffContext, deriveConversationSignals, getLatestHandoffContext, listHandoffContexts, pauseBot, resumeBot,
+};
