@@ -15,10 +15,34 @@ const { LocalFallbackProvider } = require("./local-fallback-provider");
 const { AnthropicProvider } = require("./anthropic-provider");
 const { GeminiProvider } = require("./gemini-provider");
 const { OpenAiProvider } = require("./openai-provider");
+const { LocalQwenProvider } = require("./local-qwen-provider");
 const { EXTERNAL_AI_PROVIDERS } = require("../bot-constants");
 const { resolveCredential } = require("./ai-credential-service");
+const localAiSettingsService = require("../local-ai-settings-service");
 
 const localFallbackProvider = new LocalFallbackProvider();
+
+// LOCAL_QWEN não usa credencial (ai-credential-service.js) — usa
+// LocalAiProviderSettings (host/porta/modelo, ver local-ai-settings-
+// service.js), GLOBAL e reaproveitado por qualquer Bot. `modelOverride` é a
+// escolha de modelo DO BOT (featureFlags.aiModel), igual ao padrão dos
+// providers externos. Nunca cai para outro provider sozinho: sem
+// baseUrl/enabled, devolve { provider: null } e quem chamou decide o que
+// fazer (bot-ai-shadow-service.js nunca troca por Gemini/OpenAI/Anthropic).
+async function resolveLocalQwenInstance(modelOverride) {
+  const settings = await localAiSettingsService.getSettings();
+  if (!settings.enabled || !settings.baseUrl) {
+    return { provider: null, error: "IA local não configurada ou desabilitada." };
+  }
+  try {
+    const provider = new LocalQwenProvider({
+      baseUrl: settings.baseUrl, model: modelOverride || settings.defaultModel, timeoutMs: settings.timeoutMs,
+    });
+    return { provider, error: null };
+  } catch (error) {
+    return { provider: null, error: error.message };
+  }
+}
 
 // Registro central de providers externos IMPLEMENTADOS (item "mostrar
 // somente providers realmente implementados"). EXTERNAL_AI_PROVIDERS
@@ -70,6 +94,10 @@ async function getProviderStatus(providerName) {
   if (!providerName || providerName === "LOCAL") {
     return { provider: "LOCAL", configured: true, error: null };
   }
+  if (providerName === "LOCAL_QWEN") {
+    const entry = await resolveLocalQwenInstance();
+    return { provider: providerName, configured: Boolean(entry.provider), error: entry.provider ? null : entry.error };
+  }
   if (!EXTERNAL_AI_PROVIDERS.includes(providerName)) {
     return { provider: providerName, configured: false, error: "Provider não implementado." };
   }
@@ -83,7 +111,7 @@ async function getProviderStatus(providerName) {
 // credencial na resposta.
 async function testConnection(providerName) {
   if (providerName === "LOCAL") return { ok: true, latencyMs: 0 };
-  const entry = await resolveInstance(providerName);
+  const entry = providerName === "LOCAL_QWEN" ? await resolveLocalQwenInstance() : await resolveInstance(providerName);
   if (!entry.provider) return { ok: false, error: entry.error || "Provider não configurado." };
   const startedAt = Date.now();
   try {
@@ -97,5 +125,5 @@ async function testConnection(providerName) {
 }
 
 module.exports = {
-  getFallbackProvider, getPrimaryProvider, getProviderStatus, testConnection,
+  getFallbackProvider, getPrimaryProvider, getProviderStatus, testConnection, resolveLocalQwenInstance,
 };

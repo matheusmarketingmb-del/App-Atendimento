@@ -8,6 +8,7 @@ const { startInactivityMonitor } = require("./src/services/conversation-inactivi
 const { startSlaMonitor } = require("./src/services/conversation-sla-service");
 const { startCampaignWorker } = require("./src/services/campaign-worker-service");
 const { startGmailSyncWorker } = require("./src/services/channels/gmail-sync-service");
+const localAiStatusService = require("./src/services/local-ai-status-service");
 const inboxEvents = require("./src/realtime/inbox-events");
 
 const PORT = process.env.PORT || 3000;
@@ -25,6 +26,11 @@ const stopSlaMonitor = startSlaMonitor({ onChange: () => inboxEvents.publish() }
 // a cada tick dentro do próprio worker.
 const stopCampaignWorker = startCampaignWorker({ channel, onChange: () => inboxEvents.publish() });
 const stopGmailSyncWorker = startGmailSyncWorker();
+// IA local (LOCAL_QWEN): monitor de disponibilidade em processo, mesmo
+// padrão dos demais workers acima. Nunca bloqueia o boot: sem
+// LocalAiProviderSettings.enabled/baseUrl configurado, fica OFFLINE sem
+// tentar rede nenhuma.
+localAiStatusService.start();
 
 async function shutdown(signal) {
   console.log(`${signal} recebido. Encerrando servidor...`);
@@ -32,6 +38,7 @@ async function shutdown(signal) {
   stopSlaMonitor();
   stopCampaignWorker();
   stopGmailSyncWorker();
+  localAiStatusService.stop();
   server.close(async () => {
     await prisma.$disconnect();
     process.exit(0);

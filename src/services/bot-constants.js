@@ -22,6 +22,26 @@ const AI_PROVIDER_OPTIONS = Object.freeze(["LOCAL", ...EXTERNAL_AI_PROVIDERS]);
 // que um Master ligar externalAiFallbackEnabled explicitamente.
 const DEFAULT_EXTERNAL_AI_PROVIDER = "GEMINI";
 
+// IA configurável POR BOT (useAi/aiProvider/aiMode/...) — capacidade
+// diferente e mais ampla do que externalAiFallbackEnabled acima (que só
+// reforça a CLASSIFICAÇÃO quando a confiança local é baixa). Aqui o provider
+// escolhido pode dirigir intenção, decisão e/ou redação da resposta,
+// conforme AI_MODE_OPTIONS. "LOCAL_QWEN" roda fora da VPS (Ollama no PC do
+// operador) e é resolvido via local-ai-settings-service.js, nunca por
+// ai-credential-service.js (não é segredo, é endereço de rede).
+const AI_PROVIDER_OPTIONS_WITH_LOCAL_QWEN = Object.freeze([...AI_PROVIDER_OPTIONS, "LOCAL_QWEN"]);
+// PRIMARY = a IA dirige a decisão do turno (JSON estruturado). FALLBACK =
+// fluxo local primeiro, IA só se a interpretação local for fraca/vazia.
+// UNDERSTANDING_ONLY = IA só interpreta (intentId/entities), quem decide e
+// responde continua sendo decide()/Flow/Knowledge. RESPONSE_ONLY = decisão
+// vem do motor local, IA só redige o texto final (sempre a partir de
+// grounding, nunca livre). OFF = Bot não usa IA nenhuma.
+const AI_MODE_OPTIONS = Object.freeze(["PRIMARY", "FALLBACK", "UNDERSTANDING_ONLY", "RESPONSE_ONLY", "OFF"]);
+// O que fazer quando useAi=true e o provider escolhido está OFFLINE/DEGRADED.
+// Nunca existe um quarto valor "trocar de provider": IA local offline jamais
+// vira uma chamada silenciosa a Gemini/OpenAI/Anthropic.
+const AI_OFFLINE_BEHAVIOR_OPTIONS = Object.freeze(["HUMAN_HANDOFF", "LOCAL_FLOW", "NO_AUTO_REPLY"]);
+
 const BOT_ACTIONS = Object.freeze([
   "RESPOND",
   "ASK_CLARIFICATION",
@@ -164,12 +184,24 @@ const FEATURE_FLAG_DEFAULTS = Object.freeze({
   // mesmos serviços de sempre, nunca duplicados. Um Bot que nunca ligar isto
   // continua se comportando byte a byte como antes.
   agentPlannerEnabled: false,
+  // IA configurável por Bot (ver AI_MODE_OPTIONS acima). Default seguro:
+  // nenhum Bot existente muda de comportamento sozinho — useAi=false e
+  // aiMode="OFF" reproduzem exatamente o motor de sempre. requiresAi=false +
+  // aiOfflineBehavior="NO_AUTO_REPLY" são o par mais conservador possível
+  // caso um Bot ligue useAi sem revisar as outras flags.
+  useAi: false,
+  aiProvider: "LOCAL_QWEN",
+  aiModel: "",
+  aiMode: "OFF",
+  requiresAi: false,
+  aiOfflineBehavior: "NO_AUTO_REPLY",
 });
 const BOOLEAN_FEATURE_FLAG_KEYS = Object.freeze([
   "interpretationEnabled", "conversationalBehaviorEnabled", "contextEnabled", "autoSwitchEnabled",
   "observationEnabled", "learningEnabled", "agentSuggestionsEnabled", "knowledgeSuggestionsEnabled", "knowledgeBaseEnabled",
   "handoffAutoPauseEnabled", "handoffEnabled", "toolsFeatureEnabled", "flowEngineEnabled",
   "autoFinalizeOnResolution", "externalAiFallbackEnabled", "agentPlannerEnabled",
+  "useAi", "requiresAi",
 ]);
 const NUMERIC_FEATURE_FLAG_RANGES = Object.freeze({
   contextMaxMessages: { min: 1, max: 30 },
@@ -186,11 +218,16 @@ const FLOAT_FEATURE_FLAG_RANGES = Object.freeze({
 // solta (mesmo espírito de RATING_REQUEST_MODES).
 const ENUM_FEATURE_FLAG_KEYS = Object.freeze({
   externalAiProvider: AI_PROVIDER_OPTIONS,
+  aiProvider: AI_PROVIDER_OPTIONS_WITH_LOCAL_QWEN,
+  aiMode: AI_MODE_OPTIONS,
+  aiOfflineBehavior: AI_OFFLINE_BEHAVIOR_OPTIONS,
 });
 // Feature flags de texto LIVRE (com limite de tamanho, nunca sem
-// sanitização) — hoje só o nome do modelo do provider externo escolhido.
+// sanitização) — nome do modelo do provider externo (legado) e o modelo
+// escolhido dentro do provider de aiProvider (ex.: "qwen3:14b").
 const FREE_TEXT_FEATURE_FLAG_KEYS = Object.freeze({
   externalAiModel: { maxLength: 120 },
+  aiModel: { maxLength: 120 },
 });
 
 const RATING_REQUEST_MODES = Object.freeze(["BOT_COMPLETED", "BEFORE_HANDOFF", "MANUAL", "NEVER"]);
@@ -220,6 +257,9 @@ function validateConfidenceThresholds(low, high) {
 
 module.exports = {
   AI_PROVIDER_OPTIONS,
+  AI_PROVIDER_OPTIONS_WITH_LOCAL_QWEN,
+  AI_MODE_OPTIONS,
+  AI_OFFLINE_BEHAVIOR_OPTIONS,
   BOOLEAN_FEATURE_FLAG_KEYS,
   BOT_ACTIONS,
   CONFIRMATION_PATTERN,

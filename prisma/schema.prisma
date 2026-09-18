@@ -442,6 +442,7 @@ model User {
   campaignImports              CampaignImport[]         @relation("CampaignImportedBy")
   optOutsRemoved               OptOut[]                 @relation("OptOutRemovedBy")
   aiProviderCredentialsUpdated AiProviderCredential[]   @relation("AiProviderCredentialUpdatedBy")
+  localAiProviderSettingsUpdated LocalAiProviderSettings[] @relation("LocalAiProviderSettingsUpdatedBy")
   socialContentMappingsCreated SocialContentMapping[]
 }
 
@@ -1918,4 +1919,62 @@ model AiProviderCredential {
   updatedAt         DateTime @updatedAt
 
   updatedByUser User? @relation("AiProviderCredentialUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: SetNull)
+}
+
+// IA LOCAL (Qwen via Ollama, rodando fora da VPS) — configuração GLOBAL do
+// PROVIDER (host/porta/modelo padrão), reutilizada por qualquer Bot que
+// escolha featureFlags.aiProvider = "LOCAL_QWEN" (ver bot-constants.js). Não
+// é credencial (não guarda segredo — `baseUrl` é um endereço privado de rede,
+// tipicamente Tailscale, nunca exposto publicamente), por isso não usa o
+// mesmo cofre cifrado de AiProviderCredential. Registro único ("singleton"),
+// igual a BotGlobalSettings. Nunca instanciar um provider por Bot: todos
+// compartilham esta mesma configuração.
+model LocalAiProviderSettings {
+  id              String    @id @default("singleton")
+  enabled         Boolean   @default(false)
+  baseUrl         String?
+  defaultModel    String    @default("qwen3:14b")
+  timeoutMs       Int       @default(45000)
+  maxConcurrency  Int       @default(1)
+  updatedByUserId String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  updatedByUser User? @relation("LocalAiProviderSettingsUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: SetNull)
+}
+
+// Registro de cada tentativa da IA local em MODO SHADOW/OBSERVAÇÃO (nunca
+// enviado ao cliente — ver bot-ai-shadow-service.js): o que a IA teria
+// respondido, com que Knowledge, em quanto tempo, e se seria elegível para
+// auto-resposta real (useAi/autoReplyEnabled continuam sendo dois controles
+// independentes — ver bot-ai-gate-service.js). Serve para validar qualidade
+// antes de ligar autoReplyEnabled de verdade num Bot.
+model BotAiShadowLog {
+  id             String   @id @default(cuid())
+  conversationId String
+  messageId      String?
+  botId          String
+  provider       String
+  model          String?
+  aiMode         String
+  action         String?
+  intent         String?
+  issue          String?
+  confidence     Float?
+  entities       Json?
+  knowledgeUsed  Json?
+  missingInformation Json?
+  responseText   String?  @db.Text
+  handoffCategory String?
+  handoffReason  String?
+  summary        String?  @db.Text
+  autoReplyEligible Boolean @default(false)
+  autoReplyBlockedReason String?
+  latencyMs      Int?
+  status         String
+  errorCode      String?
+  createdAt      DateTime @default(now())
+
+  @@index([botId, createdAt])
+  @@index([conversationId, createdAt])
 }
