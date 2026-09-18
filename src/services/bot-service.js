@@ -3,6 +3,7 @@ const authorization = require("./authorization-service");
 const audit = require("./audit-service");
 const { normalizeText } = require("./bot-simulator-service");
 const { simulateOrchestration } = require("./bot-orchestrator-service");
+const { simulateLocalAi } = require("./bot-ai-simulator-service");
 const { simulateTriage } = require("./triage-bot-service");
 const { categoryFamily } = require("./bot-sector-intake-service");
 const flowEngine = require("./bot-flow-service");
@@ -807,7 +808,22 @@ async function simulate(botId, message, viewer, { state, history, replyId, categ
     state: normalizeSimulatorState(state),
     intakeContext: { category },
   });
-  return { ...result, simulation: true, sent: false, warning: "Simulação - nenhuma mensagem foi enviada" };
+  let localAi;
+  try {
+    localAi = await simulateLocalAi({
+      bot,
+      message: simulatorMessage,
+      categoryName: category?.name || null,
+      state: normalizeSimulatorState(state),
+      history: normalizeSimulatorHistory(history),
+    });
+  } catch (error) {
+    localAi = {
+      eligible: true, status: "ERROR", reason: error.message || "Falha ao executar a IA local.",
+      provider: "LOCAL_QWEN", model: null, sent: false,
+    };
+  }
+  return { ...result, localAi, simulation: true, sent: false, warning: "Simulação - nenhuma mensagem foi enviada" };
 }
 
 async function listObservations(filters, viewer) {

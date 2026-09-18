@@ -565,6 +565,8 @@ function resetSimulator() {
   state.simulatorState = null;
   $("#simulator-transcript").innerHTML = "";
   $("#simulator-result").innerHTML = "<p>O resultado da simulação aparecerá aqui.</p>";
+  const localAi = document.getElementById("simulator-local-ai");
+  if (localAi) { localAi.hidden = true; localAi.innerHTML = ""; }
   const flowInfo = document.getElementById("simulator-flow-info");
   if (flowInfo) { flowInfo.hidden = true; flowInfo.innerHTML = ""; }
 }
@@ -1166,6 +1168,33 @@ function entitiesSummary(entities) {
   return entries.map(([key, value]) => `${key}: ${value}`).join(", ");
 }
 
+function renderLocalAiSimulation(localAi) {
+  const box = document.getElementById("simulator-local-ai");
+  if (!box) return;
+  box.hidden = false;
+  if (!localAi) {
+    box.innerHTML = `<div class="local-ai-heading"><b>Resposta da IA local — não enviada</b><span class="local-ai-status error">ERRO</span></div><p>A simulação não retornou o diagnóstico da IA local.</p>`;
+    return;
+  }
+  const statusClass = localAi.status === "OK" ? "ok" : (localAi.status === "DISABLED" ? "disabled" : "error");
+  const response = localAi.response || (localAi.action === "HANDOFF"
+    ? localAi.handoffReason
+    : localAi.reason) || "A IA não produziu texto para este turno.";
+  const knowledge = (localAi.knowledgeUsed || []).map((item) => item.title).filter(Boolean).join("; ") || "Nenhum trecho encontrado";
+  box.innerHTML = `<div class="local-ai-heading"><b>Resposta da IA local — não enviada</b><span class="local-ai-status ${statusClass}">${escapeHtml(localAi.status || "-")}</span></div>
+    <p class="local-ai-response">${escapeHtml(response)}</p>
+    <div class="result-grid">
+      <span>Provider<strong>${escapeHtml(localAi.provider || "-")}</strong></span>
+      <span>Modelo<strong>${escapeHtml(localAi.model || "-")}</strong></span>
+      <span>Ação<strong>${escapeHtml(localAi.action || "-")}</strong></span>
+      <span>Intenção<strong>${escapeHtml(localAi.intent || "-")}</strong></span>
+      <span>Confiança<strong>${localAi.confidence != null ? `${Math.round(localAi.confidence * 100)}%` : "-"}</strong></span>
+      <span>Tempo<strong>${localAi.latencyMs != null ? `${(localAi.latencyMs / 1000).toFixed(1)}s` : "-"}</strong></span>
+      <span class="full-result">Conhecimento local<strong>${escapeHtml(knowledge)}</strong></span>
+      <span>Envio ao cliente<strong>Não enviado</strong></span>
+    </div>`;
+}
+
 $("#simulator-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const message = $("#simulator-message").value;
@@ -1204,6 +1233,7 @@ $("#simulator-form").addEventListener("submit", async (event) => {
       <span>IA externa<strong>${result.calledExternalAi ? "Chamada" : "Não chamada"}</strong></span>
       <span>Provider<strong>${escapeHtml(result.provider || "-")}</strong></span>
     </div><p>${escapeHtml(result.warning)}</p>`;
+    renderLocalAiSimulation(result.localAi);
     await renderSimulatorFlowInfo(result.nextState);
   } catch (error) { toast(error.message, true); }
 });
