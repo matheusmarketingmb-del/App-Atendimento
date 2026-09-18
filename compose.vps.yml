@@ -75,6 +75,8 @@ services:
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
       OPENAI_TIMEOUT_MS: ${OPENAI_TIMEOUT_MS:-8000}
       MEDIA_STORAGE_DIR: /app/storage/media
+      LOCAL_KNOWLEDGE_BASE_URL: ${LOCAL_KNOWLEDGE_BASE_URL:-}
+      LOCAL_KNOWLEDGE_BOT_IDS: ${LOCAL_KNOWLEDGE_BOT_IDS:-}
     volumes:
       - atendimento_media_data:/app/storage
     expose:

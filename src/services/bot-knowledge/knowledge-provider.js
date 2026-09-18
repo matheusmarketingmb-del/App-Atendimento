@@ -7,6 +7,7 @@
 const prisma = require("../../database/prisma");
 const { normalizeText } = require("../bot-simulator-service");
 const { isActiveNow } = require("../bot-knowledge-source-service");
+const localFolderKnowledgeProvider = require("./local-folder-knowledge-provider");
 
 const knowledgeDomains = Object.freeze([
   "FAQ", "MANUAL", "PRODUCT", "POLICY", "WARRANTY", "PROCEDURE", "GENERAL", "OTHER",
@@ -49,6 +50,14 @@ class KnowledgeSourceProvider extends KnowledgeProvider {
     domains = knowledgeDomains, botId = null, intentId = null, globalIntentId = null,
     category = null, product = null, tags = [], limit = 5, minScore = 0.15,
   } = {}) {
+    if (localFolderKnowledgeProvider.handles(botId)) {
+      try {
+        return await localFolderKnowledgeProvider.search(query, { domains, category, product, tags, limit, minScore });
+      } catch (error) {
+        console.error("[LOCAL_KNOWLEDGE] unavailable; VPS fallback blocked", error.message);
+        return [];
+      }
+    }
     // Cada filtro estruturado é opcional: quando informado, aceita tanto o
     // registro específico daquele escopo (ex.: desta intenção) quanto um
     // registro genérico (sem esse campo preenchido) — conhecimento geral
