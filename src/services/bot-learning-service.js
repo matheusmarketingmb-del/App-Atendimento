@@ -221,7 +221,7 @@ async function analyzeConversation(conversationId, { force = false, client = pri
     const resolutionSignal = detectResolutionSignal(messages);
     const suggestions = [];
 
-    if (firstCustomerMessage && resolutionSignal === "POSITIVE") {
+    if (firstCustomerMessage && resolutionSignal !== "NEGATIVE") {
       const observation = await client.botObservation.findFirst({
         where: { messageId: firstCustomerMessage.id }, include: { bot: { select: { featureFlags: true } } },
       });
