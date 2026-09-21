@@ -152,9 +152,9 @@ async function availableMetaAccounts(user) {
   });
   const rows = stored.map((account) => ({
     id: account.id, name: account.name,
-    address: account.config?.displayPhoneNumber || account.providerMetadata?.username || account.externalAccountId || null,
+    address: account.providerMetadata?.username || account.config?.displayPhoneNumber || account.externalAccountId || null,
   }));
-  if (templatesConfigured()) rows.unshift({ id: "legacy", name: "WhatsApp principal", address: process.env.PHONE_NUMBER_ID || null });
+  if (templatesConfigured()) rows.push({ id: "legacy", name: "WhatsApp principal", address: process.env.PHONE_NUMBER_ID || null });
   return rows;
 }
 
