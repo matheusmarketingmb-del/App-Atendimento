@@ -53,13 +53,13 @@
 .add-account{width:100%;padding:9px;border:1px dashed #ccd1d6;border-radius:11px;color:var(--muted);background:transparent;font-size:9px;font-weight:800}
 .add-account:hover{border-color:var(--orange);color:var(--orange)}
 
-.account-dialog{width:min(420px,92vw);padding:0;border:0;border-radius:16px;box-shadow:0 20px 60px #0004}
+.account-dialog{width:min(420px,92vw);padding:0;border:1px solid var(--line);border-radius:16px;color:var(--ink);background:var(--surface);box-shadow:0 20px 60px #0004}
 .account-dialog::backdrop{background:#0006}
-.account-dialog form{padding:20px;display:grid;gap:11px}
+.account-dialog form{padding:20px;display:grid;gap:11px;color:var(--ink);background:var(--surface)}
 .account-dialog h2{margin:0;font-size:16px}
 .account-dialog-channel{margin:-6px 0 0;color:var(--orange);font-size:9px;font-weight:900;letter-spacing:.04em}
-.account-dialog label{display:grid;gap:5px;color:#626c76;font-size:9px;font-weight:800}
-.account-dialog input{height:36px;padding:0 10px;border:1px solid #dfe2e5;border-radius:8px;color:var(--ink);background:var(--surface);font-size:10px}
+.account-dialog label{display:grid;gap:5px;color:var(--muted);font-size:9px;font-weight:800}
+.account-dialog input{height:36px;padding:0 10px;border:1px solid var(--line);border-radius:8px;color:var(--ink);background:var(--panel);font-size:10px}
 .account-hint{margin:0;color:var(--muted);font-size:8px;line-height:1.5}
 .account-dialog-actions{margin:6px 0 0;padding:0;display:flex;justify-content:flex-end;gap:8px}
 .account-dialog-actions button{padding:9px 14px;border:0;border-radius:16px;font-size:9px;font-weight:900}
@@ -81,4 +81,6 @@
 .access-user-option input { width:18px; height:18px; }
 .access-user-option span { display:grid; gap:2px; }
 .access-user-option small { color:var(--muted); }
+.access-user-option.master-access{cursor:default;opacity:.78;background:var(--panel)}
+.access-user-option.master-access input{accent-color:var(--orange)}
 #account-access-dialog{width:min(620px,94vw)}#account-access-dialog h3{margin:8px 0 0;color:var(--ink);font-size:11px}.account-access-users{max-height:210px}

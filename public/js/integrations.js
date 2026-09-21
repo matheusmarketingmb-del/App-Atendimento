@@ -337,10 +337,13 @@ function openAccessDialog(accountId) {
   const selectedUsers = new Set((account.allowedUsers || []).map((item) => item.userId));
   const selectedCategories = new Set(account.allowedCategoryIds || []);
   $("#account-access-name").textContent = account.name;
-  $("#account-access-users").innerHTML = state.users.filter((user) => user.role !== "ADMIN").map((user) => `
-    <label class="access-user-option"><input type="checkbox" value="${escapeHtml(user.id)}" ${selectedUsers.has(user.id) ? "checked" : ""}>
-      <span><strong>${escapeHtml(user.name)}</strong><small>${escapeHtml(user.email)}</small></span>
+  $("#account-access-users").innerHTML = state.users.map((user) => {
+    const master = user.role === "ADMIN";
+    return `
+    <label class="access-user-option${master ? " master-access" : ""}"><input type="checkbox" value="${escapeHtml(user.id)}" ${master || selectedUsers.has(user.id) ? "checked" : ""} ${master ? "disabled" : ""}>
+      <span><strong>${escapeHtml(user.name)}</strong><small>${escapeHtml(master ? `${user.email} — Master, acesso permanente` : `${user.email} — ${user.role}`)}</small></span>
     </label>`).join("") || '<p class="no-accounts">Nenhum usuário ativo disponível.</p>';
+  }).join("") || '<p class="no-accounts">Nenhum usuário ativo disponível.</p>';
   $("#account-access-categories").innerHTML = state.categories.filter((category) => category.active !== false).map((category) => `
     <label class="access-user-option"><input type="checkbox" value="${escapeHtml(category.id)}" ${selectedCategories.has(category.id) ? "checked" : ""}>
       <span><strong>${escapeHtml(category.parentId ? `↳ ${category.name}` : category.name)}</strong><small>${category.parentId ? "Subcategoria" : "Categoria principal"}</small></span>

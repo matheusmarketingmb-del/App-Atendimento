@@ -34,8 +34,38 @@ test("MetaAdapter deriva número, WABA e token da conta", () => {
   assert.equal(adapter.channel.tokenSource, "CHANNEL_ACCOUNT");
 });
 
+test("MetaAdapter testa o número e o vínculo com o WABA na Graph API", async () => {
+  const channel = {
+    phoneNumberId: "phone-commercial", wabaId: "waba-commercial",
+    assertConfigured() {},
+    async getPhoneNumberProfile() {
+      return { id: "phone-commercial", display_phone_number: "+55 11 99999-9999", verified_name: "Mibro Comercial", quality_rating: "GREEN" };
+    },
+    async listWabaPhoneNumbers() { return [{ id: "phone-commercial" }]; },
+  };
+  const result = await new MetaAdapter({ name: "Comercial", config: {} }, channel).testConnection();
+  assert.equal(result.status, "CONNECTED");
+  assert.equal(result.externalAccountId, "phone-commercial");
+  assert.equal(result.providerMetadata.username, "+55 11 99999-9999");
+  assert.equal(result.providerMetadata.qualityRating, "GREEN");
+});
+
+test("MetaAdapter rejeita número fora do WABA configurado", async () => {
+  const channel = {
+    phoneNumberId: "phone-wrong", wabaId: "waba-commercial",
+    assertConfigured() {},
+    async getPhoneNumberProfile() { return { id: "phone-wrong" }; },
+    async listWabaPhoneNumbers() { return [{ id: "phone-other" }]; },
+  };
+  await assert.rejects(
+    () => new MetaAdapter({ name: "Comercial", config: {} }, channel).testConnection(),
+    (error) => error.channelErrorCode === "ACCOUNT_MISMATCH",
+  );
+});
+
 test("painel e backend preparam atendentes, áreas e escolha do número", () => {
   const integrations = fs.readFileSync(path.join(__dirname, "../public/js/integrations.js"), "utf8");
+  const integrationsCss = fs.readFileSync(path.join(__dirname, "../public/css/integrations.css"), "utf8");
   const inbox = fs.readFileSync(path.join(__dirname, "../public/js/app.js"), "utf8");
   const authorization = fs.readFileSync(path.join(__dirname, "../src/services/authorization-service.js"), "utf8");
   const webhook = fs.readFileSync(path.join(__dirname, "../src/app.js"), "utf8");
@@ -44,4 +74,7 @@ test("painel e backend preparam atendentes, áreas e escolha do número", () => 
   assert.match(inbox, /outbound-meta-account/);
   assert.match(authorization, /channelAccountScope/);
   assert.match(webhook, /metadata\?\.phone_number_id/);
+  assert.match(integrations, /Master, acesso permanente/);
+  assert.doesNotMatch(integrations, /state\.users\.filter\(\(user\) => user\.role !== "ADMIN"\)/);
+  assert.match(integrationsCss, /\.account-dialog\{[^}]*background:var\(--surface\)/);
 });

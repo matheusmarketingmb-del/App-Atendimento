@@ -34,6 +34,34 @@ class MetaCloudChannel {
     return { Authorization: `Bearer ${this.accessToken}` };
   }
 
+  async getPhoneNumberProfile() {
+    this.assertConfigured();
+    try {
+      const response = await axios.get(this.apiUrl(this.phoneNumberId), {
+        headers: this.authHeaders(),
+        params: { fields: "id,display_phone_number,verified_name,quality_rating" },
+        timeout: 12000,
+      });
+      return response.data;
+    } catch (error) {
+      throw this.providerFailure(error, "Não foi possível validar o número na Meta.");
+    }
+  }
+
+  async listWabaPhoneNumbers() {
+    this.assertTemplatesConfigured();
+    try {
+      const response = await axios.get(this.apiUrl(`${this.wabaId}/phone_numbers`), {
+        headers: this.authHeaders(),
+        params: { fields: "id,display_phone_number,verified_name,quality_rating", limit: 100 },
+        timeout: 12000,
+      });
+      return Array.isArray(response.data?.data) ? response.data.data : [];
+    } catch (error) {
+      throw this.providerFailure(error, "Não foi possível validar a conta do WhatsApp na Meta.");
+    }
+  }
+
   // Mapeia falhas da Graph API para uma mensagem clara e um status HTTP
   // previsível, sem nunca vazar o token/credencial — o log (sanitizado,
   // sem o corpo bruto da resposta nem headers de auth) fica só no servidor;

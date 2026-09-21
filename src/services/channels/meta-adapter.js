@@ -58,7 +58,30 @@ class MetaAdapter extends ChannelAdapter {
 
   async testConnection() {
     this.channel.assertConfigured();
-    return { status: "CONNECTED", externalAccountId: this.channel.phoneNumberId, providerMetadata: { displayName: this.account?.name || null, username: this.account?.config?.displayPhoneNumber || null } };
+    const phone = await this.channel.getPhoneNumberProfile();
+    if (!phone?.id || phone.id !== this.channel.phoneNumberId) {
+      throw Object.assign(new Error("O Phone Number ID retornado pela Meta não corresponde à conta configurada."), {
+        statusCode: 400, channelErrorCode: "ACCOUNT_MISMATCH",
+      });
+    }
+    if (this.channel.wabaId) {
+      const phones = await this.channel.listWabaPhoneNumbers();
+      if (!phones.some((item) => item.id === this.channel.phoneNumberId)) {
+        throw Object.assign(new Error("O número não pertence ao WABA configurado."), {
+          statusCode: 400, channelErrorCode: "ACCOUNT_MISMATCH",
+        });
+      }
+    }
+    return {
+      status: "CONNECTED",
+      externalAccountId: phone.id,
+      providerMetadata: {
+        displayName: phone.verified_name || this.account?.name || null,
+        username: phone.display_phone_number || this.account?.config?.displayPhoneNumber || null,
+        qualityRating: phone.quality_rating || null,
+      },
+      message: `Número ${phone.display_phone_number || phone.id} validado diretamente na Meta.`,
+    };
   }
 }
 
