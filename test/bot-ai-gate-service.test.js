@@ -15,13 +15,13 @@ function base(overrides = {}) {
 test("kill switch global bloqueia mesmo com IA online e Bot habilitado", () => {
   const result = resolveAutoReplyEligibility(base({ globalAutomationEnabled: false }));
   assert.equal(result.allowed, false);
-  assert.equal(result.reason, "AUTOMATION_DISABLED_GLOBALLY");
+  assert.equal(result.reason, "GLOBAL_AUTOMATION_DISABLED");
 });
 
 test("bot.autoReplyEnabled=false bloqueia independente de useAi/status", () => {
   const result = resolveAutoReplyEligibility(base({ bot: { autoReplyEnabled: false } }));
   assert.equal(result.allowed, false);
-  assert.equal(result.reason, "BOT_AUTOREPLY_DISABLED");
+  assert.equal(result.reason, "AUTO_REPLY_DISABLED");
 });
 
 test("useAi=false ou aiMode=OFF: elegibilidade depende só do motor local, sempre permitido nesta camada", () => {
@@ -39,7 +39,7 @@ test("useAi=true e provider OFFLINE com requiresAi=true: nunca responde, mesmo c
     flags: { useAi: true, aiMode: "PRIMARY", requiresAi: true, aiOfflineBehavior: "LOCAL_FLOW" },
   }));
   assert.equal(result.allowed, false);
-  assert.equal(result.reason, "AI_OFFLINE_NO_AUTO_REPLY");
+  assert.equal(result.reason, "PROVIDER_OFFLINE");
 });
 
 test("useAi=true, provider OFFLINE, requiresAi=false e aiOfflineBehavior=LOCAL_FLOW: permitido sem IA", () => {
@@ -63,16 +63,22 @@ test("useAi=true, provider DEGRADED e aiOfflineBehavior=HUMAN_HANDOFF: bloqueia 
 test("useAi=true, provider OFFLINE e aiOfflineBehavior=NO_AUTO_REPLY (default): bloqueia sem tentar outro provider", () => {
   const result = resolveAutoReplyEligibility(base({ localAiStatus: "OFFLINE" }));
   assert.equal(result.allowed, false);
-  assert.equal(result.reason, "AI_OFFLINE_NO_AUTO_REPLY");
+  assert.equal(result.reason, "PROVIDER_OFFLINE");
 });
 
 // --- resolveSendDecision (gate de segurança para envio) --------------------
 
 function eligible() { return { allowed: true, reason: null }; }
-function notEligible(reason = "BOT_AUTOREPLY_DISABLED") { return { allowed: false, reason }; }
+function notEligible(reason = "AUTO_REPLY_DISABLED") { return { allowed: false, reason }; }
 function planner(overrides = {}) {
-  return { action: "RESPOND", confidence: "HIGH", needsHuman: false, ...overrides };
+  return { action: "RESPOND", confidence: "HIGH", needsHuman: false, answer: "Resposta de teste.", ...overrides };
 }
+
+test("EMPTY_RESPONSE: resposta vazia nunca envia, mesmo com tudo mais favorável", () => {
+  const decision = resolveSendDecision({ eligibility: eligible(), plannerResult: planner({ answer: "   " }) });
+  assert.equal(decision.shouldSend, false);
+  assert.equal(decision.reason, "EMPTY_RESPONSE");
+});
 
 test("CASO 1: 'meu GS Pro não carrega' → WAIT/needsHuman=false/confidence não-LOW → envia", () => {
   const decision = resolveSendDecision({
@@ -109,11 +115,11 @@ test("CASO 4: RESPOND comercial (preço) elegível e com confiança adequada →
 
 test("CASO 5: provider/RAG offline (eligibility.allowed=false) nunca envia, mesmo com planner favorável", () => {
   const decision = resolveSendDecision({
-    eligibility: notEligible("AI_OFFLINE_NO_AUTO_REPLY"),
+    eligibility: notEligible("PROVIDER_OFFLINE"),
     plannerResult: planner({ action: "RESPOND", confidence: "HIGH", needsHuman: false }),
   });
   assert.equal(decision.shouldSend, false);
-  assert.equal(decision.reason, "AI_OFFLINE_NO_AUTO_REPLY");
+  assert.equal(decision.reason, "PROVIDER_OFFLINE");
 });
 
 test("LOW confidence nunca envia, mesmo com action/needsHuman favoráveis", () => {
@@ -128,7 +134,7 @@ test("CLARIFY nunca envia (fora da allowlist de actions enviáveis), mesmo com c
     plannerResult: planner({ action: "CLARIFY", confidence: "HIGH", needsHuman: false }),
   });
   assert.equal(decision.shouldSend, false);
-  assert.equal(decision.reason, "ACTION_NOT_SENDABLE_CLARIFY");
+  assert.equal(decision.reason, "ACTION_NOT_ALLOWED");
 });
 
 test("RESOLVE nunca envia (fora da allowlist — encerramento não é mensagem operacional automática)", () => {

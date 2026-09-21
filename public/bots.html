@@ -271,14 +271,60 @@
 
           <form id="simulator-form" class="card requires-bot simulator-card">
             <div class="card-heading"><div><span>TESTE SEGURO</span><h3>Simulador</h3></div><span class="local-only">NÃO ENVIA MENSAGENS</span></div>
+
+            <div id="ai-status-bar" class="ai-status-bar" hidden>
+              <span class="ai-status-item">IA Local <b id="ai-status-local" class="status-dot">-</b></span>
+              <span class="ai-status-item">RAG <b id="ai-status-rag" class="status-dot">-</b></span>
+              <span class="ai-status-item">Knowledge <b id="ai-status-knowledge" class="status-dot">-</b></span>
+              <span class="ai-status-item">Modelo <b id="ai-status-model">-</b></span>
+            </div>
+
             <div id="simulator-transcript" class="simulator-transcript"></div>
             <label class="simulator-input"><span>Mensagem do cliente</span><textarea id="simulator-message" required placeholder="Digite uma mensagem para testar o fluxo"></textarea></label>
+            <label class="checkbox simulate-autoreply-toggle">
+              <input id="simulate-autoreply" type="checkbox">
+              <span>Simular auto-resposta ativada <small>(só nesta simulação — não altera o Bot real)</small></span>
+            </label>
             <div class="simulator-actions">
               <button type="submit">Executar simulação</button>
               <button id="simulator-clear" type="button">Limpar conversa</button>
             </div>
             <div id="simulator-result" class="simulator-result"><p>O resultado da simulação aparecerá aqui.</p></div>
             <div id="simulator-flow-info" class="simulator-result" hidden></div>
+
+            <div id="ai-preview" class="ai-preview" hidden>
+              <div class="ai-preview-mode">
+                <b>MODO: DRY RUN</b>
+                <span>Nenhuma mensagem real será enviada.</span>
+              </div>
+
+              <div class="ai-preview-answer-card">
+                <span class="ai-preview-label">Resposta sugerida (IA local)</span>
+                <p id="ai-preview-answer"></p>
+              </div>
+
+              <div id="ai-preview-decision" class="ai-preview-decision">
+                <b id="ai-preview-decision-title">—</b>
+                <span id="ai-preview-decision-reason"></span>
+                <small id="ai-preview-decision-code"></small>
+              </div>
+
+              <div class="result-grid ai-preview-grid">
+                <span>Ação<strong id="ai-preview-action">-</strong></span>
+                <span>Confiança<strong id="ai-preview-confidence">-</strong></span>
+                <span>Necessita humano<strong id="ai-preview-needs-human">-</strong></span>
+                <span>Motivo interno<strong id="ai-preview-reason-code">-</strong></span>
+                <span>Intenção<strong id="ai-preview-intent">-</strong></span>
+                <span>Produto<strong id="ai-preview-product">-</strong></span>
+                <span>Provider / Modelo<strong id="ai-preview-provider">-</strong></span>
+                <span>Tempo<strong id="ai-preview-timing">-</strong></span>
+              </div>
+
+              <details id="ai-preview-knowledge" class="ai-preview-knowledge">
+                <summary>Conhecimento utilizado (<span id="ai-preview-knowledge-count">0</span>)</summary>
+                <ol id="ai-preview-knowledge-list"></ol>
+              </details>
+            </div>
           </form>
         </div>
       </div>

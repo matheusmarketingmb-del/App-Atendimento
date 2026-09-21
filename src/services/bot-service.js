@@ -4,6 +4,7 @@ const audit = require("./audit-service");
 const { normalizeText } = require("./bot-simulator-service");
 const { simulateOrchestration } = require("./bot-orchestrator-service");
 const { simulateTriage } = require("./triage-bot-service");
+const { previewShadowReply } = require("./bot-ai-shadow-service");
 const flowEngine = require("./bot-flow-service");
 const learning = require("./bot-learning-service");
 const governance = require("./bot-governance-service");
@@ -748,7 +749,7 @@ function normalizeSimulatorHistory(history) {
 // Simulador multi-turno: nunca usa o canal real da Meta nem toca em
 // Conversation/ConversationBotState. O "estado" e o "histórico" trafegam
 // inteiramente pelo cliente (tela de Bots), que os devolve a cada chamada.
-async function simulate(botId, message, viewer, { state, history, replyId } = {}) {
+async function simulate(botId, message, viewer, { state, history, replyId, simulateAutoReplyEnabled } = {}) {
   assertBotManager(viewer);
   const bot = await ensureBot(botId, prisma, botInclude);
   // O Bot de Triagem não usa o motor de intenções/IA (é lista fixa de
@@ -764,7 +765,22 @@ async function simulate(botId, message, viewer, { state, history, replyId } = {}
     context: normalizeSimulatorHistory(history),
     state: normalizeSimulatorState(state),
   });
-  return { ...result, simulation: true, sent: false, warning: "Simulação - nenhuma mensagem foi enviada" };
+
+  // Preview da IA local (RAG + Qwen), em paralelo ao motor legado acima —
+  // nunca substitui simulateOrchestration(), só soma um bloco a mais no
+  // mesmo resultado. `aiPreview.supported=false` quando o Bot nem usa
+  // LOCAL_QWEN (a tela decide se mostra a seção). Nunca grava
+  // BotAiShadowLog nem toca Conversation/ConversationBotState — mesmo
+  // espírito "nada é enviado, nada muda no banco" do simulador legado.
+  const aiHistory = normalizeSimulatorHistory(history)
+    .map((entry) => ({ role: entry.direction === "RECEBIDA" ? "customer" : "assistant", content: entry.text }));
+  const aiPreview = await previewShadowReply({
+    bot, message: simulatorMessage, history: aiHistory, simulateAutoReplyEnabled,
+  }).catch((error) => ({ supported: true, ok: false, status: "ERROR", errorCode: error.code || "PREVIEW_FAILED" }));
+
+  return {
+    ...result, simulation: true, sent: false, warning: "Simulação - nenhuma mensagem foi enviada", aiPreview,
+  };
 }
 
 async function listObservations(filters, viewer) {

@@ -120,6 +120,10 @@ module.exports = {
     try {
       return res.json(await bots.simulate(req.params.botId, req.body.message, req.user, {
         state: req.body.state, history: req.body.history, replyId: req.body.replyId,
+        // Só existe no simulador; nunca persiste no Bot real (ver
+        // bot-ai-shadow-service.js#previewShadowReply).
+        simulateAutoReplyEnabled: typeof req.body.simulateAutoReplyEnabled === "boolean"
+          ? req.body.simulateAutoReplyEnabled : undefined,
       }));
     } catch (error) { return next(error); }
   },

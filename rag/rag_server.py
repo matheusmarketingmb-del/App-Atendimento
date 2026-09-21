@@ -72,6 +72,9 @@ def _error_response(status_code: int, code: str, message: str) -> JSONResponse:
     return JSONResponse(status_code=status_code, content={"error": code, "message": message})
 
 
+PUBLIC_EXCERPT_CHARS = 400
+
+
 def _result_to_public(item: Dict) -> Dict:
     metadata = item["metadata"]
 
@@ -83,6 +86,9 @@ def _result_to_public(item: Dict) -> Dict:
         "type": metadata.get("type", ""),
         "origem": item["origin"],
         "distancia": round(item["distance"], 4),
+        # Trecho curto só para "Ver trecho" na UI (simulador) — nunca o
+        # texto completo do chunk, e nunca usado pelo motor de decisão.
+        "trecho": (item.get("document") or "").strip()[:PUBLIC_EXCERPT_CHARS],
     }
 
 
@@ -163,6 +169,12 @@ def answer(body: AnswerRequest):
         "product": result["product"],
         "intent": result["intent"],
         "sources": result["sources"],
+        # Detalhe dos chunks usados — só para depuração/UI (simulador). Nunca
+        # o conteúdo bruto do chunk aqui: mesma função que /search já usa
+        # (_result_to_public), reaproveitada, sem duplicar formatação.
+        "sourceDetails": [_result_to_public(item) for item in result["usedResults"]],
+        "searchMs": round(result["searchElapsedS"] * 1000) if result.get("searchElapsedS") is not None else None,
+        "generationMs": round(result["generationElapsedS"] * 1000) if result.get("generationElapsedS") is not None else None,
         "latencyMs": result["latencyMs"],
     }
 

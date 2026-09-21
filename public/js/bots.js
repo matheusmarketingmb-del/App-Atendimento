@@ -8,6 +8,9 @@ const state = {
   // Fluxo de atendimento (Flow Engine).
   flowSteps: [], flowStepsCache: new Map(), tools: [], knowledgeSources: [],
   aiProviderOptions: null,
+  // Preview da IA local (RAG + Qwen) no simulador — status carregado uma
+  // única vez por Bot selecionado (nunca polling contínuo).
+  aiStatusLoadedForBot: null,
 };
 const flowActionLabels = {
   ASK_QUESTION: "Perguntar", USE_KNOWLEDGE: "Usar conhecimento", QUERY_TOOL: "Consultar Tool",
@@ -20,6 +23,11 @@ const actionLabels = {
   SWITCH_BOT: "Trocar de Bot",
   QUERY_TOOL: "Consultar ferramenta",
   NO_ACTION: "Nenhuma ação",
+};
+// Vocabulário do Planner da IA local (RAG + Qwen) — diferente do motor
+// legado acima (ASK_CLARIFICATION/HANDOFF_HUMAN/...), nunca confundir os dois.
+const plannerActionLabels = {
+  RESPOND: "RESPOND", ASK: "ASK", CLARIFY: "CLARIFY", HANDOFF: "HANDOFF", WAIT: "WAIT", RESOLVE: "RESOLVE",
 };
 const $ = (selector) => document.querySelector(selector);
 const statusLabels = { DRAFT: "RASCUNHO", ACTIVE: "ATIVO", PAUSED: "PAUSADO" };
@@ -426,6 +434,35 @@ function resetSimulator() {
   $("#simulator-result").innerHTML = "<p>O resultado da simulação aparecerá aqui.</p>";
   const flowInfo = document.getElementById("simulator-flow-info");
   if (flowInfo) { flowInfo.hidden = true; flowInfo.innerHTML = ""; }
+  const aiPreview = document.getElementById("ai-preview");
+  if (aiPreview) aiPreview.hidden = true;
+  const autoReplyToggle = document.getElementById("simulate-autoreply");
+  if (autoReplyToggle) autoReplyToggle.checked = false;
+}
+
+// Carrega o status da IA local/RAG UMA VEZ por Bot selecionado — nunca
+// polling contínuo (reaproveita GET /api/local-ai/status, já existente).
+async function loadAiStatusOnce(botId) {
+  const bar = document.getElementById("ai-status-bar");
+  if (!bar) return;
+  if (state.aiStatusLoadedForBot === botId) { bar.hidden = false; return; }
+  try {
+    const status = await api("/api/local-ai/status");
+    state.aiStatusLoadedForBot = botId;
+    bar.hidden = false;
+    const setDot = (id, ok, label) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.textContent = label;
+      el.className = `status-dot ${ok === true ? "on" : ok === false ? "off" : "degraded"}`;
+    };
+    setDot("ai-status-local", status.status === "ONLINE" ? true : status.status === "DEGRADED" ? null : false, status.status || "-");
+    setDot("ai-status-rag", status.ollamaOnline === true, status.ollamaOnline === true ? "ONLINE" : status.ollamaOnline === false ? "OFFLINE" : "-");
+    setDot("ai-status-knowledge", status.knowledgeReady === true, status.knowledgeReady === true ? "READY" : status.knowledgeReady === false ? "NOT READY" : "-");
+    $("#ai-status-model").textContent = status.model || "-";
+  } catch {
+    bar.hidden = true;
+  }
 }
 
 async function selectBot(botId) {
@@ -434,6 +471,7 @@ async function selectBot(botId) {
   closeTriageOptionForm();
   resetSimulator();
   renderEditor();
+  loadAiStatusOnce(botId);
 }
 
 function startNewBot() {
@@ -883,9 +921,12 @@ $("#simulator-form").addEventListener("submit", async (event) => {
   const message = $("#simulator-message").value;
   if (!message.trim()) return;
   try {
+    const simulateAutoReplyEnabled = $("#simulate-autoreply").checked;
     const result = await api(`/api/bots/${state.selected.id}/simulate`, {
       method: "POST",
-      body: JSON.stringify({ message, state: state.simulatorState, history: state.simulatorHistory }),
+      body: JSON.stringify({
+        message, state: state.simulatorState, history: state.simulatorHistory, simulateAutoReplyEnabled,
+      }),
     });
     state.simulatorHistory.push({ direction: "RECEBIDA", text: message });
     if (result.response) state.simulatorHistory.push({ direction: "ENVIADA", text: result.response });
@@ -906,8 +947,96 @@ $("#simulator-form").addEventListener("submit", async (event) => {
       <span>Provider<strong>${escapeHtml(result.provider || "-")}</strong></span>
     </div><p>${escapeHtml(result.warning)}</p>`;
     await renderSimulatorFlowInfo(result.nextState);
+    renderAiPreview(result.aiPreview);
   } catch (error) { toast(error.message, true); }
 });
+
+const blockedReasonLabels = {
+  AUTO_REPLY_DISABLED: "Auto resposta desativada para este Bot",
+  GLOBAL_AUTOMATION_DISABLED: "Automação global desativada",
+  PROVIDER_OFFLINE: "IA local indisponível",
+  AI_OFFLINE_FORCES_HANDOFF: "IA indisponível; atendimento humano necessário",
+  NEEDS_HUMAN: "Atendimento humano necessário",
+  LOW_CONFIDENCE: "Confiança insuficiente para envio automático",
+  ACTION_NOT_ALLOWED: "Esta ação não permite envio automático",
+  EMPTY_RESPONSE: "A IA não gerou uma resposta válida",
+  NO_PLANNER_RESULT: "Planner não retornou decisão válida",
+  BOT_AI_DISABLED: "IA desativada para este Bot",
+  NOT_ELIGIBLE: "Auto resposta não elegível para este turno",
+};
+const needsHumanLabels = { true: "Sim", false: "Não" };
+
+function renderAiPreview(preview) {
+  const box = document.getElementById("ai-preview");
+  if (!box) return;
+  if (!preview || preview.supported === false) { box.hidden = true; return; }
+  box.hidden = false;
+
+  if (!preview.ok) {
+    $("#ai-preview-answer").textContent = "Não foi possível gerar uma resposta agora.";
+    const decisionBox = document.getElementById("ai-preview-decision");
+    decisionBox.className = "ai-preview-decision provider-offline";
+    $("#ai-preview-decision-title").textContent = "❌ NÃO ENVIARIA";
+    $("#ai-preview-decision-reason").textContent = blockedReasonLabels[preview.errorCode] || "IA local indisponível";
+    $("#ai-preview-decision-code").textContent = preview.errorCode || preview.status || "";
+    ["action", "confidence", "needs-human", "reason-code", "intent", "product"].forEach((id) => {
+      const el = document.getElementById(`ai-preview-${id}`);
+      if (el) el.textContent = "-";
+    });
+    $("#ai-preview-provider").textContent = "LOCAL_QWEN";
+    $("#ai-preview-timing").textContent = preview.latencyMs != null ? `${(preview.latencyMs / 1000).toFixed(1)}s` : "-";
+    document.getElementById("ai-preview-knowledge-count").textContent = "0";
+    document.getElementById("ai-preview-knowledge-list").innerHTML = "";
+    return;
+  }
+
+  $("#ai-preview-answer").textContent = preview.answer || "";
+
+  const decisionBox = document.getElementById("ai-preview-decision");
+  const title = document.getElementById("ai-preview-decision-title");
+  const reason = document.getElementById("ai-preview-decision-reason");
+  if (preview.wouldSend) {
+    decisionBox.className = "ai-preview-decision would-send";
+    title.textContent = "✅ ENVIARIA";
+    reason.textContent = "Gate aprovado";
+  } else {
+    const cls = preview.needsHuman ? "needs-human" : "would-not-send";
+    decisionBox.className = `ai-preview-decision ${cls}`;
+    title.textContent = "⛔ NÃO ENVIARIA";
+    reason.textContent = blockedReasonLabels[preview.sendBlockedReason] || preview.sendBlockedReason || "Motivo não informado";
+  }
+  $("#ai-preview-decision-code").textContent = preview.sendBlockedReason ? `(${preview.sendBlockedReason})` : "";
+
+  $("#ai-preview-action").textContent = plannerActionLabels[preview.action] || preview.action || "-";
+  $("#ai-preview-confidence").textContent = preview.confidence || "-";
+  $("#ai-preview-needs-human").textContent = needsHumanLabels[preview.needsHuman] || "-";
+  $("#ai-preview-reason-code").textContent = preview.reason || "-";
+  $("#ai-preview-intent").textContent = preview.intent || "Nenhuma";
+  $("#ai-preview-product").textContent = preview.product || "Nenhum";
+  $("#ai-preview-provider").textContent = `${preview.provider || "-"} / ${preview.model || "-"}`;
+  const timingParts = [];
+  if (preview.searchMs != null) timingParts.push(`Busca ${preview.searchMs}ms`);
+  if (preview.generationMs != null) timingParts.push(`Geração ${preview.generationMs}ms`);
+  timingParts.push(`Total ${preview.latencyMs != null ? `${(preview.latencyMs / 1000).toFixed(1)}s` : "-"}`);
+  $("#ai-preview-timing").textContent = timingParts.join(" · ");
+
+  const sources = preview.sourceDetails || [];
+  document.getElementById("ai-preview-knowledge-count").textContent = String(sources.length);
+  document.getElementById("ai-preview-knowledge-list").innerHTML = sources.map((chunk, index) => `
+    <li class="knowledge-chunk-item">
+      <b>${escapeHtml(chunk.arquivo || "-")}</b>
+      <small>${escapeHtml(chunk.heading || "-")} ${chunk.product ? `· ${escapeHtml(chunk.product)}` : ""} ${chunk.topic ? `· ${escapeHtml(chunk.topic)}` : ""} · <span class="knowledge-chunk-origin">${escapeHtml(chunk.origem || "-")}</span></small>
+      <button type="button" class="knowledge-chunk-toggle" data-chunk-index="${index}">Ver trecho</button>
+      <div class="knowledge-chunk-excerpt" id="knowledge-chunk-excerpt-${index}" hidden>${escapeHtml(chunk.trecho || "(sem trecho disponível)")}</div>
+    </li>
+  `).join("");
+  document.querySelectorAll(".knowledge-chunk-toggle").forEach((button) => button.addEventListener("click", () => {
+    const excerpt = document.getElementById(`knowledge-chunk-excerpt-${button.dataset.chunkIndex}`);
+    if (!excerpt) return;
+    excerpt.hidden = !excerpt.hidden;
+    button.textContent = excerpt.hidden ? "Ver trecho" : "Ocultar trecho";
+  }));
+}
 
 // Item 8 (Simulador): mostra intenção/etapa atual/entidades coletadas/
 // conhecimento usado/próxima ação do Flow Engine, quando houver um fluxo

@@ -69,12 +69,13 @@ test("CASO 2/3: HANDOFF (pedido de humano/risco) nunca envia mesmo com autoReply
   // A razão exata depende de qual gate bloqueou primeiro (elegibilidade de
   // provider, sem poller de health-check rodando neste processo de teste
   // isolado, vs. needsHuman) — o que importa é que NUNCA envia num HANDOFF.
-  assert.ok(["NEEDS_HUMAN", "AI_OFFLINE_NO_AUTO_REPLY", "AI_OFFLINE_FORCES_HANDOFF"].includes(result.sendDecision.reason));
+  assert.ok(["NEEDS_HUMAN", "PROVIDER_OFFLINE", "AI_OFFLINE_FORCES_HANDOFF"].includes(result.sendDecision.reason));
   assert.equal(result.sendDecision.simulated, null);
 
   const log = await prisma.botAiShadowLog.findFirst({ where: { messageId: message.id } });
   assert.ok(log, "deveria ter persistido o shadow log");
-  assert.equal(log.missingInformation.sendDecision, "NOT_SENT");
+  assert.equal(log.missingInformation.wouldSend, false);
+  assert.equal(log.missingInformation.sendMode, "DRY_RUN");
 });
 
 test("CASO 3: risco de segurança nunca envia mesmo com autoReplyEnabled=true", async () => {
@@ -107,7 +108,7 @@ test("autoReplyEnabled=false no Bot: sendDecision nunca é elegível, independen
   const result = await shadowIncomingMessage({ type: "text", text: message.text }, message);
 
   assert.equal(result.sendDecision.shouldSend, false);
-  assert.equal(result.sendDecision.reason, "BOT_AUTOREPLY_DISABLED");
+  assert.equal(result.sendDecision.reason, "AUTO_REPLY_DISABLED");
 });
 
 test("nenhum cliente real recebe mensagem: dry-run-sender nunca é chamado quando shouldSend=false", async () => {

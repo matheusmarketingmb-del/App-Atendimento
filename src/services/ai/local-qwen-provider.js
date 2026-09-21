@@ -92,6 +92,11 @@ class LocalQwenProvider extends AIProvider {
       product: data.product || null,
       intent: data.intent || null,
       sources: Number.isFinite(data.sources) ? data.sources : null,
+      // Detalhe dos chunks (arquivo/heading/produto/topic/origem/distância)
+      // — só para inspeção (simulador); nunca usado em decisão do motor.
+      sourceDetails: Array.isArray(data.sourceDetails) ? data.sourceDetails : [],
+      searchMs: Number.isFinite(data.searchMs) ? data.searchMs : null,
+      generationMs: Number.isFinite(data.generationMs) ? data.generationMs : null,
       latencyMs,
     };
   }

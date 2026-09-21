@@ -23,6 +23,12 @@ let state = {
   consecutiveFailures: 0,
   lastError: null,
   model: null,
+  // Sub-status do último /health do RAG Server — usado pela UI (simulador)
+  // pra distinguir "RAG respondeu mas Ollama caiu" de "Knowledge não
+  // carregou", em vez de só um status combinado. Nunca a fonte de verdade
+  // de `status` acima (isso continua sendo a regra em checkOnce()).
+  ollamaOnline: null,
+  knowledgeReady: null,
 };
 let timer = null;
 let inferenceFailuresWindow = []; // timestamps de timeouts/erros de inferência (não de healthcheck) na última janela de 10min — item 13.
@@ -68,12 +74,15 @@ async function checkOnce() {
         ...state, latencyMs, lastCheckAt: new Date(), lastSuccessAt: new Date(),
         consecutiveFailures: 0, lastError: null,
         status: state.status === "DEGRADED" && inferenceFailuresWindow.length >= 3 ? "DEGRADED" : "ONLINE",
+        ollamaOnline: Boolean(body.ollama), knowledgeReady: Boolean(body.knowledgeReady),
+        model: body.generationModel || state.model,
       };
     } else {
       state = {
         ...state, latencyMs, lastCheckAt: new Date(), consecutiveFailures: 0,
         lastError: `RAG Server respondeu, mas não está pronto (ollama=${body.ollama}, knowledgeReady=${body.knowledgeReady}).`,
         status: "DEGRADED",
+        ollamaOnline: Boolean(body.ollama), knowledgeReady: Boolean(body.knowledgeReady),
       };
     }
   } catch (error) {
@@ -83,7 +92,7 @@ async function checkOnce() {
       : (consecutiveFailures >= DEGRADED_AFTER_CONSECUTIVE_FAILURES ? "DEGRADED" : state.status);
     state = {
       ...state, consecutiveFailures, lastCheckAt: new Date(),
-      lastError: error.message, status,
+      lastError: error.message, status, ollamaOnline: false, knowledgeReady: false,
     };
   }
   return state;
