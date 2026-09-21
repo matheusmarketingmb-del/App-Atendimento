@@ -342,7 +342,7 @@ function openAccessDialog(accountId) {
     return `
     <label class="access-user-option${master ? " master-access" : ""}"><input type="checkbox" value="${escapeHtml(user.id)}" ${master || selectedUsers.has(user.id) ? "checked" : ""} ${master ? "disabled" : ""}>
       <span><strong>${escapeHtml(user.name)}</strong><small>${escapeHtml(master ? `${user.email} — Master, acesso permanente` : `${user.email} — ${user.role}`)}</small></span>
-    </label>`).join("") || '<p class="no-accounts">Nenhum usuário ativo disponível.</p>';
+    </label>`;
   }).join("") || '<p class="no-accounts">Nenhum usuário ativo disponível.</p>';
   $("#account-access-categories").innerHTML = state.categories.filter((category) => category.active !== false).map((category) => `
     <label class="access-user-option"><input type="checkbox" value="${escapeHtml(category.id)}" ${selectedCategories.has(category.id) ? "checked" : ""}>
