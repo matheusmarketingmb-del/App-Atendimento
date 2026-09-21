@@ -37,8 +37,8 @@ function validate(parsed) {
   if (!ACTIONS.includes(parsed.action)) return fail("Campo 'action' ausente ou inválido.");
   const confidence = Number(parsed.confidence);
   if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) return fail("Campo 'confidence' inválido.");
-  if (parsed.action === "RESPOND" && !String(parsed.response || "").trim()) {
-    return fail("action=RESPOND sem texto de resposta.");
+  if (["RESPOND", "ASK", "HANDOFF", "RESOLVE"].includes(parsed.action) && !String(parsed.response || "").trim()) {
+    return fail("A ação escolhida exige texto de resposta.");
   }
   if (parsed.action === "HANDOFF" && !String(parsed.handoffReason || "").trim()) {
     return fail("action=HANDOFF sem motivo do encaminhamento.");
