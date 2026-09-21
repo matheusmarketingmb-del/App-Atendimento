@@ -3,8 +3,11 @@
 // TERIA respondido — nunca envia nada ao cliente. Espelha o espírito de
 // bot-observation-service.js (nunca deve derrubar o webhook, nunca decide
 // nada sozinho), mas é um caminho independente do interpretador legado:
-// enquanto aiMode=PRIMARY, é a própria IA (Knowledge + JSON estruturado)
-// quem decide o turno, não interpret()/decide().
+// enquanto aiMode=PRIMARY, é o RAG SERVER (rag_server.py — busca na
+// Knowledge própria dele + Qwen3 14B) quem decide o texto da resposta, não
+// interpret()/decide() nem a Knowledge do app (KnowledgeSource). O app não
+// monta prompt, não busca Knowledge e não chama o Ollama aqui — só envia a
+// mensagem do cliente ao RAG Server e registra o que voltou.
 //
 // A separação pedida explicitamente pelo usuário é respeitada em toda a
 // função: useAi controla só se a IA RODA; autoReplyEnabled (bot-ai-gate-
@@ -14,15 +17,17 @@ const prisma = require("../database/prisma");
 const { resolveBot } = require("./bot-orchestrator-service");
 const { resolveFeatureFlags, getGlobalSettings } = require("./bot-governance-service");
 const { getRecentContext } = require("./bot-conversation-state-service");
-const { normalizeCaseState } = require("./bot-case-state-service");
-const { KnowledgeSourceProvider } = require("./bot-knowledge/knowledge-provider");
 const { resolveLocalQwenInstance } = require("./ai/get-ai-provider");
 const { getState: getLocalAiState } = require("./local-ai-status-service");
-const { resolveAutoReplyEligibility } = require("./bot-ai-gate-service");
-const { buildSystemPromptForAi, buildUserPrompt } = require("./bot-ai-prompt-service");
-const { OLLAMA_JSON_SCHEMA, JSON_SCHEMA_EXAMPLE, validate, applyKnowledgeGuard } = require("./bot-ai-schema-service");
+const { resolveAutoReplyEligibility, resolveSendDecision } = require("./bot-ai-gate-service");
+const { normalizePlannerOutput } = require("./ai/planner-output-guard");
+const { computePlannerHint } = require("./ai/planner-hint-service");
+const { simulateSend } = require("./ai/dry-run-sender");
 
-const knowledgeProvider = new KnowledgeSourceProvider();
+// Proxy numérico só para a coluna `confidence` (Float) existente do log —
+// a banda literal (HIGH/MEDIUM/LOW) que o Planner realmente decide vai em
+// `missingInformation.confidenceBand` (ver persistLog abaixo), nunca perdida.
+const CONFIDENCE_SCORE = { HIGH: 0.9, MEDIUM: 0.6, LOW: 0.3 };
 
 async function persistLog(data, client = prisma) {
   try {
@@ -33,17 +38,18 @@ async function persistLog(data, client = prisma) {
   }
 }
 
-// Uma única correção controlada (item 12: "tentar uma única correção
-// controlada ou fazer handoff seguro") — nunca insiste indefinidamente.
-async function callWithOneRetry(provider, { systemPrompt, userPrompt }) {
-  const first = await provider.generateStructuredReply({ systemPrompt, userPrompt, jsonSchema: OLLAMA_JSON_SCHEMA });
-  const firstCheck = validate(first.parsed);
-  if (firstCheck.valid) return { ...first, check: firstCheck, attempts: 1 };
-
-  const retryPrompt = `${userPrompt}\n\nATENÇÃO: sua resposta anterior não seguiu o formato pedido (${firstCheck.reason}). Responda de novo, só com o JSON válido.`;
-  const second = await provider.generateStructuredReply({ systemPrompt, userPrompt: retryPrompt, jsonSchema: OLLAMA_JSON_SCHEMA });
-  const secondCheck = validate(second.parsed);
-  return { ...second, check: secondCheck, attempts: 2 };
+// Item "preparar ativação controlada": decide se ESTE turno enviaria de
+// verdade (gate + resultado do Planner já normalizado) e, só quando a
+// decisão for positiva, chama o sender FALSO (dry-run-sender.js — nunca a
+// API real do WhatsApp/Meta). autoReplyEnabled continua false em todo Bot
+// hoje, então `gate.allowed` já é false na imensa maioria dos casos; isto
+// existe para já validar o caminho de decisão sem esperar a ativação real.
+function applySendDecision({ gate, plannerResult, conversationId, messageId, botId, contactId }) {
+  const decision = resolveSendDecision({ eligibility: gate, plannerResult });
+  const simulated = decision.shouldSend
+    ? simulateSend({ conversationId, messageId, botId, phone: contactId, text: plannerResult.answer })
+    : null;
+  return { ...decision, simulated };
 }
 
 async function shadowIncomingMessage(event, message, { now = new Date(), channel = "META" } = {}) {
@@ -51,10 +57,7 @@ async function shadowIncomingMessage(event, message, { now = new Date(), channel
 
   const conversation = await prisma.conversation.findUnique({
     where: { id: message.conversationId },
-    include: {
-      category: { select: { name: true } },
-      botState: true,
-    },
+    include: { botState: true },
   });
   if (!conversation) return null;
 
@@ -63,9 +66,9 @@ async function shadowIncomingMessage(event, message, { now = new Date(), channel
 
   const flags = resolveFeatureFlags(bot);
   if (!flags.useAi || flags.aiMode === "OFF") return null;
-  // Modo PRIMARY é o único implementado até aqui (Fase 6/8 do plano) —
-  // FALLBACK/UNDERSTANDING_ONLY/RESPONSE_ONLY ficam para uma próxima etapa,
-  // sem fingir suporte que ainda não existe.
+  // Modo PRIMARY é o único implementado até aqui — FALLBACK/
+  // UNDERSTANDING_ONLY/RESPONSE_ONLY ficam para uma próxima etapa, sem
+  // fingir suporte que ainda não existe.
   if (flags.aiMode !== "PRIMARY") return null;
   // Mesmo raciocínio para o provider: só LOCAL_QWEN está implementado. Um
   // Bot que escolher outro valor de aiProvider simplesmente não roda IA
@@ -85,8 +88,58 @@ async function shadowIncomingMessage(event, message, { now = new Date(), channel
     autoReplyEligible: gate.allowed, autoReplyBlockedReason: gate.allowed ? null : gate.reason,
   };
 
-  // Item 5 do plano de teste: PC desligado/indisponível -> nunca chama a IA,
-  // só registra o motivo. Nunca cai para outro provider.
+  // Histórico recente da conversa (mesma fonte/limite do interpretador
+  // legado — getRecentContext + flags.contextEnabled/contextMaxMessages,
+  // nunca um caminho novo) — usado tanto pelo hint determinístico abaixo
+  // quanto, depois, enviado ao RAG Server para ele resolver referência
+  // contextual ("qual modelo?" -> "GS Pro 2").
+  const context = flags.contextEnabled
+    ? await getRecentContext(message.conversationId, { beforeMessageId: message.id, limit: flags.contextMaxMessages }, prisma)
+    : [];
+  const history = context
+    .filter((row) => row.text)
+    .map((row) => ({ role: row.direction === "RECEBIDA" ? "customer" : "assistant", content: row.text }));
+
+  // Camada determinística ANTES do RAG/Qwen (planner-hint-service.js):
+  // pedido explícito de humano, risco de segurança, confirmação inequívoca
+  // de solução e status de pedido sem ferramenta real nunca dependem do
+  // LLM — decididos aqui, e funcionam mesmo com o PC/RAG Server offline
+  // (atendimento humano preservado mesmo sem IA local disponível).
+  const hint = computePlannerHint({ message: event.text, history });
+  if (hint.forceAction) {
+    const forced = normalizePlannerOutput({
+      message: event.text, history, signals: hint.detectedSignals,
+      result: {
+        answer: hint.forceAnswer, action: hint.forceAction, confidence: "HIGH",
+        needsHuman: hint.forceNeedsHuman, reason: hint.forceReason, product: null, intent: null, sources: 0,
+      },
+    });
+    const latencyMs = Date.now() - startedAt;
+    const sendDecision = applySendDecision({
+      gate, plannerResult: forced, conversationId: message.conversationId, messageId: message.id,
+      botId: bot.id, contactId: conversation.contactId,
+    });
+    await persistLog({
+      ...baseLog, status: "OK", latencyMs,
+      action: forced.action, intent: forced.intent,
+      confidence: CONFIDENCE_SCORE[forced.confidence] ?? null,
+      responseText: forced.answer, entities: null, knowledgeUsed: null,
+      missingInformation: {
+        confidenceBand: forced.confidence, needsHuman: forced.needsHuman, reason: forced.reason,
+        plannerNormalized: forced.plannerNormalized, plannerCorrections: forced.plannerCorrections,
+        plannerHintApplied: true, forcedAction: hint.forceAction,
+        sendDecision: sendDecision.shouldSend ? "SIMULATED_SEND" : "NOT_SENT", sendBlockedReason: sendDecision.reason,
+      },
+    });
+    return {
+      action: forced.action, response: forced.answer, product: forced.product, intent: forced.intent,
+      confidence: forced.confidence, needsHuman: forced.needsHuman, reason: forced.reason,
+      plannerNormalized: forced.plannerNormalized, plannerHintApplied: true, sendDecision,
+    };
+  }
+
+  // PC/RAG Server desligado ou indisponível -> nunca chama a IA, só registra
+  // o motivo. Nunca cai para outro provider (Gemini/OpenAI/Anthropic).
   if (localAiStatus !== "ONLINE") {
     await persistLog({ ...baseLog, status: localAiStatus, errorCode: "PROVIDER_" + localAiStatus, latencyMs: Date.now() - startedAt });
     return null;
@@ -99,50 +152,49 @@ async function shadowIncomingMessage(event, message, { now = new Date(), channel
       return null;
     }
 
-    const state = conversation.botState;
-    const caseState = normalizeCaseState(state?.caseState);
-    const contextEntities = state?.contextEntities || {};
-    const context = flags.contextEnabled
-      ? await getRecentContext(message.conversationId, { beforeMessageId: message.id, limit: flags.contextMaxMessages }, prisma)
-      : [];
-
-    let knowledgeResults = [];
-    try {
-      knowledgeResults = await knowledgeProvider.search(event.text, {
-        botId: bot.id, category: conversation.category?.name || null,
-        product: contextEntities.productName || caseState.product || null,
-      });
-    } catch (knowledgeError) {
-      console.error("[BOT_AI_SHADOW] falha na busca de Knowledge (ignorada)", knowledgeError.message);
-    }
-
-    const systemPrompt = buildSystemPromptForAi(bot);
-    const userPrompt = buildUserPrompt({
-      categoryName: conversation.category?.name || null, caseState, knowledgeResults, context,
-      message: event.text, jsonSchemaExample: JSON_SCHEMA_EXAMPLE,
+    // Busca na Knowledge, prompt e geração já acontecem inteiramente dentro
+    // do RAG Server (rag_server.py) — inclusive as regras de "não inventar",
+    // "ausência de informação não é evidência negativa" e a decisão de ação
+    // do Planner (RESPOND/ASK/CLARIFY/HANDOFF/WAIT/RESOLVE). O app só envia
+    // a mensagem crua do cliente + histórico e recebe a resposta já pronta.
+    const rawResult = await provider.askRag({ message: event.text, history });
+    // Endurece action/confidence/needsHuman/reason DEPOIS do RAG Server —
+    // nunca dentro dele (rag/ não é alterado por este caminho). Reaproveita
+    // os mesmos sinais do hint (já computado acima) para exigir evidência
+    // real de um HANDOFF antes de deixá-lo sobreviver.
+    const result = normalizePlannerOutput({ message: event.text, history, signals: hint.detectedSignals, result: rawResult });
+    const latencyMs = Date.now() - startedAt;
+    const sendDecision = applySendDecision({
+      gate, plannerResult: result, conversationId: message.conversationId, messageId: message.id,
+      botId: bot.id, contactId: conversation.contactId,
     });
 
-    const result = await callWithOneRetry(provider, { systemPrompt, userPrompt });
-    const latencyMs = Date.now() - startedAt;
-
-    if (!result.check.valid) {
-      await persistLog({
-        ...baseLog, status: "INVALID_JSON", errorCode: "AI_JSON_INVALID", latencyMs,
-        knowledgeUsed: knowledgeResults.map((item) => ({ id: item.id, title: item.title })),
-      });
-      return null;
-    }
-
-    const guarded = applyKnowledgeGuard(result.check.value, knowledgeResults);
     await persistLog({
       ...baseLog, status: "OK", latencyMs,
-      action: guarded.action, intent: guarded.intent, issue: guarded.issue, confidence: guarded.confidence,
-      entities: guarded.entities, missingInformation: guarded.missingInformation,
-      responseText: guarded.response, handoffCategory: guarded.handoffCategory, handoffReason: guarded.handoffReason,
-      summary: guarded.summary,
-      knowledgeUsed: knowledgeResults.map((item) => ({ id: item.id, title: item.title, score: item.score })),
+      action: result.action,
+      intent: result.intent,
+      confidence: CONFIDENCE_SCORE[result.confidence] ?? null,
+      responseText: result.answer,
+      entities: result.product ? { product: result.product } : null,
+      knowledgeUsed: Number.isFinite(result.sources) ? { sourcesCount: result.sources } : null,
+      // Planner (action/confidence/needsHuman/reason + auditoria da
+      // normalização) ainda não tem coluna dedicada — reaproveita
+      // `missingInformation` (Json, sem uso neste caminho até aqui) em vez
+      // de criar migration, como pedido explicitamente. O nome da coluna
+      // não descreve 100% o conteúdo; este comentário evita confusão futura.
+      missingInformation: {
+        confidenceBand: result.confidence, needsHuman: result.needsHuman, reason: result.reason,
+        plannerNormalized: result.plannerNormalized, plannerCorrections: result.plannerCorrections,
+        plannerHintApplied: false, originalAction: rawResult.action, finalAction: result.action,
+        sendDecision: sendDecision.shouldSend ? "SIMULATED_SEND" : "NOT_SENT", sendBlockedReason: sendDecision.reason,
+      },
     });
-    return guarded;
+
+    return {
+      action: result.action, response: result.answer, product: result.product, intent: result.intent,
+      confidence: result.confidence, needsHuman: result.needsHuman, reason: result.reason,
+      plannerNormalized: result.plannerNormalized, plannerHintApplied: false, sendDecision,
+    };
   } catch (error) {
     await persistLog({
       ...baseLog, status: "ERROR", errorCode: error.code || "PROVIDER_REQUEST_FAILED",

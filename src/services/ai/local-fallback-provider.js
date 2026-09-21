@@ -32,17 +32,29 @@ function tokenOverlapRatio(messageTokens, exampleTokens) {
 function similarity(normalizedMessage, normalizedExample) {
   if (!normalizedExample) return 0;
   if (normalizedMessage === normalizedExample) return 1;
-  if (normalizedMessage.includes(normalizedExample)) return 0.95;
 
   const messageTokens = normalizedMessage.split(" ").filter(Boolean);
   const exampleTokens = normalizedExample.split(" ").filter(Boolean);
-  const overlap = tokenOverlapRatio(messageTokens, exampleTokens);
 
   const maxLength = Math.max(normalizedMessage.length, normalizedExample.length) || 1;
   const distance = levenshtein(normalizedMessage, normalizedExample);
   const lexicalScore = Math.max(0, 1 - distance / maxLength);
 
-  return Math.max(overlap * 0.85, lexicalScore * 0.7);
+  // Exemplo de 1 única palavra ("bem", "pedido") é um sinal fraco por
+  // natureza: aparecer em ALGUM lugar de uma mensagem bem maior e não
+  // relacionada ("Olá, tudo bem?") não é evidência real de intenção — só
+  // conta quando a mensagem inteira é essencialmente essa palavra (medido
+  // por proximidade textual de verdade, via lexicalScore), nunca por
+  // "contains" simples. Exemplos com 2+ palavras já carregam contexto
+  // suficiente para manter o comportamento anterior (substring + overlap).
+  if (exampleTokens.length < 2) {
+    return lexicalScore * 0.7;
+  }
+
+  const overlap = tokenOverlapRatio(messageTokens, exampleTokens);
+  const containment = normalizedMessage.includes(normalizedExample) ? 0.95 : 0;
+
+  return Math.max(overlap * 0.85, lexicalScore * 0.7, containment);
 }
 
 class LocalFallbackProvider extends AIProvider {

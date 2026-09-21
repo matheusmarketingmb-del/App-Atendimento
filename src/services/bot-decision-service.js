@@ -35,20 +35,30 @@ function decide({ bot, interpretation, message, state = null, now = new Date(), 
     };
   }
 
-  // Mensagem puramente social (ex.: "bom dia", "obrigado"), sem nenhuma
-  // intenção de negócio reconhecida junto: responde com o comportamento
-  // social e NÃO conta como falha de interpretação. Desligável por Bot
-  // (conversationalBehaviorEnabled) — HUMAN_REQUEST acima nunca é afetado.
-  if (flags.conversationalBehaviorEnabled !== false && !interpretation.intentId && socialBehavior && socialBehavior !== "NEGATION") {
+  const priorFailures = state?.failedInterpretations || 0;
+  const band = interpretation.intentId ? confidenceBand(bot, interpretation.confidence) : "LOW";
+
+  // Mensagem puramente social (ex.: "bom dia", "obrigado", "oi tudo bem"):
+  // responde com o comportamento social e NÃO conta como falha de
+  // interpretação. Antes só entrava aqui quando NENHUMA intenção tinha sido
+  // casada — como o classificador local é heurístico, uma saudação podia
+  // "casar" por acidente com uma intenção de negócio de baixa/média
+  // confiança (ex.: uma palavra genérica em comum) e nunca cair neste
+  // atalho, respondendo com a intenção errada em vez da saudação. Agora só
+  // uma intenção de ALTA confiança (band === "HIGH") tem prioridade sobre o
+  // comportamento social — um match fraco/ambíguo nunca vence uma saudação
+  // clara. Desligável por Bot (conversationalBehaviorEnabled) —
+  // HUMAN_REQUEST acima nunca é afetado.
+  if (
+    flags.conversationalBehaviorEnabled !== false && socialBehavior && socialBehavior !== "NEGATION"
+    && (!interpretation.intentId || band !== "HIGH")
+  ) {
     return {
       action: "RESPOND", categoryId: null, needsClarification: false, shouldHandoff: false,
       withinHours: true, socialBehavior, greetingReply,
       summary: `Comportamento social identificado (${socialBehavior}), sem intenção de negócio associada.`,
     };
   }
-
-  const priorFailures = state?.failedInterpretations || 0;
-  const band = interpretation.intentId ? confidenceBand(bot, interpretation.confidence) : "LOW";
 
   if (!interpretation.intentId || band === "LOW") {
     const failureCount = priorFailures + 1;

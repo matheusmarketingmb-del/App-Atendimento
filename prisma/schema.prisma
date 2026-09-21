@@ -1921,13 +1921,16 @@ model AiProviderCredential {
   updatedByUser User? @relation("AiProviderCredentialUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: SetNull)
 }
 
-// IA LOCAL (Qwen via Ollama, rodando fora da VPS) — configuração GLOBAL do
-// PROVIDER (host/porta/modelo padrão), reutilizada por qualquer Bot que
-// escolha featureFlags.aiProvider = "LOCAL_QWEN" (ver bot-constants.js). Não
-// é credencial (não guarda segredo — `baseUrl` é um endereço privado de rede,
-// tipicamente Tailscale, nunca exposto publicamente), por isso não usa o
-// mesmo cofre cifrado de AiProviderCredential. Registro único ("singleton"),
-// igual a BotGlobalSettings. Nunca instanciar um provider por Bot: todos
+// IA LOCAL — configuração GLOBAL do PROVIDER, reutilizada por qualquer Bot
+// que escolha featureFlags.aiProvider = "LOCAL_QWEN" (ver bot-constants.js).
+// `baseUrl` aponta para o RAG SERVER local (rag_server.py, em C:\App
+// Whats\rag — dev: http://127.0.0.1:8992; produção: endereço privado
+// Tailscale do PC), NUNCA para o Ollama diretamente — é o RAG Server quem
+// fala com o Ollama, faz a busca na Knowledge (Info_Bots/ChromaDB/
+// nomic-embed-text) e devolve a resposta pronta. Não é credencial (não
+// guarda segredo), por isso não usa o mesmo cofre cifrado de
+// AiProviderCredential. Registro único ("singleton"), igual a
+// BotGlobalSettings. Nunca instanciar um provider por Bot: todos
 // compartilham esta mesma configuração.
 model LocalAiProviderSettings {
   id              String    @id @default("singleton")

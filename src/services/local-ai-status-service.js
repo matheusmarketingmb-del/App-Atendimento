@@ -1,4 +1,7 @@
-// Monitor de disponibilidade da IA local (LOCAL_QWEN/Ollama). Estado em
+// Monitor de disponibilidade da IA local. Checa o RAG SERVER (rag_server.py,
+// GET /health) — NUNCA o Ollama diretamente: o app só considera a IA local
+// ONLINE quando a API RAG (busca + Knowledge + Qwen) está de fato funcional
+// de ponta a ponta, não só quando o Ollama sozinho responde. Estado em
 // MEMÓRIA do processo — nunca persistido em Bot/BotGlobalSettings: ligar ou
 // desligar o PC do operador NUNCA altera bot.enabled/autoReplyEnabled de
 // nenhum Bot (regra explícita do usuário). Um único monitor compartilhado
@@ -29,8 +32,9 @@ function getState() {
 }
 
 // Item 13: "3 timeouts de inferência em 10 min" também degrada, mesmo com
-// healthcheck OK (o /api/tags responder não significa que o modelo consegue
-// gerar dentro do timeout configurado — VRAM/fila podem estar saturadas).
+// healthcheck OK (o /health do RAG Server responder não significa que a
+// geração consegue terminar dentro do timeout configurado — VRAM/fila
+// podem estar saturadas).
 function recordInferenceOutcome(outcome) {
   const now = Date.now();
   if (outcome === "TIMEOUT" || outcome === "ERROR") {
@@ -51,13 +55,27 @@ async function checkOnce() {
   }
   const startedAt = Date.now();
   try {
-    await axios.get(`${settings.baseUrl}/api/tags`, { timeout: HEALTHCHECK_TIMEOUT_MS });
+    const response = await axios.get(`${settings.baseUrl}/health`, { timeout: HEALTHCHECK_TIMEOUT_MS });
     const latencyMs = Date.now() - startedAt;
-    state = {
-      ...state, latencyMs, lastCheckAt: new Date(), lastSuccessAt: new Date(),
-      consecutiveFailures: 0, lastError: null,
-      status: state.status === "DEGRADED" && inferenceFailuresWindow.length >= 3 ? "DEGRADED" : "ONLINE",
-    };
+    const body = response.data || {};
+
+    // O RAG Server responder não basta — só ONLINE quando ELE MESMO diz
+    // status "ONLINE" (ou seja: Ollama de pé e Knowledge carregada do lado
+    // dele). Reachable-mas-não-funcional vira DEGRADED, nunca ONLINE — a
+    // rede está OK, mas nenhuma resposta de verdade pode ser confiada agora.
+    if (body.status === "ONLINE") {
+      state = {
+        ...state, latencyMs, lastCheckAt: new Date(), lastSuccessAt: new Date(),
+        consecutiveFailures: 0, lastError: null,
+        status: state.status === "DEGRADED" && inferenceFailuresWindow.length >= 3 ? "DEGRADED" : "ONLINE",
+      };
+    } else {
+      state = {
+        ...state, latencyMs, lastCheckAt: new Date(), consecutiveFailures: 0,
+        lastError: `RAG Server respondeu, mas não está pronto (ollama=${body.ollama}, knowledgeReady=${body.knowledgeReady}).`,
+        status: "DEGRADED",
+      };
+    }
   } catch (error) {
     const consecutiveFailures = state.consecutiveFailures + 1;
     const status = consecutiveFailures >= OFFLINE_AFTER_CONSECUTIVE_FAILURES

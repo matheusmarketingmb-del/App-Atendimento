@@ -6,3 +6,8 @@ node_modules/
 !.env.vps.example
 backups/
 storage/
+
+# rag/: código versionado normalmente; índice vetorial (gerado a partir de
+# Info_Bots/ via index_knowledge.py) e cache Python nunca são commitados.
+rag/chroma_db/
+rag/__pycache__/

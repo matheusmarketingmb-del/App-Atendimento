@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { resolveAutoReplyEligibility } = require("../src/services/bot-ai-gate-service");
+const { resolveAutoReplyEligibility, resolveSendDecision } = require("../src/services/bot-ai-gate-service");
 
 function base(overrides = {}) {
   return {
@@ -64,4 +64,88 @@ test("useAi=true, provider OFFLINE e aiOfflineBehavior=NO_AUTO_REPLY (default): 
   const result = resolveAutoReplyEligibility(base({ localAiStatus: "OFFLINE" }));
   assert.equal(result.allowed, false);
   assert.equal(result.reason, "AI_OFFLINE_NO_AUTO_REPLY");
+});
+
+// --- resolveSendDecision (gate de segurança para envio) --------------------
+
+function eligible() { return { allowed: true, reason: null }; }
+function notEligible(reason = "BOT_AUTOREPLY_DISABLED") { return { allowed: false, reason }; }
+function planner(overrides = {}) {
+  return { action: "RESPOND", confidence: "HIGH", needsHuman: false, ...overrides };
+}
+
+test("CASO 1: 'meu GS Pro não carrega' → WAIT/needsHuman=false/confidence não-LOW → envia", () => {
+  const decision = resolveSendDecision({
+    eligibility: eligible(),
+    plannerResult: planner({ action: "WAIT", confidence: "MEDIUM", needsHuman: false }),
+  });
+  assert.equal(decision.shouldSend, true);
+});
+
+test("CASO 2: HANDOFF (ex.: pedido de humano) nunca envia, mesmo elegível", () => {
+  const decision = resolveSendDecision({
+    eligibility: eligible(),
+    plannerResult: planner({ action: "HANDOFF", confidence: "HIGH", needsHuman: true }),
+  });
+  assert.equal(decision.shouldSend, false);
+  assert.equal(decision.reason, "NEEDS_HUMAN");
+});
+
+test("CASO 3: HANDOFF de segurança (safety_issue) nunca envia — mesma regra do caso 2", () => {
+  const decision = resolveSendDecision({
+    eligibility: eligible(),
+    plannerResult: planner({ action: "HANDOFF", confidence: "HIGH", needsHuman: true, reason: "safety_issue" }),
+  });
+  assert.equal(decision.shouldSend, false);
+});
+
+test("CASO 4: RESPOND comercial (preço) elegível e com confiança adequada → envia", () => {
+  const decision = resolveSendDecision({
+    eligibility: eligible(),
+    plannerResult: planner({ action: "RESPOND", confidence: "MEDIUM", needsHuman: false }),
+  });
+  assert.equal(decision.shouldSend, true);
+});
+
+test("CASO 5: provider/RAG offline (eligibility.allowed=false) nunca envia, mesmo com planner favorável", () => {
+  const decision = resolveSendDecision({
+    eligibility: notEligible("AI_OFFLINE_NO_AUTO_REPLY"),
+    plannerResult: planner({ action: "RESPOND", confidence: "HIGH", needsHuman: false }),
+  });
+  assert.equal(decision.shouldSend, false);
+  assert.equal(decision.reason, "AI_OFFLINE_NO_AUTO_REPLY");
+});
+
+test("LOW confidence nunca envia, mesmo com action/needsHuman favoráveis", () => {
+  const decision = resolveSendDecision({ eligibility: eligible(), plannerResult: planner({ confidence: "LOW" }) });
+  assert.equal(decision.shouldSend, false);
+  assert.equal(decision.reason, "LOW_CONFIDENCE");
+});
+
+test("CLARIFY nunca envia (fora da allowlist de actions enviáveis), mesmo com confiança alta", () => {
+  const decision = resolveSendDecision({
+    eligibility: eligible(),
+    plannerResult: planner({ action: "CLARIFY", confidence: "HIGH", needsHuman: false }),
+  });
+  assert.equal(decision.shouldSend, false);
+  assert.equal(decision.reason, "ACTION_NOT_SENDABLE_CLARIFY");
+});
+
+test("RESOLVE nunca envia (fora da allowlist — encerramento não é mensagem operacional automática)", () => {
+  const decision = resolveSendDecision({
+    eligibility: eligible(),
+    plannerResult: planner({ action: "RESOLVE", confidence: "HIGH", needsHuman: false }),
+  });
+  assert.equal(decision.shouldSend, false);
+});
+
+test("ASK e WAIT (além de RESPOND) são enviáveis quando o resto está ok", () => {
+  assert.equal(resolveSendDecision({ eligibility: eligible(), plannerResult: planner({ action: "ASK" }) }).shouldSend, true);
+  assert.equal(resolveSendDecision({ eligibility: eligible(), plannerResult: planner({ action: "WAIT" }) }).shouldSend, true);
+});
+
+test("sem plannerResult, nunca envia", () => {
+  const decision = resolveSendDecision({ eligibility: eligible(), plannerResult: null });
+  assert.equal(decision.shouldSend, false);
+  assert.equal(decision.reason, "NO_PLANNER_RESULT");
 });

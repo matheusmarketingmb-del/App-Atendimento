@@ -15,6 +15,29 @@ function findIntent(bot, intentId) {
   return (bot.intents || []).find((intent) => intent.id === intentId) || null;
 }
 
+// A base de conhecimento é CONTEXTO INTERNO, nunca a resposta pronta —
+// `best.content` pode ter sido colado no painel com formatação Markdown
+// (títulos, listas, negrito, links, bloco de código), que nunca pode vazar
+// cru para o cliente no WhatsApp. Remove só a MARCAÇÃO, sem cortar
+// conteúdo; roda sempre, independente de a Personalidade (IA externa) estar
+// configurada ou não (ver bot-personality-service.js#applyPersonality, que
+// é opcional e não pode ser a única barreira contra Markdown bruto).
+function stripMarkdown(text) {
+  return String(text || "")
+    .replace(/```[\s\S]*?```/g, (block) => block.replace(/```/g, "").trim())
+    .replace(/^\s{0,3}#{1,6}\s+/gm, "")
+    .replace(/^\s{0,3}[-*+]\s+/gm, "")
+    .replace(/^\s{0,3}\d+\.\s+/gm, "")
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/__([^_]+)__/g, "$1")
+    .replace(/(^|[^*])\*([^*]+)\*([^*]|$)/g, "$1$2$3")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/^\s{0,3}>\s?/gm, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 async function resolveKnowledgeResponse({
   bot, decision, interpretation, message, flags = {}, provider = defaultProvider, contextProduct = null,
 }) {
@@ -58,7 +81,7 @@ async function resolveKnowledgeResponse({
   const best = results[0];
   return {
     ...decision,
-    knowledgeResponseText: best.content || null,
+    knowledgeResponseText: stripMarkdown(best.content) || null,
     knowledgeSourceId: best.id,
     knowledgeSourceTitle: best.title,
     knowledgeSourceVersion: best.version,

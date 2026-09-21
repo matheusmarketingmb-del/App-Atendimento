@@ -27,4 +27,26 @@ function resolveAutoReplyEligibility({ bot, flags, globalAutomationEnabled, loca
   return { allowed: false, reason: "AI_OFFLINE_NO_AUTO_REPLY" };
 }
 
-module.exports = { resolveAutoReplyEligibility };
+// Ações que podem virar mensagem automática — HANDOFF e CLARIFY nunca
+// entram aqui: HANDOFF por definição precisa de humano (needsHuman=true já
+// garante isso na checagem abaixo), CLARIFY fica de fora mesmo com
+// confiança alta por decisão explícita (pedido do usuário: a allowlist de
+// actions enviáveis é só RESPOND/ASK/WAIT — nunca "só quando a confiança
+// for baixa", sempre).
+const SENDABLE_ACTIONS = new Set(["RESPOND", "ASK", "WAIT"]);
+
+// Segundo gate — DEPOIS do planner-output-guard já ter normalizado
+// action/confidence/needsHuman/reason. resolveAutoReplyEligibility() acima
+// só sabe se o Bot/automação/provider PODERIAM enviar; este aqui olha o que
+// a IA realmente decidiu para este turno específico. Os dois precisam
+// concordar — nenhum sozinho autoriza o envio.
+function resolveSendDecision({ eligibility, plannerResult }) {
+  if (!eligibility?.allowed) return { shouldSend: false, reason: eligibility?.reason || "NOT_ELIGIBLE" };
+  if (!plannerResult) return { shouldSend: false, reason: "NO_PLANNER_RESULT" };
+  if (plannerResult.needsHuman) return { shouldSend: false, reason: "NEEDS_HUMAN" };
+  if (plannerResult.confidence === "LOW") return { shouldSend: false, reason: "LOW_CONFIDENCE" };
+  if (!SENDABLE_ACTIONS.has(plannerResult.action)) return { shouldSend: false, reason: `ACTION_NOT_SENDABLE_${plannerResult.action}` };
+  return { shouldSend: true, reason: null };
+}
+
+module.exports = { resolveAutoReplyEligibility, resolveSendDecision, SENDABLE_ACTIONS };
