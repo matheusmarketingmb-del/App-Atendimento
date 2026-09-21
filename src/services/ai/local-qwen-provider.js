@@ -1,105 +1,123 @@
-// Provider da IA LOCAL — fala com o RAG Server local (rag_server.py, em
-// C:\App Whats\rag), NUNCA diretamente com o Ollama. O RAG Server já faz
-// busca na Knowledge (Info_Bots/ChromaDB/nomic-embed-text) + geração
-// (qwen3:14b) por conta própria; o app só envia a mensagem do cliente e
-// recebe de volta a resposta pronta — nenhuma lógica de prompt/Knowledge/
-// JSON é duplicada aqui (ver bot-ai-shadow-service.js).
+// Provider da IA LOCAL (Qwen rodando via Ollama fora da VPS, tipicamente no
+// PC do operador, alcançado por Tailscale). Reaproveita o MESMO contrato
+// AIProvider e os MESMOS prompts de classificação/reescrita dos providers
+// externos (buildIntentPrompt/buildRephrasePrompt) — só o transporte HTTP e
+// o endereço mudam. Além do contrato AIProvider, expõe
+// `generateStructuredReply`, usado só pelo modo PRIMARY (bot-ai-shadow-
+// service.js): a IA local decide/redige o turno inteiro em JSON, não só
+// reescreve um texto já pronto.
 //
-// Nunca chamado com host fixo: `baseUrl`/`timeoutMs` vêm sempre de
+// Nunca chamado com host fixo: `baseUrl`/`model`/`timeoutMs` vêm sempre de
 // LocalAiProviderSettings (ver local-ai-settings-service.js), resolvidos a
-// cada chamada (get-ai-provider.js nunca cacheia a instância). Em
-// desenvolvimento isso é http://127.0.0.1:8992 (RAG Server local); `model`
-// é só informativo (o RAG Server decide sozinho qual modelo usar).
+// cada chamada (get-ai-provider.js nunca cacheia a instância) — em
+// desenvolvimento isso costuma ser http://127.0.0.1:11434 (Ollama local); em
+// produção, o endereço privado Tailscale do PC.
 const axios = require("axios");
 const { AIProvider } = require("./ai-provider");
+const { extractEntities: extractEntitiesLocally } = require("../bot-entity-extractor");
+const { parseJsonResponse, validateClassification } = require("./classification-utils");
+const { buildIntentPrompt, buildRephrasePrompt } = require("./anthropic-provider");
 const { withQueue } = require("../local-ai-queue");
 const { recordInferenceOutcome } = require("../local-ai-status-service");
 
 const DEFAULT_TIMEOUT_MS = 45000;
 
-function mapRagError(error) {
+// qwen3 é um modelo "thinking": sem think:false, ele gera um bloco de
+// raciocínio antes da resposta, multiplicando a latência sem melhorar o
+// resultado para este caso de uso (classificação/JSON estruturado curto).
+// keep_alive mantém o modelo carregado na GPU entre mensagens — sem isso,
+// cada chamada pagaria ~20-30s de carregamento do modelo (9+ GB).
+function buildChatBody({ model, messages, format, numCtx }) {
+  return {
+    model,
+    messages,
+    stream: false,
+    think: false,
+    keep_alive: "30m",
+    options: { num_ctx: numCtx || 6144 },
+    ...(format ? { format } : {}),
+  };
+}
+
+function mapOllamaError(error) {
   if (error.code === "ECONNABORTED" || /timeout/i.test(error.message || "")) {
-    return Object.assign(new Error("Tempo limite excedido ao consultar o RAG Server."), { code: "TIMEOUT" });
+    return Object.assign(new Error("Tempo limite excedido ao consultar a IA local."), { code: "TIMEOUT" });
   }
   if (error.code === "QUEUE_FULL" || error.code === "QUEUE_TIMEOUT") return error;
-  // O RAG Server (rag_server.py) já devolve {error, message} tipados quando
-  // ELE detecta Ollama offline/timeout/modelo ausente/Knowledge indisponível
-  // — propaga esse código específico em vez de um genérico, para o log do
-  // modo shadow mostrar a causa real (ver rag_server.py).
-  const ragErrorCode = error.response?.data?.error;
-  if (ragErrorCode) {
-    return Object.assign(new Error(error.response.data.message || ragErrorCode), { code: `RAG_${ragErrorCode}` });
+  if (error.response?.status === 404) {
+    return Object.assign(new Error("Modelo não encontrado na IA local (confira `ollama list`)."), { code: "MODEL_NOT_FOUND" });
   }
   if (error.code === "ECONNREFUSED" || error.code === "ENOTFOUND" || error.code === "EHOSTUNREACH") {
-    return Object.assign(new Error("RAG Server inacessível (endereço/rede)."), { code: "PROVIDER_UNREACHABLE" });
+    return Object.assign(new Error("IA local inacessível (endereço/rede)."), { code: "PROVIDER_UNREACHABLE" });
   }
-  return Object.assign(new Error("Falha ao consultar o RAG Server."), { code: "PROVIDER_REQUEST_FAILED" });
+  return Object.assign(new Error("Falha ao consultar a IA local."), { code: "PROVIDER_REQUEST_FAILED" });
 }
 
 class LocalQwenProvider extends AIProvider {
   constructor({ baseUrl, model, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
     super();
-    if (!baseUrl) throw new Error("Endereço do RAG Server (baseUrl) não configurado.");
+    if (!baseUrl) throw new Error("Endereço da IA local (baseUrl) não configurado.");
     this.baseUrl = baseUrl.replace(/\/+$/, "");
     this.model = model || "qwen3:14b";
     this.timeoutMs = Number.isFinite(timeoutMs) && timeoutMs >= 1000 && timeoutMs <= 180000
       ? timeoutMs : DEFAULT_TIMEOUT_MS;
   }
 
-  // Único método usado hoje pelo motor (bot-ai-shadow-service.js, modo
-  // PRIMARY): POST /answer no RAG Server, que devolve a resposta já pronta
-  // (busca + geração + regras de "não inventar" já aplicadas do lado dele).
-  // classifyIntent/extractEntities/generateResponse do contrato AIProvider
-  // continuam herdados da base (não implementados) — nada aqui os chama.
-  //
-  // `history` (opcional): últimas mensagens da conversa, já recortadas pelo
-  // chamador (bot-ai-shadow-service.js reaproveita getRecentContext/
-  // contextMaxMessages — nunca a conversa inteira). O RAG Server usa isso só
-  // para resolver referência ("qual modelo?" -> "GS Pro 2") e não repetir
-  // pergunta já respondida; nunca decide envio, nunca é a fonte de verdade
-  // do estado da conversa (isso continua sendo ConversationBotState).
-  async askRag({ message, history = [] }) {
+  async _chat({ messages, format, numCtx }) {
     const startedAt = Date.now();
-    let response;
-
     try {
-      response = await withQueue(() => axios.post(
-        `${this.baseUrl}/answer`,
-        { message, history },
-        { timeout: this.timeoutMs },
-      ));
+      const response = await withQueue(() => axios.post(`${this.baseUrl}/api/chat`, buildChatBody({
+        model: this.model, messages, format, numCtx,
+      }), { timeout: this.timeoutMs }));
+      const latencyMs = Date.now() - startedAt;
       recordInferenceOutcome("OK");
+      const text = response.data?.message?.content || "";
+      const usage = {
+        inputTokens: response.data?.prompt_eval_count ?? null,
+        outputTokens: response.data?.eval_count ?? null,
+      };
+      return { text, usage, latencyMs };
     } catch (error) {
-      const mapped = mapRagError(error);
+      const mapped = mapOllamaError(error);
       recordInferenceOutcome(mapped.code === "TIMEOUT" ? "TIMEOUT" : "ERROR");
       throw mapped;
     }
+  }
 
-    const data = response.data || {};
-    const latencyMs = Number.isFinite(data.latencyMs) ? data.latencyMs : (Date.now() - startedAt);
-    const VALID_ACTIONS = new Set(["RESPOND", "ASK", "CLARIFY", "HANDOFF", "WAIT", "RESOLVE"]);
-    const VALID_CONFIDENCE = new Set(["HIGH", "MEDIUM", "LOW"]);
+  async classifyIntent({ bot, message, context }) {
+    const prompt = buildIntentPrompt({ bot, message, context });
+    const { text, usage } = await this._chat({ messages: [{ role: "user", content: prompt }] });
+    const parsed = parseJsonResponse(text);
+    const classification = validateClassification(parsed, bot);
+    return { ...classification, usage };
+  }
 
-    return {
-      answer: typeof data.answer === "string" ? data.answer.trim() : "",
-      // Sempre um valor seguro mesmo se o RAG Server devolver algo
-      // inesperado (versão desalinhada, resposta malformada) — nunca deixa
-      // `action`/`confidence` chegarem crus/inválidos no resto do motor.
-      action: VALID_ACTIONS.has(data.action) ? data.action : "HANDOFF",
-      confidence: VALID_CONFIDENCE.has(data.confidence) ? data.confidence : "LOW",
-      needsHuman: typeof data.needsHuman === "boolean" ? data.needsHuman : true,
-      reason: typeof data.reason === "string" && data.reason ? data.reason : "unspecified",
-      product: data.product || null,
-      intent: data.intent || null,
-      sources: Number.isFinite(data.sources) ? data.sources : null,
-      // Detalhe dos chunks (arquivo/heading/produto/topic/origem/distância)
-      // — só para inspeção (simulador); nunca usado em decisão do motor.
-      sourceDetails: Array.isArray(data.sourceDetails) ? data.sourceDetails : [],
-      searchMs: Number.isFinite(data.searchMs) ? data.searchMs : null,
-      generationMs: Number.isFinite(data.generationMs) ? data.generationMs : null,
-      latencyMs,
-    };
+  async extractEntities({ message }) {
+    return extractEntitiesLocally(message);
+  }
+
+  async generateResponse({ systemPrompt, groundingText, userMessage, bot, intent }) {
+    if (!systemPrompt || !groundingText) return intent?.responseMessage || bot?.fallbackMessage || groundingText || "";
+    const prompt = buildRephrasePrompt({ groundingText, userMessage });
+    const { text, usage } = await this._chat({
+      messages: [{ role: "system", content: systemPrompt }, { role: "user", content: prompt }],
+    });
+    return { text: text.trim(), usage };
+  }
+
+  // Modo PRIMARY (bot-ai-shadow-service.js): a IA decide o turno inteiro.
+  // `jsonSchema` é a gramática JSON (Ollama `format`) que restringe o
+  // decoder — garante JSON sintaticamente válido; a validação de
+  // conteúdo (enums, campos obrigatórios) continua sendo feita por quem
+  // chama (bot-ai-schema-service.js), nunca aqui.
+  async generateStructuredReply({ systemPrompt, userPrompt, jsonSchema, numCtx }) {
+    const { text, usage, latencyMs } = await this._chat({
+      messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }],
+      format: jsonSchema,
+      numCtx,
+    });
+    return { raw: text, parsed: parseJsonResponse(text), usage, latencyMs };
   }
 }
 
-module.exports = { LocalQwenProvider, mapRagError };
+module.exports = { LocalQwenProvider, mapOllamaError };
