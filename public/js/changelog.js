@@ -1,9 +1,10 @@
 (() => {
-  const APP_VERSION = "0.33.0";
+  const APP_VERSION = "0.34.0";
 
 
 
   const CHANGELOG = [
+    { version: "0.34.0", date: "21/09/2026", title: "IA segura em DRY RUN", changes: ["Gate de envio validado em modo seguro.", "Prévia da IA local mantida no simulador.", "Envio real permanece bloqueado."] },
     {
       version: "0.33.0",
       date: "18/09/2026",
