@@ -1173,7 +1173,7 @@ function renderLocalAiSimulation(localAi) {
   if (!box) return;
   box.hidden = false;
   if (!localAi) {
-    box.innerHTML = `<div class="local-ai-heading"><b>Resposta da IA local — não enviada</b><span class="local-ai-status error">ERRO</span></div><p>A simulação não retornou o diagnóstico da IA local.</p>`;
+    box.innerHTML = `<div class="local-ai-heading"><b>Resposta da IA local — simulação</b><span class="local-ai-status error">ERRO</span></div><p>A simulação não retornou o diagnóstico da IA local.</p>`;
     return;
   }
   const statusClass = localAi.status === "OK" ? "ok" : (localAi.status === "DISABLED" ? "disabled" : "error");
@@ -1181,7 +1181,7 @@ function renderLocalAiSimulation(localAi) {
     ? localAi.handoffReason
     : localAi.reason) || "A IA não produziu texto para este turno.";
   const knowledge = (localAi.knowledgeUsed || []).map((item) => item.title).filter(Boolean).join("; ") || "Nenhum trecho encontrado";
-  box.innerHTML = `<div class="local-ai-heading"><b>Resposta da IA local — não enviada</b><span class="local-ai-status ${statusClass}">${escapeHtml(localAi.status || "-")}</span></div>
+  box.innerHTML = `<div class="local-ai-heading"><b>Resposta da IA local — simulação</b><span class="local-ai-status ${statusClass}">${escapeHtml(localAi.status || "-")}</span></div>
     <p class="local-ai-response">${escapeHtml(response)}</p>
     <div class="result-grid">
       <span>Provider<strong>${escapeHtml(localAi.provider || "-")}</strong></span>
@@ -1191,7 +1191,7 @@ function renderLocalAiSimulation(localAi) {
       <span>Confiança<strong>${localAi.confidence != null ? `${Math.round(localAi.confidence * 100)}%` : "-"}</strong></span>
       <span>Tempo<strong>${localAi.latencyMs != null ? `${(localAi.latencyMs / 1000).toFixed(1)}s` : "-"}</strong></span>
       <span class="full-result">Conhecimento local<strong>${escapeHtml(knowledge)}</strong></span>
-      <span>Envio ao cliente<strong>Não enviado</strong></span>
+      <span>Resultado<strong>Resposta exibida somente no simulador</strong></span>
     </div>`;
 }
 
@@ -1210,12 +1210,14 @@ $("#simulator-form").addEventListener("submit", async (event) => {
       }),
     });
     state.simulatorHistory.push({ direction: "RECEBIDA", text: message });
-    if (result.response) state.simulatorHistory.push({ direction: "ENVIADA", text: result.response });
+    const simulatedReply = result.localAi?.status === "OK" && result.localAi?.response
+      ? result.localAi.response : result.response;
+    if (simulatedReply) state.simulatorHistory.push({ direction: "ENVIADA", text: simulatedReply });
     state.simulatorState = result.nextState;
     renderSimulatorTranscript();
     $("#simulator-message").value = "";
 
-    $("#simulator-result").innerHTML = `<b>${escapeHtml(result.response || "Sem resposta automática")}</b><div class="result-grid">
+    $("#simulator-result").innerHTML = `<b>${escapeHtml(simulatedReply || "Sem resposta automática")}</b><div class="result-grid">
       <span>Bot<strong>${escapeHtml(result.botName || "-")}</strong></span>
       <span>Intenção<strong>${escapeHtml(result.intentName || "Nenhuma")}</strong></span>
       <span>Mensagem normalizada<strong>${escapeHtml(result.normalizedMessage || "-")}</strong></span>

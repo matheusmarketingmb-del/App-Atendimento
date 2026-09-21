@@ -1,9 +1,10 @@
 (() => {
-  const APP_VERSION = "0.34.0";
+  const APP_VERSION = "0.34.1";
 
 
 
   const CHANGELOG = [
+    { version: "0.34.1", date: "21/09/2026", title: "Resposta no chat simulado", changes: ["A resposta da IA local agora aparece como mensagem do Bot na conversa simulada.", "Nenhuma mensagem é enviada ao cliente real."] },
     { version: "0.34.0", date: "21/09/2026", title: "IA segura em DRY RUN", changes: ["Gate de envio validado em modo seguro.", "Prévia da IA local mantida no simulador.", "Envio real permanece bloqueado."] },
     {
       version: "0.33.0",
