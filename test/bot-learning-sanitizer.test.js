@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { redactPersonalData, sanitizeForLearning } = require("../src/services/bot-learning-sanitizer");
+const { redactPersonalData, sanitizeAgentResponse, sanitizeForLearning } = require("../src/services/bot-learning-sanitizer");
 
 test("remove CPF do texto", () => {
   const result = redactPersonalData("meu CPF é 111.222.333-44, pode conferir?");
@@ -38,4 +38,15 @@ test("sanitizeForLearning trunca textos muito longos", () => {
   const longText = "preciso de ajuda ".repeat(100);
   const result = sanitizeForLearning(longText, { maxLength: 50 });
   assert.ok(result.length <= 50);
+});
+
+test("remove o nome do cliente de uma saudação", () => {
+  assert.equal(sanitizeAgentResponse("Bom dia, Vinicius! Tudo bem?"), "Bom dia! Tudo bem?");
+});
+
+test("troca o nome do atendente pelo nome configurado do Bot", () => {
+  assert.equal(
+    sanitizeAgentResponse("Olá! Eu sou a Thalia, assistente virtual da Mibro."),
+    "Olá! Eu sou a {{botName}}, assistente virtual da Mibro.",
+  );
 });

@@ -10,7 +10,7 @@ const prisma = require("../database/prisma");
 const authorization = require("./authorization-service");
 const { normalizeText } = require("./bot-simulator-service");
 const { similarity } = require("./ai/local-fallback-provider");
-const { sanitizeForLearning } = require("./bot-learning-sanitizer");
+const { sanitizeAgentResponse, sanitizeForLearning } = require("./bot-learning-sanitizer");
 const { getGlobalSettings, resolveFeatureFlags } = require("./bot-governance-service");
 const { addExampleToGlobalIntent } = require("./global-intent-service");
 const {
@@ -55,6 +55,10 @@ async function upsertSuggestion(client, { botId, intentId, type, title, suggeste
   const normalizedCandidate = normalizeText(suggestedContent);
   let match = null;
   for (const candidate of candidates) {
+    const candidateTopic = candidate.metadata?.topic;
+    const topicCompatible = !metadata?.topic || !candidateTopic
+      || similarity(normalizeText(metadata.topic), normalizeText(candidateTopic)) >= LEARNING_SIMILARITY_TOPIC_THRESHOLD;
+    if (!topicCompatible) continue;
     const score = similarity(normalizedCandidate, normalizeText(candidate.suggestedContent));
     if (score >= LEARNING_SIMILARITY_CONTENT_THRESHOLD && (!match || score > match.score)) match = { candidate, score };
   }
@@ -64,6 +68,7 @@ async function upsertSuggestion(client, { botId, intentId, type, title, suggeste
       data: {
         sourceCount: { increment: 1 },
         confidence: Math.max(match.candidate.confidence || 0, confidence || 0) || null,
+        metadata: metadata ? { ...(match.candidate.metadata || {}), ...metadata } : undefined,
       },
     });
   }
@@ -78,7 +83,9 @@ async function upsertSuggestion(client, { botId, intentId, type, title, suggeste
 // RESPONSE agrupa por TÓPICO (o problema do cliente), não pela solução em
 // si — soluções divergentes para o mesmo tópico viram CONFLITO em vez de
 // serem aprendidas silenciosamente como se fossem a mesma coisa.
-async function upsertResponseSuggestion(client, { botId, topic, content, conversationId }) {
+async function upsertResponseSuggestion(client, {
+  botId, topic, content, conversationId, customerMessageId, responseMessageId, conversationContext,
+}) {
   const candidates = await client.botLearningSuggestion.findMany({
     where: { type: "RESPONSE", status: "PENDING", botId: botId ?? null },
     take: 100,
@@ -95,7 +102,8 @@ async function upsertResponseSuggestion(client, { botId, topic, content, convers
     return client.botLearningSuggestion.create({
       data: {
         botId: botId ?? null, conversationId, type: "RESPONSE", title: titleFromText(topic),
-        suggestedContent: content, sourceCount: 1, metadata: { topic },
+        suggestedContent: content, sourceCount: 1,
+        metadata: { topic, customerMessageId, responseMessageId, conversationContext },
       },
     });
   }
@@ -103,7 +111,12 @@ async function upsertResponseSuggestion(client, { botId, topic, content, convers
   if (contentScore >= LEARNING_SIMILARITY_CONTENT_THRESHOLD) {
     return client.botLearningSuggestion.update({
       where: { id: topicMatch.candidate.id },
-      data: { sourceCount: { increment: 1 } },
+      data: {
+        sourceCount: { increment: 1 },
+        metadata: {
+          ...(topicMatch.candidate.metadata || {}), topic, customerMessageId, responseMessageId, conversationContext,
+        },
+      },
     });
   }
   await client.botLearningSuggestion.update({
@@ -113,7 +126,8 @@ async function upsertResponseSuggestion(client, { botId, topic, content, convers
   return client.botLearningSuggestion.create({
     data: {
       botId: botId ?? null, conversationId, type: "RESPONSE", title: titleFromText(topic),
-      suggestedContent: content, sourceCount: 1, metadata: { topic, conflict: true },
+      suggestedContent: content, sourceCount: 1,
+      metadata: { topic, conflict: true, customerMessageId, responseMessageId, conversationContext },
     },
   });
 }
@@ -122,7 +136,9 @@ async function upsertResponseSuggestion(client, { botId, topic, content, convers
 // resolveu bem o caso e não corresponde a NENHUMA Resposta Rápida ativa —
 // sugere cadastrar uma nova (tipo QUICK_REPLY), sempre PENDING/revisão
 // humana. Nunca cria a Resposta Rápida sozinho.
-async function suggestQuickReplyIfNew(client, { botId, content, conversationId }) {
+async function suggestQuickReplyIfNew(client, {
+  botId, content, conversationId, topic, customerMessageId, responseMessageId, conversationContext,
+}) {
   const existing = await client.quickReply.findMany({ where: { active: true }, select: { text: true }, take: 500 });
   const normalizedContent = normalizeText(content);
   const alreadyCovered = existing.some((quickReply) => (
@@ -132,7 +148,40 @@ async function suggestQuickReplyIfNew(client, { botId, content, conversationId }
   return upsertSuggestion(client, {
     botId, intentId: null, type: "QUICK_REPLY", title: titleFromText(content),
     suggestedContent: content, conversationId, confidence: null,
+    metadata: { topic, customerMessageId, responseMessageId, conversationContext },
   });
+}
+
+// Percorre toda a conversa em ordem cronológica. Cada resposta humana é
+// vinculada à mensagem específica do cliente imediatamente anterior. As
+// mensagens recebidas desde a resposta anterior ficam como contexto, sem
+// substituir a pergunta exata exibida para revisão.
+function buildConversationPairs(messages) {
+  const pairs = [];
+  let pendingCustomerMessages = [];
+
+  for (const message of messages) {
+    if (message.direction === "RECEBIDA") {
+      if ((message.text || "").trim()) pendingCustomerMessages.push(message);
+      continue;
+    }
+    if (message.direction !== "ENVIADA" || !message.sentByUserId || !pendingCustomerMessages.length) continue;
+
+    const customerMessage = pendingCustomerMessages[pendingCustomerMessages.length - 1];
+    const topic = sanitizeForLearning(customerMessage.text);
+    const content = sanitizeAgentResponse(message.text);
+    const conversationContext = sanitizeForLearning(pendingCustomerMessages.map((item) => item.text).join("\n"));
+    if (topic && content) {
+      pairs.push({
+        topic, content, conversationContext,
+        customerMessageId: customerMessage.id,
+        responseMessageId: message.id,
+      });
+    }
+    pendingCustomerMessages = [];
+  }
+
+  return pairs.slice(-20);
 }
 
 // Item 16 (Aprendizado x Flow Engine): resultado ESTRUTURAL do fluxo
@@ -217,51 +266,60 @@ async function analyzeConversation(conversationId, { force = false, client = pri
       return { analyzed: false, reason: "ALREADY_ANALYZED" };
     }
 
-    const firstCustomerMessage = messages.find((item) => item.direction === "RECEBIDA");
     const resolutionSignal = detectResolutionSignal(messages);
     const suggestions = [];
 
-    if (firstCustomerMessage && resolutionSignal !== "NEGATIVE") {
-      const observation = await client.botObservation.findFirst({
-        where: { messageId: firstCustomerMessage.id }, include: { bot: { select: { featureFlags: true } } },
-      });
-      const botLearningEnabled = !observation?.bot || resolveFeatureFlags(observation.bot).learningEnabled;
-      const needsExample = botLearningEnabled && (!observation || observation.confidence == null || observation.confidence < DEFAULT_HIGH_CONFIDENCE_THRESHOLD);
-      const sanitizedExample = sanitizeForLearning(firstCustomerMessage.text);
-      if (needsExample && sanitizedExample) {
-        const botId = observation?.botId || null;
-        if (observation?.intentId) {
-          const existingExamples = await client.botIntentExample.findMany({
-            where: { intentId: observation.intentId }, select: { text: true },
-          });
-          const normalizedCandidate = normalizeText(sanitizedExample);
-          const isDuplicate = existingExamples.some((example) => normalizeText(example.text) === normalizedCandidate);
-          if (!isDuplicate) {
+    if (resolutionSignal !== "NEGATIVE") {
+      const pairs = buildConversationPairs(messages);
+      for (const pair of pairs) {
+        const observation = await client.botObservation.findFirst({
+          where: { messageId: pair.customerMessageId }, include: { bot: { select: { featureFlags: true } } },
+        });
+        const botLearningEnabled = !observation?.bot || resolveFeatureFlags(observation.bot).learningEnabled;
+        const needsExample = botLearningEnabled && (!observation || observation.confidence == null || observation.confidence < DEFAULT_HIGH_CONFIDENCE_THRESHOLD);
+        const sanitizedExample = pair.topic;
+        if (needsExample && sanitizedExample) {
+          const botId = observation?.botId || null;
+          const pairMetadata = {
+            topic: pair.topic, customerMessageId: pair.customerMessageId,
+            responseMessageId: pair.responseMessageId, conversationContext: pair.conversationContext,
+          };
+          if (observation?.intentId) {
+            const existingExamples = await client.botIntentExample.findMany({
+              where: { intentId: observation.intentId }, select: { text: true },
+            });
+            const normalizedCandidate = normalizeText(sanitizedExample);
+            const isDuplicate = existingExamples.some((example) => normalizeText(example.text) === normalizedCandidate);
+            if (!isDuplicate) {
+              suggestions.push(await upsertSuggestion(client, {
+                botId, intentId: observation.intentId, type: "INTENT_EXAMPLE",
+                title: `Novo exemplo para "${observation.intentName || "intenção"}"`,
+                suggestedContent: sanitizedExample, conversationId, confidence: observation.confidence,
+                metadata: pairMetadata,
+              }));
+            }
+          } else {
             suggestions.push(await upsertSuggestion(client, {
-              botId, intentId: observation.intentId, type: "INTENT_EXAMPLE",
-              title: `Novo exemplo para "${observation.intentName || "intenção"}"`,
-              suggestedContent: sanitizedExample, conversationId, confidence: observation.confidence,
+              botId, intentId: null, type: "NEW_INTENT", title: titleFromText(sanitizedExample),
+              suggestedContent: sanitizedExample, conversationId, confidence: observation?.confidence ?? null,
+              metadata: pairMetadata,
             }));
           }
-        } else {
-          suggestions.push(await upsertSuggestion(client, {
-            botId, intentId: null, type: "NEW_INTENT", title: titleFromText(sanitizedExample),
-            suggestedContent: sanitizedExample, conversationId, confidence: observation?.confidence ?? null,
-          }));
         }
-      }
 
-      const lastAgentMessage = [...messages].reverse()
-        .find((item) => item.direction === "ENVIADA" && item.sentByUserId && (item.text || "").trim().length > 15);
-      const sanitizedSolution = lastAgentMessage ? sanitizeForLearning(lastAgentMessage.text) : null;
-      if (botLearningEnabled && sanitizedSolution && sanitizedExample) {
-        suggestions.push(await upsertResponseSuggestion(client, {
-          botId: observation?.botId || null, topic: sanitizedExample, content: sanitizedSolution, conversationId,
-        }));
-        const quickReplySuggestion = await suggestQuickReplyIfNew(client, {
-          botId: observation?.botId || null, content: sanitizedSolution, conversationId,
-        });
-        if (quickReplySuggestion) suggestions.push(quickReplySuggestion);
+        if (botLearningEnabled && pair.content && sanitizedExample) {
+          suggestions.push(await upsertResponseSuggestion(client, {
+            botId: observation?.botId || null, topic: sanitizedExample, content: pair.content, conversationId,
+            customerMessageId: pair.customerMessageId, responseMessageId: pair.responseMessageId,
+            conversationContext: pair.conversationContext,
+          }));
+          const quickReplySuggestion = await suggestQuickReplyIfNew(client, {
+            botId: observation?.botId || null, content: pair.content, conversationId, topic: sanitizedExample,
+            customerMessageId: pair.customerMessageId, responseMessageId: pair.responseMessageId,
+            conversationContext: pair.conversationContext,
+          });
+          if (quickReplySuggestion) suggestions.push(quickReplySuggestion);
+        }
       }
     }
 
@@ -415,6 +473,7 @@ module.exports = {
   analyzeConversation,
   analyzeConversationManually,
   approveSuggestion,
+  buildConversationPairs,
   createSuggestionFromObservationFeedback,
   detectResolutionSignal,
   editSuggestion,

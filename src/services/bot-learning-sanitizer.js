@@ -36,4 +36,27 @@ function sanitizeForLearning(text, { maxLength = LEARNING_TEXT_MAX_LENGTH } = {}
   return sanitized;
 }
 
-module.exports = { redactPersonalData, sanitizeForLearning };
+// Respostas humanas podem conter o nome do atendente ou do cliente. Esses
+// nomes não devem virar personalidade do Bot. A estrutura da resposta é
+// preservada e a apresentação passa a usar o nome configurado do próprio Bot.
+function sanitizeAgentResponse(text, { maxLength = LEARNING_TEXT_MAX_LENGTH } = {}) {
+  let sanitized = redactPersonalData(text);
+
+  // "Olá! Eu sou a Thalia, assistente..." -> "Olá! Eu sou a {{botName}}, assistente..."
+  sanitized = sanitized.replace(
+    /(\b(?:[Ee]u\s+)?[Ss]ou\s+)(?:a|o)?\s*\p{Lu}[\p{L}'’-]{1,30}(?=\s*[,!.-]|\s+(?:da|do|de)\b)/gu,
+    "$1a {{botName}}",
+  );
+
+  // "Bom dia, Vinicius! Tudo bem?" -> "Bom dia! Tudo bem?"
+  sanitized = sanitized.replace(
+    /^([Bb]om\s+dia|[Bb]oa\s+tarde|[Bb]oa\s+noite|[Oo]lá|[Oo]i)[,!]?\s+\p{Lu}[\p{L}'’-]{1,30}\s*([!,.?])/u,
+    "$1$2",
+  );
+
+  sanitized = sanitized.replace(/\s{2,}/g, " ").replace(/\s+([,.!?])/g, "$1").trim();
+  sanitized = sanitized.slice(0, maxLength).trim();
+  return sanitized.length >= 3 ? sanitized : null;
+}
+
+module.exports = { redactPersonalData, sanitizeAgentResponse, sanitizeForLearning };

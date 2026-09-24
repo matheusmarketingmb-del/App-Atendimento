@@ -263,7 +263,9 @@ function identityAndGovernanceInput(data, existing = null) {
     update.introduceWithName = data.introduceWithName;
   }
   if (data.presentationMessage !== undefined) {
-    update.presentationMessage = optionalText(data.presentationMessage, "Mensagem de apresentação", 500);
+    const presentation = optionalText(data.presentationMessage, "Mensagem de apresentação", 500);
+    // {{botName}} é a única variável permitida; nomes digitados como variável passam a usar o nome real do Bot.
+    update.presentationMessage = presentation?.replace(/\{\{\s*[a-zA-Z]+\s*\}\}/g, "{{botName}}") || null;
   }
   if (data.reintroduceOnNewSession !== undefined) {
     if (typeof data.reintroduceOnNewSession !== "boolean") throw fail("reintroduceOnNewSession deve ser verdadeiro ou falso.");
