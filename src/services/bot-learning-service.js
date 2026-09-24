@@ -18,7 +18,7 @@ const {
   LEARNING_SIMILARITY_TOPIC_THRESHOLD, RESOLUTION_NEGATIVE_PATTERNS, RESOLUTION_POSITIVE_PATTERNS,
 } = require("./bot-constants");
 
-const CURRENT_LEARNING_GENERATION_STARTED_AT = new Date("2026-09-24T14:48:30.000Z");
+const CURRENT_LEARNING_GENERATION_STARTED_AT = new Date("2026-09-24T14:52:20.000Z");
 
 function fail(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -158,7 +158,8 @@ async function suggestQuickReplyIfNew(client, {
 }
 
 function isUsefulLearningTopic(text) {
-  const normalized = normalizeText(text);
+  const normalized = normalizeText(text)
+    .replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
   if (!normalized || normalized.length < 3) return false;
   return !/^(oi|ola|oi tudo bem|ola tudo bem|bom dia|boa tarde|boa noite|tudo bem|como vai|ok|okay|sim|nao|entendi|entao ta bom|ta bom|certo|beleza|obrigado|obrigada|valeu)[.!?]*$/.test(normalized);
 }
