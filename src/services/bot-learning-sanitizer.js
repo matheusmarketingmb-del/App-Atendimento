@@ -54,6 +54,10 @@ function sanitizeAgentResponse(text, { maxLength = LEARNING_TEXT_MAX_LENGTH } = 
     "$1$2",
   );
 
+  // Remove vocativos fora da saudação: "Pode sim, Vinicius!" e "Vinicius, respondendo...".
+  sanitized = sanitized.replace(/,\s*\p{Lu}[\p{L}'’-]{1,30}(?=\s*[!,])/gu, "");
+  sanitized = sanitized.replace(/^\p{Lu}[\p{L}'’-]{1,30},\s*/u, "");
+
   sanitized = sanitized.replace(/\s{2,}/g, " ").replace(/\s+([,.!?])/g, "$1").trim();
   sanitized = sanitized.slice(0, maxLength).trim();
   return sanitized.length >= 3 ? sanitized : null;

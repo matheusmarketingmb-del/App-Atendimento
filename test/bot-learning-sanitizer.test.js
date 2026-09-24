@@ -54,3 +54,11 @@ test("troca o nome do atendente pelo nome configurado do Bot", () => {
 test("remove nome do cliente no início de uma resposta maior", () => {
   assert.equal(sanitizeAgentResponse("Olá Fabio! Tudo bem? Poderia enviar sua mídia kit?"), "Olá! Tudo bem? Poderia enviar sua mídia kit?");
 });
+
+test("remove nome do cliente usado como vocativo", () => {
+  assert.equal(sanitizeAgentResponse("Pode sim, Vinicius! Você pode escolher os modelos."), "Pode sim! Você pode escolher os modelos.");
+});
+
+test("remove nome do cliente no início seguido de vírgula", () => {
+  assert.equal(sanitizeAgentResponse("Vinicius, respondendo suas dúvidas:"), "respondendo suas dúvidas:");
+});

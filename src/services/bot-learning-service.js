@@ -18,7 +18,7 @@ const {
   LEARNING_SIMILARITY_TOPIC_THRESHOLD, RESOLUTION_NEGATIVE_PATTERNS, RESOLUTION_POSITIVE_PATTERNS,
 } = require("./bot-constants");
 
-const CURRENT_LEARNING_GENERATION_STARTED_AT = new Date("2026-09-24T14:40:00.000Z");
+const CURRENT_LEARNING_GENERATION_STARTED_AT = new Date("2026-09-24T14:48:30.000Z");
 
 function fail(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -62,7 +62,10 @@ async function upsertSuggestion(client, { botId, intentId, type, title, suggeste
       || similarity(normalizeText(metadata.topic), normalizeText(candidateTopic)) >= LEARNING_SIMILARITY_TOPIC_THRESHOLD;
     if (!topicCompatible) continue;
     const score = similarity(normalizedCandidate, normalizeText(candidate.suggestedContent));
-    if (score >= LEARNING_SIMILARITY_CONTENT_THRESHOLD && (!match || score > match.score)) match = { candidate, score };
+    const contentMatches = ["NEW_INTENT", "INTENT_EXAMPLE"].includes(type)
+      ? normalizedCandidate === normalizeText(candidate.suggestedContent)
+      : score >= LEARNING_SIMILARITY_CONTENT_THRESHOLD;
+    if (contentMatches && (!match || score > match.score)) match = { candidate, score };
   }
   if (match) {
     return client.botLearningSuggestion.update({
@@ -157,7 +160,7 @@ async function suggestQuickReplyIfNew(client, {
 function isUsefulLearningTopic(text) {
   const normalized = normalizeText(text);
   if (!normalized || normalized.length < 3) return false;
-  return !/^(oi|ola|bom dia|boa tarde|boa noite|tudo bem|como vai|ok|okay|sim|nao|entao ta bom|ta bom|certo|beleza|obrigado|obrigada|valeu)[.!?]*$/.test(normalized);
+  return !/^(oi|ola|oi tudo bem|ola tudo bem|bom dia|boa tarde|boa noite|tudo bem|como vai|ok|okay|sim|nao|entendi|entao ta bom|ta bom|certo|beleza|obrigado|obrigada|valeu)[.!?]*$/.test(normalized);
 }
 
 // Percorre toda a conversa em ordem cronológica. Cada resposta humana é
