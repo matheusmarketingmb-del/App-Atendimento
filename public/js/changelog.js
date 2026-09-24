@@ -1,11 +1,10 @@
 (() => {
-  const APP_VERSION = "0.34.6";
+  const APP_VERSION = "0.34.5";
 
 
 
   const CHANGELOG = [
-    { version: "0.34.6", date: "24/09/2026", title: "Aprendizado sem associações incorretas", changes: ["Novas intenções só são agrupadas quando o texto coincide.", "Nomes usados como vocativo também são removidos das respostas.", "Saudações compostas e confirmações são ignoradas."] },
-    { version: "0.34.5", date: "24/09/2026", title: "Lista de aprendizado regenerada", changes: ["Sugestões antigas foram preservadas, mas retiradas da fila atual.", "A fila atual contém somente sugestões geradas pelo pareamento corrigido."] },
+    { version: "0.34.5", date: "24/09/2026", title: "Aprendizado corrigido e regenerado", changes: ["Sugestões antigas foram preservadas, mas retiradas da fila atual.", "A fila atual contém somente sugestões geradas pelo pareamento corrigido.", "Novas intenções só são agrupadas quando o texto coincide.", "Nomes usados como vocativo também são removidos das respostas.", "Saudações compostas e confirmações são ignoradas."] },
     { version: "0.34.4", date: "24/09/2026", title: "Sugestões de aprendizado claras", changes: ["Saudações e confirmações isoladas não viram novas intenções.", "Cartões diferenciam claramente nova intenção de resposta sugerida.", "Sugestões pendentes foram regeneradas sem nomes pessoais."] },
     { version: "0.34.3", date: "24/09/2026", title: "Aprendizado por conversa", changes: ["Cada sugestão mostra a pergunta específica do cliente e a resposta humana correspondente.", "Toda a conversa finalizada é analisada em pares pergunta–resposta.", "Nomes de clientes e atendentes não são aprendidos; apresentações usam {{botName}}."] },
     { version: "0.34.2", date: "21/09/2026", title: "Respostas completas da IA", changes: ["Ações ASK e HANDOFF agora exigem texto ao cliente.", "A IA tenta orientar com a base antes de encaminhar."] },
