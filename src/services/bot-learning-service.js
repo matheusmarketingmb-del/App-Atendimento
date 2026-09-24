@@ -18,6 +18,8 @@ const {
   LEARNING_SIMILARITY_TOPIC_THRESHOLD, RESOLUTION_NEGATIVE_PATTERNS, RESOLUTION_POSITIVE_PATTERNS,
 } = require("./bot-constants");
 
+const CURRENT_LEARNING_GENERATION_STARTED_AT = new Date("2026-09-24T14:40:00.000Z");
+
 function fail(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
 }
@@ -49,7 +51,7 @@ function detectResolutionSignal(messages) {
 // de criar duplicata a cada conversa semelhante — isso é o sourceCount.
 async function upsertSuggestion(client, { botId, intentId, type, title, suggestedContent, conversationId, confidence, metadata }) {
   const candidates = await client.botLearningSuggestion.findMany({
-    where: { type, status: "PENDING", botId: botId ?? null, intentId: intentId ?? null },
+    where: { type, status: "PENDING", botId: botId ?? null, intentId: intentId ?? null, createdAt: { gte: CURRENT_LEARNING_GENERATION_STARTED_AT } },
     take: 50,
   });
   const normalizedCandidate = normalizeText(suggestedContent);
@@ -87,7 +89,7 @@ async function upsertResponseSuggestion(client, {
   botId, topic, content, conversationId, customerMessageId, responseMessageId, conversationContext,
 }) {
   const candidates = await client.botLearningSuggestion.findMany({
-    where: { type: "RESPONSE", status: "PENDING", botId: botId ?? null },
+    where: { type: "RESPONSE", status: "PENDING", botId: botId ?? null, createdAt: { gte: CURRENT_LEARNING_GENERATION_STARTED_AT } },
     take: 100,
   });
   const normalizedTopic = normalizeText(topic);
@@ -359,6 +361,14 @@ async function listSuggestions(filters, viewer) {
   if (filters.status) where.status = filters.status;
   if (filters.type) where.type = filters.type;
   if (filters.botId) where.botId = filters.botId;
+  if (!filters.status || filters.status === "PENDING") {
+    where.AND = [{
+      OR: [
+        { status: { not: "PENDING" } },
+        { createdAt: { gte: CURRENT_LEARNING_GENERATION_STARTED_AT } },
+      ],
+    }];
+  }
   const take = filters.limit === undefined || filters.limit === "" ? 50 : Number(filters.limit);
   if (!Number.isInteger(take) || take < 1 || take > 200) throw fail("O limite deve ser um inteiro entre 1 e 200.");
   return prisma.botLearningSuggestion.findMany({
