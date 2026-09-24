@@ -1464,9 +1464,15 @@ function renderLearningSuggestions(rows) {
         <span class="learning-meta">${escapeHtml(row.bot?.name || "Sem Bot")} ${row.intent ? `&bull; ${escapeHtml(row.intent.name)}` : ""} &bull; ${row.sourceCount} conversa(s) &bull; ${new Date(row.createdAt).toLocaleDateString("pt-BR")}</span>
       </header>
       <p><b>O que será aprendido</b></p>
-      ${row.metadata?.topic ? `<div class="learning-pair-question"><span class="learning-meta">Pergunta específica do cliente</span><p><b>${escapeHtml(row.metadata.topic)}</b></p></div>` : `<p><b>${escapeHtml(row.title)}</b></p>`}
-      <p class="learning-meta">${["RESPONSE", "QUICK_REPLY"].includes(row.type) ? "Resposta sugerida do Bot" : "Mensagem do cliente usada como exemplo"}</p>
-      <textarea class="learning-content" ${row.status !== "PENDING" && row.status !== "EDITED" ? "disabled" : ""}>${escapeHtml(row.suggestedContent)}</textarea>
+      ${["RESPONSE", "QUICK_REPLY"].includes(row.type) ? `
+        <div class="learning-pair-question"><span class="learning-meta">Pergunta específica do cliente</span><p><b>${escapeHtml(row.metadata?.topic || row.title)}</b></p></div>
+        <p class="learning-meta">Resposta sugerida do Bot</p>
+        <textarea class="learning-content" ${row.status !== "PENDING" && row.status !== "EDITED" ? "disabled" : ""}>${escapeHtml(row.suggestedContent)}</textarea>
+      ` : ["NEW_INTENT", "INTENT_EXAMPLE"].includes(row.type) ? `
+        <p class="learning-meta">Mensagem específica do cliente</p>
+        <textarea class="learning-content" ${row.status !== "PENDING" && row.status !== "EDITED" ? "disabled" : ""}>${escapeHtml(row.suggestedContent)}</textarea>
+        <p class="learning-meta"><b>Sugestão:</b> ${row.type === "NEW_INTENT" ? "criar uma nova intenção para esta mensagem" : "adicionar esta mensagem como exemplo da intenção indicada"}</p>
+      ` : `<p><b>${escapeHtml(row.title)}</b></p><textarea class="learning-content" ${row.status !== "PENDING" && row.status !== "EDITED" ? "disabled" : ""}>${escapeHtml(row.suggestedContent)}</textarea>`}
       ${row.status === "PENDING" || row.status === "EDITED" ? `
         <div class="learning-actions">
           ${row.type === "INTENT_EXAMPLE" ? `<select class="learning-intent-select"><option value="">Intenção...</option></select>` : ""}

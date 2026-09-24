@@ -1,9 +1,10 @@
 (() => {
-  const APP_VERSION = "0.34.3";
+  const APP_VERSION = "0.34.4";
 
 
 
   const CHANGELOG = [
+    { version: "0.34.4", date: "24/09/2026", title: "Sugestões de aprendizado claras", changes: ["Saudações e confirmações isoladas não viram novas intenções.", "Cartões diferenciam claramente nova intenção de resposta sugerida.", "Sugestões pendentes foram regeneradas sem nomes pessoais."] },
     { version: "0.34.3", date: "24/09/2026", title: "Aprendizado por conversa", changes: ["Cada sugestão mostra a pergunta específica do cliente e a resposta humana correspondente.", "Toda a conversa finalizada é analisada em pares pergunta–resposta.", "Nomes de clientes e atendentes não são aprendidos; apresentações usam {{botName}}."] },
     { version: "0.34.2", date: "21/09/2026", title: "Respostas completas da IA", changes: ["Ações ASK e HANDOFF agora exigem texto ao cliente.", "A IA tenta orientar com a base antes de encaminhar."] },
     { version: "0.34.1", date: "21/09/2026", title: "Resposta no chat simulado", changes: ["A resposta da IA local agora aparece como mensagem do Bot na conversa simulada.", "Nenhuma mensagem é enviada ao cliente real."] },

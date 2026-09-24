@@ -50,3 +50,7 @@ test("troca o nome do atendente pelo nome configurado do Bot", () => {
     "Olá! Eu sou a {{botName}}, assistente virtual da Mibro.",
   );
 });
+
+test("remove nome do cliente no início de uma resposta maior", () => {
+  assert.equal(sanitizeAgentResponse("Olá Fabio! Tudo bem? Poderia enviar sua mídia kit?"), "Olá! Tudo bem? Poderia enviar sua mídia kit?");
+});

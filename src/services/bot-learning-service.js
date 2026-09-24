@@ -152,6 +152,12 @@ async function suggestQuickReplyIfNew(client, {
   });
 }
 
+function isUsefulLearningTopic(text) {
+  const normalized = normalizeText(text);
+  if (!normalized || normalized.length < 3) return false;
+  return !/^(oi|ola|bom dia|boa tarde|boa noite|tudo bem|como vai|ok|okay|sim|nao|entao ta bom|ta bom|certo|beleza|obrigado|obrigada|valeu)[.!?]*$/.test(normalized);
+}
+
 // Percorre toda a conversa em ordem cronológica. Cada resposta humana é
 // vinculada à mensagem específica do cliente imediatamente anterior. As
 // mensagens recebidas desde a resposta anterior ficam como contexto, sem
@@ -167,11 +173,14 @@ function buildConversationPairs(messages) {
     }
     if (message.direction !== "ENVIADA" || !message.sentByUserId || !pendingCustomerMessages.length) continue;
 
-    const customerMessage = pendingCustomerMessages[pendingCustomerMessages.length - 1];
-    const topic = sanitizeForLearning(customerMessage.text);
+    const customerMessage = [...pendingCustomerMessages].reverse().find((item) => {
+      const candidate = sanitizeForLearning(item.text);
+      return candidate && isUsefulLearningTopic(candidate);
+    });
     const content = sanitizeAgentResponse(message.text);
     const conversationContext = sanitizeForLearning(pendingCustomerMessages.map((item) => item.text).join("\n"));
-    if (topic && content) {
+    const topic = customerMessage ? sanitizeForLearning(customerMessage.text) : null;
+    if (customerMessage && topic && content) {
       pairs.push({
         topic, content, conversationContext,
         customerMessageId: customerMessage.id,
