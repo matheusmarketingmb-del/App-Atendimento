@@ -62,3 +62,22 @@ test("remove nome do cliente usado como vocativo", () => {
 test("remove nome do cliente no início seguido de vírgula", () => {
   assert.equal(sanitizeAgentResponse("Vinicius, respondendo suas dúvidas:"), "respondendo suas dúvidas:");
 });
+
+test("remove apresentação pessoal completa do atendente", () => {
+  const result = sanitizeAgentResponse(
+    "Tudo bem? Meu nome é Mateus e atuo como Analista Sênior de Marketing aqui na Mibro Brasil. É um prazer falar com você!",
+  );
+  assert.doesNotMatch(result, /Mateus|Analista Sênior/);
+  assert.equal(result, "Tudo bem? É um prazer falar com você!");
+});
+
+test("remove nome após saudação com tudo certo", () => {
+  const result = sanitizeAgentResponse("Bom dia tudo certo Mateus? Conseguiu algum retorno sobre agenda?");
+  assert.doesNotMatch(result, /Mateus/);
+  assert.match(result, /Conseguiu algum retorno/);
+});
+
+test("remove nome mesmo com erro de digitação em bom dia", () => {
+  const result = sanitizeAgentResponse("Bom doa Gustavo, tudo bem? Dia 01/09 ou 03/09?");
+  assert.doesNotMatch(result, /Gustavo/);
+});

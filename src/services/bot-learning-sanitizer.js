@@ -50,8 +50,14 @@ function sanitizeAgentResponse(text, { maxLength = LEARNING_TEXT_MAX_LENGTH } = 
 
   // "Bom dia, Vinicius! Tudo bem?" -> "Bom dia! Tudo bem?"
   sanitized = sanitized.replace(
-    /^([Bb]om\s+dia|[Bb]oa\s+tarde|[Bb]oa\s+noite|[Oo]lá|[Oo]i)[,!]?\s+\p{Lu}[\p{L}'’-]{1,30}\s*([!,.?])/u,
+    /^([Bb]om\s+d(?:ia|oa)|[Bb]oa\s+tarde|[Bb]oa\s+noite|[Oo]lá|[Oo]i)(?:[,]?\s+tudo\s+(?:bem|certo))?[,]?\s+\p{Lu}[\p{L}'’-]{1,30}\s*([!,.?])/u,
     "$1$2",
+  );
+
+  // Remove apresentações pessoais completas antes que virem identidade do Bot.
+  sanitized = sanitized.replace(
+    /\b[Mm]eu nome é\s+\p{Lu}[\p{L}'’-]{1,30}(?:\s+e\s+(?:atuo|trabalho)\s+como\s+[^.!?]+)?[.!]?/gu,
+    "",
   );
 
   // Remove vocativos fora da saudação: "Pode sim, Vinicius!" e "Vinicius, respondendo...".

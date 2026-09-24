@@ -256,7 +256,7 @@ async function curateLearningPairsWithLocalAi(pairs) {
           rejections.push({ topic: chunk[index].topic, reason: String(decision.reason || "").slice(0, 300) });
           continue;
         }
-        const topic = sanitizeForLearning(decision.customerQuestion);
+        const topic = sanitizeAgentResponse(decision.customerQuestion);
         const content = sanitizeAgentResponse(decision.response);
         if (!topic || !content || !isUsefulLearningTopic(topic)) continue;
         curatedPairs.push({
