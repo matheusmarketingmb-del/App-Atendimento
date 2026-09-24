@@ -19,7 +19,7 @@ const {
   LEARNING_SIMILARITY_TOPIC_THRESHOLD, RESOLUTION_NEGATIVE_PATTERNS, RESOLUTION_POSITIVE_PATTERNS,
 } = require("./bot-constants");
 
-const CURRENT_LEARNING_GENERATION_STARTED_AT = new Date("2026-09-24T17:15:50.000Z");
+const CURRENT_LEARNING_GENERATION_STARTED_AT = new Date("2026-09-24T17:29:45.000Z");
 
 const LEARNING_AI_SCHEMA = {
   type: "object",
@@ -31,10 +31,11 @@ const LEARNING_AI_SCHEMA = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["index", "shouldLearn", "response", "reason"],
+        required: ["index", "shouldLearn", "customerQuestion", "response", "reason"],
         properties: {
           index: { type: "integer", minimum: 0 },
           shouldLearn: { type: "boolean" },
+          customerQuestion: { type: "string" },
           response: { type: "string" },
           reason: { type: "string" },
         },
@@ -223,7 +224,7 @@ async function curateLearningPairsWithLocalAi(pairs) {
     for (let offset = 0; offset < pairs.length; offset += 5) {
       const chunk = pairs.slice(offset, offset + 5);
       const userPrompt = [
-        "Analise os pares abaixo. A pergunta deve servir apenas como contexto; reescreva somente a resposta.",
+        "Reescreva customerQuestion removendo nomes pessoais, sem alterar o significado. Reescreva também a resposta.",
         "Não exija que a resposta contenha uma pergunta. Se ela responde ou orienta o cliente, marque shouldLearn=true.",
         "Não transforme nomes, cargos ou apresentações humanas em identidade do Bot.",
         JSON.stringify(chunk.map((pair, index) => ({
@@ -240,23 +241,27 @@ async function curateLearningPairsWithLocalAi(pairs) {
         numCtx: 6144,
       });
       const decisions = Array.isArray(result.parsed?.pairs) ? result.parsed.pairs : null;
-      if (!decisions || decisions.length !== chunk.length) {
-        return { ok: false, reason: "A IA local retornou uma análise de aprendizado incompleta." };
+      if (!decisions) {
+        return { ok: false, reason: "A IA local retornou uma análise de aprendizado inválida." };
       }
       const byIndex = new Map(decisions.map((decision) => [decision.index, decision]));
       for (let index = 0; index < chunk.length; index += 1) {
         const decision = byIndex.get(index);
-        if (!decision || typeof decision.shouldLearn !== "boolean" || typeof decision.response !== "string") {
-          return { ok: false, reason: "A IA local retornou uma decisão inválida." };
+        if (!decision || typeof decision.shouldLearn !== "boolean" || typeof decision.response !== "string"
+          || typeof decision.customerQuestion !== "string") {
+          rejections.push({ topic: chunk[index].topic, reason: "A IA local omitiu este par." });
+          continue;
         }
         if (!decision.shouldLearn) {
           rejections.push({ topic: chunk[index].topic, reason: String(decision.reason || "").slice(0, 300) });
           continue;
         }
+        const topic = sanitizeForLearning(decision.customerQuestion);
         const content = sanitizeAgentResponse(decision.response);
-        if (!content || !isUsefulLearningTopic(chunk[index].topic)) continue;
+        if (!topic || !content || !isUsefulLearningTopic(topic)) continue;
         curatedPairs.push({
           ...chunk[index],
+          topic,
           content,
           aiReason: String(decision.reason || "").slice(0, 300),
           aiProvider: "LOCAL_QWEN",
