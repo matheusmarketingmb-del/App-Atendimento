@@ -10,6 +10,7 @@ const prisma = require("../database/prisma");
 const authorization = require("./authorization-service");
 const { normalizeText } = require("./bot-simulator-service");
 const { similarity } = require("./ai/local-fallback-provider");
+const { resolveLocalQwenInstance } = require("./ai/get-ai-provider");
 const { sanitizeAgentResponse, sanitizeForLearning } = require("./bot-learning-sanitizer");
 const { getGlobalSettings, resolveFeatureFlags } = require("./bot-governance-service");
 const { addExampleToGlobalIntent } = require("./global-intent-service");
@@ -18,7 +19,42 @@ const {
   LEARNING_SIMILARITY_TOPIC_THRESHOLD, RESOLUTION_NEGATIVE_PATTERNS, RESOLUTION_POSITIVE_PATTERNS,
 } = require("./bot-constants");
 
-const CURRENT_LEARNING_GENERATION_STARTED_AT = new Date("2026-09-24T14:52:20.000Z");
+const CURRENT_LEARNING_GENERATION_STARTED_AT = new Date("2026-09-24T17:15:50.000Z");
+
+const LEARNING_AI_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["pairs"],
+  properties: {
+    pairs: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["index", "shouldLearn", "response", "reason"],
+        properties: {
+          index: { type: "integer", minimum: 0 },
+          shouldLearn: { type: "boolean" },
+          response: { type: "string" },
+          reason: { type: "string" },
+        },
+      },
+    },
+  },
+};
+
+const LEARNING_AI_SYSTEM_PROMPT = [
+  "Você é o curador de aprendizado supervisionado do Assistente Mibro Brasil.",
+  "Analise cada par cliente/resposta humana e decida se ele ensina uma resposta útil e reutilizável.",
+  "Nunca invente fatos, preços, prazos, estoque, garantias ou políticas; preserve apenas o conteúdo da resposta humana.",
+  "Nomes como Mateus, Pedro, Vinicius ou qualquer nome encontrado na conversa pertencem a pessoas, nunca ao Bot.",
+  "Remova nomes de clientes e atendentes, cargos pessoais e apresentações humanas. Nunca chame o Bot pelo nome de uma pessoa da conversa.",
+  "Se uma apresentação for realmente necessária, use literalmente {{botName}}; prefira responder diretamente sem apresentação.",
+  "Reescreva a resposta como mensagem direta, natural e profissional do Bot, sem mencionar que foi aprendida de uma conversa.",
+  "Marque shouldLearn=true quando a resposta humana trouxer orientação, informação ou próximo passo reutilizável para a pergunta do cliente. A resposta não precisa repetir nem conter uma pergunta.",
+  "Marque shouldLearn=false apenas para saudações, despedidas, confirmações, mensagens sem pedido útil, prospecção ativa desconectada ou resposta sem conteúdo reutilizável.",
+  "Retorne somente o JSON solicitado, com um item para cada índice recebido.",
+].join("\n");
 
 function fail(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -90,6 +126,7 @@ async function upsertSuggestion(client, { botId, intentId, type, title, suggeste
 // serem aprendidas silenciosamente como se fossem a mesma coisa.
 async function upsertResponseSuggestion(client, {
   botId, topic, content, conversationId, customerMessageId, responseMessageId, conversationContext,
+  aiProvider, aiModel, aiReason,
 }) {
   const candidates = await client.botLearningSuggestion.findMany({
     where: { type: "RESPONSE", status: "PENDING", botId: botId ?? null, createdAt: { gte: CURRENT_LEARNING_GENERATION_STARTED_AT } },
@@ -108,7 +145,10 @@ async function upsertResponseSuggestion(client, {
       data: {
         botId: botId ?? null, conversationId, type: "RESPONSE", title: titleFromText(topic),
         suggestedContent: content, sourceCount: 1,
-        metadata: { topic, customerMessageId, responseMessageId, conversationContext },
+        metadata: {
+          topic, customerMessageId, responseMessageId, conversationContext,
+          aiCurated: true, aiProvider, aiModel, aiReason,
+        },
       },
     });
   }
@@ -120,6 +160,7 @@ async function upsertResponseSuggestion(client, {
         sourceCount: { increment: 1 },
         metadata: {
           ...(topicMatch.candidate.metadata || {}), topic, customerMessageId, responseMessageId, conversationContext,
+          aiCurated: true, aiProvider, aiModel, aiReason,
         },
       },
     });
@@ -132,7 +173,10 @@ async function upsertResponseSuggestion(client, {
     data: {
       botId: botId ?? null, conversationId, type: "RESPONSE", title: titleFromText(topic),
       suggestedContent: content, sourceCount: 1,
-      metadata: { topic, conflict: true, customerMessageId, responseMessageId, conversationContext },
+      metadata: {
+        topic, conflict: true, customerMessageId, responseMessageId, conversationContext,
+        aiCurated: true, aiProvider, aiModel, aiReason,
+      },
     },
   });
 }
@@ -143,6 +187,7 @@ async function upsertResponseSuggestion(client, {
 // humana. Nunca cria a Resposta Rápida sozinho.
 async function suggestQuickReplyIfNew(client, {
   botId, content, conversationId, topic, customerMessageId, responseMessageId, conversationContext,
+  aiProvider, aiModel, aiReason,
 }) {
   const existing = await client.quickReply.findMany({ where: { active: true }, select: { text: true }, take: 500 });
   const normalizedContent = normalizeText(content);
@@ -153,7 +198,10 @@ async function suggestQuickReplyIfNew(client, {
   return upsertSuggestion(client, {
     botId, intentId: null, type: "QUICK_REPLY", title: titleFromText(content),
     suggestedContent: content, conversationId, confidence: null,
-    metadata: { topic, customerMessageId, responseMessageId, conversationContext },
+    metadata: {
+      topic, customerMessageId, responseMessageId, conversationContext,
+      aiCurated: true, aiProvider, aiModel, aiReason,
+    },
   });
 }
 
@@ -162,6 +210,64 @@ function isUsefulLearningTopic(text) {
     .replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
   if (!normalized || normalized.length < 3) return false;
   return !/^(oi|ola|oi tudo bem|ola tudo bem|bom dia|boa tarde|boa noite|tudo bem|como vai|ok|okay|sim|nao|entendi|entao ta bom|ta bom|certo|beleza|obrigado|obrigada|valeu)[.!?]*$/.test(normalized);
+}
+
+async function curateLearningPairsWithLocalAi(pairs) {
+  if (!pairs.length) return { ok: true, pairs: [], model: null };
+  const { provider, error } = await resolveLocalQwenInstance();
+  if (!provider) return { ok: false, reason: error || "IA local indisponível." };
+
+  const curatedPairs = [];
+  const rejections = [];
+  try {
+    for (let offset = 0; offset < pairs.length; offset += 5) {
+      const chunk = pairs.slice(offset, offset + 5);
+      const userPrompt = [
+        "Analise os pares abaixo. A pergunta deve servir apenas como contexto; reescreva somente a resposta.",
+        "Não exija que a resposta contenha uma pergunta. Se ela responde ou orienta o cliente, marque shouldLearn=true.",
+        "Não transforme nomes, cargos ou apresentações humanas em identidade do Bot.",
+        JSON.stringify(chunk.map((pair, index) => ({
+          index,
+          customerQuestion: pair.topic.slice(0, 700),
+          conversationContext: (pair.conversationContext || "").slice(0, 1200),
+          humanResponse: pair.content.slice(0, 1800),
+        }))),
+      ].join("\n\n");
+      const result = await provider.generateStructuredReply({
+        systemPrompt: LEARNING_AI_SYSTEM_PROMPT,
+        userPrompt,
+        jsonSchema: LEARNING_AI_SCHEMA,
+        numCtx: 6144,
+      });
+      const decisions = Array.isArray(result.parsed?.pairs) ? result.parsed.pairs : null;
+      if (!decisions || decisions.length !== chunk.length) {
+        return { ok: false, reason: "A IA local retornou uma análise de aprendizado incompleta." };
+      }
+      const byIndex = new Map(decisions.map((decision) => [decision.index, decision]));
+      for (let index = 0; index < chunk.length; index += 1) {
+        const decision = byIndex.get(index);
+        if (!decision || typeof decision.shouldLearn !== "boolean" || typeof decision.response !== "string") {
+          return { ok: false, reason: "A IA local retornou uma decisão inválida." };
+        }
+        if (!decision.shouldLearn) {
+          rejections.push({ topic: chunk[index].topic, reason: String(decision.reason || "").slice(0, 300) });
+          continue;
+        }
+        const content = sanitizeAgentResponse(decision.response);
+        if (!content || !isUsefulLearningTopic(chunk[index].topic)) continue;
+        curatedPairs.push({
+          ...chunk[index],
+          content,
+          aiReason: String(decision.reason || "").slice(0, 300),
+          aiProvider: "LOCAL_QWEN",
+          aiModel: provider.model || null,
+        });
+      }
+    }
+    return { ok: true, pairs: curatedPairs, rejections, model: provider.model || null };
+  } catch (aiError) {
+    return { ok: false, reason: aiError.message || "Falha ao consultar a IA local." };
+  }
 }
 
 // Percorre toda a conversa em ordem cronológica. Cada resposta humana é
@@ -285,7 +391,12 @@ async function analyzeConversation(conversationId, { force = false, client = pri
     const suggestions = [];
 
     if (resolutionSignal !== "NEGATIVE") {
-      const pairs = buildConversationPairs(messages);
+      const extractedPairs = buildConversationPairs(messages);
+      const curation = await curateLearningPairsWithLocalAi(extractedPairs);
+      if (!curation.ok) {
+        return { analyzed: false, reason: "LOCAL_AI_UNAVAILABLE", detail: curation.reason };
+      }
+      const pairs = curation.pairs;
       for (const pair of pairs) {
         const observation = await client.botObservation.findFirst({
           where: { messageId: pair.customerMessageId }, include: { bot: { select: { featureFlags: true } } },
@@ -298,6 +409,8 @@ async function analyzeConversation(conversationId, { force = false, client = pri
           const pairMetadata = {
             topic: pair.topic, customerMessageId: pair.customerMessageId,
             responseMessageId: pair.responseMessageId, conversationContext: pair.conversationContext,
+            aiCurated: true, aiProvider: pair.aiProvider, aiModel: pair.aiModel,
+            aiReason: pair.aiReason,
           };
           if (observation?.intentId) {
             const existingExamples = await client.botIntentExample.findMany({
@@ -327,11 +440,13 @@ async function analyzeConversation(conversationId, { force = false, client = pri
             botId: observation?.botId || null, topic: sanitizedExample, content: pair.content, conversationId,
             customerMessageId: pair.customerMessageId, responseMessageId: pair.responseMessageId,
             conversationContext: pair.conversationContext,
+            aiProvider: pair.aiProvider, aiModel: pair.aiModel, aiReason: pair.aiReason,
           }));
           const quickReplySuggestion = await suggestQuickReplyIfNew(client, {
             botId: observation?.botId || null, content: pair.content, conversationId, topic: sanitizedExample,
             customerMessageId: pair.customerMessageId, responseMessageId: pair.responseMessageId,
             conversationContext: pair.conversationContext,
+            aiProvider: pair.aiProvider, aiModel: pair.aiModel, aiReason: pair.aiReason,
           });
           if (quickReplySuggestion) suggestions.push(quickReplySuggestion);
         }
@@ -497,6 +612,7 @@ module.exports = {
   analyzeConversationManually,
   approveSuggestion,
   buildConversationPairs,
+  curateLearningPairsWithLocalAi,
   createSuggestionFromObservationFeedback,
   detectResolutionSignal,
   editSuggestion,

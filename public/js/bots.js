@@ -1461,6 +1461,7 @@ function renderLearningSuggestions(rows) {
       <header>
         <span class="learning-type">${escapeHtml(learningTypeLabels[row.type] || row.type)}</span>
         ${row.metadata?.conflict ? '<span class="learning-conflict">CONFLITO</span>' : ""}
+        ${row.metadata?.aiCurated ? `<span class="learning-meta">Curadoria: IA local ${escapeHtml(row.metadata.aiModel || "")}</span>` : ""}
         <span class="learning-meta">${escapeHtml(row.bot?.name || "Sem Bot")} ${row.intent ? `&bull; ${escapeHtml(row.intent.name)}` : ""} &bull; ${row.sourceCount} conversa(s) &bull; ${new Date(row.createdAt).toLocaleDateString("pt-BR")}</span>
       </header>
       <p><b>O que será aprendido</b></p>
