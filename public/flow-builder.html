@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#ef5b2a">
+  <link rel="icon" type="image/png" sizes="192x192" href="/assets/app-icon-192.png">
+  <title>Editor Visual &bull; Bots</title>
+  <script>try{const saved=localStorage.getItem("mibro-theme");document.documentElement.dataset.theme=saved||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light")}catch{}</script>
+  <link rel="stylesheet" href="/css/bots.css">
+  <link rel="stylesheet" href="/css/flow-builder.css">
+</head>
+<body class="flow-builder-page">
+  <header class="topbar">
+    <a class="brand" href="/"><img src="/assets/mibro-logo.png" alt="Mibro"><span></span><small>Editor Visual de Fluxos</small></a>
+    <a id="back-to-bot" class="back-link fb-back" href="/bots">&larr; Bots</a>
+    <div class="fb-title">
+      <span id="fb-bot-name">Carregando...</span>
+      <div class="fb-title-row">
+        <select id="fb-flow-select" aria-label="Fluxo"></select>
+        <input id="fb-flow-name" type="text" maxlength="120" aria-label="Nome do fluxo" placeholder="Nome do fluxo">
+        <button id="fb-new-flow" class="fb-ghost" type="button" title="Criar outro fluxo neste Bot">+ Fluxo</button>
+      </div>
+    </div>
+    <span id="fb-status" class="status-badge">RASCUNHO</span>
+    <span id="fb-version" class="fb-version">sem versão publicada</span>
+    <span id="fb-dirty" class="fb-dirty" hidden>alterações não salvas</span>
+    <div class="fb-actions">
+      <button id="fb-undo" class="fb-ghost" type="button" title="Desfazer (Ctrl+Z)">&#8630;</button>
+      <button id="fb-redo" class="fb-ghost" type="button" title="Refazer (Ctrl+Y)">&#8631;</button>
+      <button id="fb-validate" class="fb-ghost" type="button">Validar</button>
+      <button id="fb-save" class="fb-ghost" type="button" title="Salvar rascunho (Ctrl+S)">Salvar</button>
+      <button id="fb-test" class="fb-ghost" type="button">Testar</button>
+      <button id="fb-toggle-status" class="fb-ghost" type="button">Desativar</button>
+      <button id="fb-publish" class="fb-primary" type="button">Publicar versão</button>
+    </div>
+    <button id="theme-toggle" class="round-button" type="button" title="Alternar tema">&#9790;</button>
+  </header>
+
+  <main class="fb-shell">
+    <aside class="fb-library" aria-label="Biblioteca de elementos">
+      <div class="fb-library-heading"><span>ELEMENTOS</span><p>Arraste para o canvas ou clique para adicionar.</p></div>
+      <input id="fb-library-search" type="search" placeholder="Buscar elemento" aria-label="Buscar elemento">
+      <div id="fb-library-list"></div>
+      <div class="fb-mode-card">
+        <b>Motor do Bot</b>
+        <p id="fb-mode-text">Este Bot usa o motor atual.</p>
+        <button id="fb-mode-toggle" class="fb-ghost" type="button">Usar Editor Visual</button>
+        <small>Mesmo em uso, o fluxo só responde clientes com o Bot ativo e a auto-resposta ligada. Respostas geradas por IA continuam em modo dry-run.</small>
+      </div>
+    </aside>
+
+    <section id="fb-canvas" class="fb-canvas" tabindex="0" aria-label="Canvas do fluxo">
+      <div id="fb-viewport" class="fb-viewport">
+        <svg id="fb-edges" class="fb-edges" aria-hidden="true"></svg>
+        <div id="fb-nodes"></div>
+      </div>
+      <div class="fb-zoom">
+        <button id="fb-zoom-in" type="button" title="Aproximar">+</button>
+        <span id="fb-zoom-label">100%</span>
+        <button id="fb-zoom-out" type="button" title="Afastar">&minus;</button>
+        <button id="fb-fit" type="button" title="Enquadrar fluxo">&#9974;</button>
+      </div>
+      <div id="fb-validation" class="fb-validation" hidden></div>
+      <div id="fb-test-legend" class="fb-test-legend" hidden>
+        <span class="lg visited">executado</span><span class="lg current">atual</span><span class="lg idle">não executado</span><span class="lg error">erro</span>
+      </div>
+    </section>
+
+    <aside class="fb-panel" aria-label="Painel lateral">
+      <nav class="fb-panel-tabs">
+        <button type="button" class="active" data-panel="props">Propriedades</button>
+        <button type="button" data-panel="test">Testar</button>
+        <button type="button" data-panel="versions">Versões</button>
+      </nav>
+      <div id="fb-panel-props" class="fb-panel-body"></div>
+      <div id="fb-panel-test" class="fb-panel-body" hidden>
+        <div class="fb-test-head">
+          <label>Testar a partir do
+            <select id="fb-test-source"><option value="DRAFT">rascunho atual</option><option value="ACTIVE">versão publicada</option></select>
+          </label>
+          <p class="fb-note">Simulação: nenhuma mensagem é enviada e nenhuma conversa é alterada.</p>
+        </div>
+        <div id="fb-test-transcript" class="fb-transcript"></div>
+        <form id="fb-test-form" class="fb-test-form">
+          <input id="fb-test-input" type="text" maxlength="2000" placeholder="Mensagem do cliente" autocomplete="off">
+          <button type="submit" class="fb-primary">Enviar</button>
+          <button id="fb-test-reset" type="button" class="fb-ghost">Reiniciar</button>
+        </form>
+        <div id="fb-test-trace" class="fb-trace"></div>
+      </div>
+      <div id="fb-panel-versions" class="fb-panel-body" hidden></div>
+    </aside>
+  </main>
+  <div id="toast" class="toast"></div>
+  <script src="/js/flow-builder.js"></script>
+</body>
+</html>

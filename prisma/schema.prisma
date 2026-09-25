@@ -345,6 +345,7 @@ model Conversation {
   handoffContexts          BotHandoffContext[]
   quickReplyUsages         QuickReplyUsage[]
   suggestionFeedback       BotSuggestionFeedback[]
+  botFlowExecutions        BotFlowExecution[]
   channelAccount           ChannelAccount?            @relation(fields: [channelAccountId], references: [id], onDelete: SetNull)
   originCampaign           Campaign?                  @relation(fields: [originCampaignId], references: [id], onDelete: SetNull)
   originCampaignContact    CampaignContact?           @relation(fields: [originCampaignContactId], references: [id], onDelete: SetNull)
@@ -612,6 +613,10 @@ model Bot {
   requestRatingComment  Boolean @default(false)
 
   archivedAt              DateTime?
+  // Flow Builder (Editor Visual): LEGACY = motor atual (intenções/etapas
+  // lineares/triagem), FLOW_BUILDER = executa o BotFlow ativo deste Bot
+  // (bot-visual-flow-engine.js). Padrão LEGACY: nenhum Bot existente muda.
+  executionMode           BotExecutionMode @default(LEGACY)
   createdAt               DateTime                @default(now())
   updatedAt               DateTime                @updatedAt
   defaultCategory         Category?               @relation(fields: [defaultCategoryId], references: [id], onDelete: SetNull)
@@ -633,6 +638,7 @@ model Bot {
   personality             BotPersonality?
   responseBlocks          BotResponseBlock[]
   synonymGroups           BotSynonymGroup[]
+  visualFlows             BotFlow[]
 
   @@index([status, channel])
   @@index([defaultCategoryId])
@@ -2078,4 +2084,130 @@ model BotAiShadowLog {
 
   @@index([botId, createdAt])
   @@index([conversationId, createdAt])
+}
+
+// ============================================================
+// Flow Builder (Editor Visual de Bots)
+// ============================================================
+// O grafo (nós + conexões + posições) é salvo inteiro em JSON: o editor
+// sempre grava o grafo todo de uma vez e versões publicadas são imutáveis,
+// então tabelas por nó/aresta só adicionariam joins. Shape validado em
+// bot-visual-flow-graph.js — nunca lido cru por outro módulo.
+
+enum BotExecutionMode {
+  LEGACY
+  FLOW_BUILDER
+}
+
+enum BotFlowStatus {
+  DRAFT
+  ACTIVE
+  INACTIVE
+}
+
+enum BotFlowExecutionStatus {
+  RUNNING
+  WAITING_CUSTOMER
+  WAITING_TIMER
+  HANDED_OFF
+  COMPLETED
+  FAILED
+}
+
+model BotFlow {
+  id              String        @id @default(cuid())
+  botId           String
+  name            String
+  description     String?
+  status          BotFlowStatus @default(DRAFT)
+  // Rascunho em edição — nunca executado em conversa real. Publicar copia
+  // isto para uma BotFlowVersion nova e aponta activeVersionId para ela.
+  draftGraph      Json
+  draftUpdatedAt  DateTime      @default(now())
+  activeVersionId String?       @unique
+  // Fluxo padrão do Bot quando o Bot está em executionMode FLOW_BUILDER.
+  isDefault       Boolean       @default(false)
+  archivedAt      DateTime?
+  createdByUserId String?
+  createdByName   String?
+  updatedByUserId String?
+  updatedByName   String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  bot           Bot                @relation(fields: [botId], references: [id], onDelete: Cascade)
+  activeVersion BotFlowVersion?    @relation("BotFlowActiveVersion", fields: [activeVersionId], references: [id], onDelete: SetNull)
+  versions      BotFlowVersion[]   @relation("BotFlowVersions")
+  executions    BotFlowExecution[]
+
+  @@index([botId, archivedAt])
+}
+
+model BotFlowVersion {
+  id                String   @id @default(cuid())
+  flowId            String
+  version           Int
+  graph             Json
+  label             String?
+  publishedByUserId String?
+  publishedByName   String?
+  createdAt         DateTime @default(now())
+
+  flow         BotFlow            @relation("BotFlowVersions", fields: [flowId], references: [id], onDelete: Cascade)
+  activeFor    BotFlow?           @relation("BotFlowActiveVersion")
+  executions   BotFlowExecution[]
+
+  @@unique([flowId, version])
+}
+
+model BotFlowExecution {
+  id             String                 @id @default(cuid())
+  conversationId String
+  botId          String
+  flowId         String
+  versionId      String
+  currentNodeKey String?
+  context        Json                   @default("{}")
+  status         BotFlowExecutionStatus @default(RUNNING)
+  // WAITING_TIMER: quando o worker deve retomar (bot-visual-flow-worker.js).
+  resumeAt       DateTime?
+  // Idempotência: última mensagem do cliente já consumida por esta execução.
+  lastMessageId  String?
+  // Contador otimista — toda transição faz updateMany(where step = N).
+  step           Int                    @default(0)
+  error          String?
+  startedAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+  finishedAt     DateTime?
+
+  conversation Conversation          @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  flow         BotFlow               @relation(fields: [flowId], references: [id], onDelete: Cascade)
+  version      BotFlowVersion        @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  logs         BotFlowExecutionLog[]
+
+  @@index([conversationId, status])
+  @@index([status, resumeAt])
+  @@index([flowId])
+}
+
+model BotFlowExecutionLog {
+  id          String   @id @default(cuid())
+  executionId String
+  flowId      String
+  version     Int
+  nodeKey     String
+  nodeType    String
+  // Entrada/saída sempre sanitizadas (sem headers/segredos) — ver
+  // sanitizeForLog em bot-visual-flow-engine.js.
+  input       Json?
+  output      Json?
+  branch      String?
+  result      String
+  error       String?
+  durationMs  Int?
+  createdAt   DateTime @default(now())
+
+  execution BotFlowExecution @relation(fields: [executionId], references: [id], onDelete: Cascade)
+
+  @@index([executionId, createdAt])
 }

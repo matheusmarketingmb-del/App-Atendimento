@@ -298,6 +298,11 @@ function renderEditor() {
   $("#system-bot-badge").hidden = !bot.isSystem;
   $("#archive-bot").hidden = Boolean(bot.isSystem);
   const isTriage = bot.type === "SYSTEM_TRIAGE";
+  // Flow Builder (Editor Visual): o Bot de Triagem do sistema continua no
+  // motor atual nesta versão.
+  $("#open-flow-builder").hidden = isTriage;
+  $("#open-flow-builder").href = `/flow-builder?botId=${encodeURIComponent(bot.id)}`;
+  $("#open-flow-builder").textContent = bot.executionMode === "FLOW_BUILDER" ? "▦ Editor Visual • em uso" : "▦ Editor Visual";
   $("#triage-only-fields").hidden = !isTriage;
   $("#triage-only-config").hidden = !isTriage;
   $("#triage-options-card").hidden = !isTriage;

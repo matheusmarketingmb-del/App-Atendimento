@@ -27,6 +27,8 @@ const userManagementController = require("./controllers/user-management-controll
 const auditController = require("./controllers/audit-controller");
 const { documentMimeTypes } = require("./services/media-storage-service");
 const botController = require("./controllers/bot-controller");
+const visualFlowController = require("./controllers/bot-visual-flow-controller");
+const { handleIncomingVisualFlow } = require("./services/bot-visual-flow-service");
 const internalChatController = require("./controllers/internal-chat-controller");
 const integrationsController = require("./controllers/integrations-controller");
 const socialContentMappingController = require("./controllers/social-content-mapping-controller");
@@ -187,7 +189,18 @@ function createApp({ channel = new MetaCloudChannel() } = {}) {
                 if (flood.throttled) {
                   console.warn(`[SECURITY] limite de mensagens por contato excedido (${flood.count} na janela) — processamento automático pulado para este turno. key=${floodKey}`);
                 } else {
-                  await handleIncomingTriage(event, result.message, eventChannel);
+                  // Flow Builder (Editor Visual): só age para Bot em modo
+                  // FLOW_BUILDER + ativo + auto-resposta ligada. Qualquer
+                  // outro caso (todos os Bots atuais) devolve false e a
+                  // triagem legada segue exatamente como antes. Falha no
+                  // Flow Builder nunca impede a triagem.
+                  let handledByVisualFlow = false;
+                  try {
+                    handledByVisualFlow = await handleIncomingVisualFlow(event, result.message, eventChannel);
+                  } catch (flowError) {
+                    console.error("[BOT_FLOW] falha no Flow Builder (triagem legada segue):", flowError.message);
+                  }
+                  if (!handledByVisualFlow) await handleIncomingTriage(event, result.message, eventChannel);
                   observeIncomingMessage(event, result.message).catch(() => {});
                   shadowIncomingMessage(event, result.message).catch(() => {});
                 }
@@ -343,6 +356,9 @@ function createApp({ channel = new MetaCloudChannel() } = {}) {
   ));
   app.get(["/quick-replies", "/quick-replies.html"], requireMasterPage, (_req, res) => (
     res.sendFile(path.join(process.cwd(), "public", "quick-replies.html"))
+  ));
+  app.get(["/flow-builder", "/flow-builder.html"], requireMasterPage, (_req, res) => (
+    res.sendFile(path.join(process.cwd(), "public", "flow-builder.html"))
   ));
   app.get(["/knowledge-base", "/knowledge-base.html"], requireMasterPage, (_req, res) => (
     res.sendFile(path.join(process.cwd(), "public", "knowledge-base.html"))
@@ -580,6 +596,25 @@ app.post(
   app.put("/api/bots/:botId/personality", botController.updatePersonality);
   app.post("/api/bots/:botId/personality/preset", botController.applyPersonalityPreset);
   app.post("/api/bots/:botId/personality/copy", botController.copyPersonality);
+
+  // Flow Builder (Editor Visual). Permissão (só Master) validada no serviço.
+  app.get("/api/bots/:botId/visual-flows", visualFlowController.list);
+  app.post("/api/bots/:botId/visual-flows", visualFlowController.create);
+  app.get("/api/bots/:botId/visual-flow-options", visualFlowController.options);
+  app.patch("/api/bots/:botId/execution-mode", visualFlowController.executionMode);
+  app.get("/api/bots/:botId/visual-flows/:flowId", visualFlowController.detail);
+  app.put("/api/bots/:botId/visual-flows/:flowId/draft", visualFlowController.saveDraft);
+  app.post("/api/bots/:botId/visual-flows/:flowId/validate", visualFlowController.validate);
+  app.post("/api/bots/:botId/visual-flows/:flowId/publish", visualFlowController.publish);
+  app.patch("/api/bots/:botId/visual-flows/:flowId/status", visualFlowController.status);
+  app.post("/api/bots/:botId/visual-flows/:flowId/default", visualFlowController.setDefault);
+  app.delete("/api/bots/:botId/visual-flows/:flowId", visualFlowController.archive);
+  app.get("/api/bots/:botId/visual-flows/:flowId/versions/:version", visualFlowController.version);
+  app.post("/api/bots/:botId/visual-flows/:flowId/versions/:version/rollback", visualFlowController.rollback);
+  app.post("/api/bots/:botId/visual-flows/:flowId/versions/:version/restore-draft", visualFlowController.restoreToDraft);
+  app.post("/api/bots/:botId/visual-flows/:flowId/simulate", visualFlowController.simulate);
+  app.get("/api/bots/:botId/visual-flows/:flowId/executions", visualFlowController.executions);
+  app.get("/api/bots/:botId/visual-flows/:flowId/executions/:executionId/logs", visualFlowController.executionLogs);
 
   // Tools (itens 5-7): listagem só de leitura.
   app.get("/api/bot-tools", botController.listTools);
