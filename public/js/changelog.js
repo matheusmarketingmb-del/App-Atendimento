@@ -1,9 +1,10 @@
 (() => {
-  const APP_VERSION = "0.34.5";
+  const APP_VERSION = "0.34.6";
 
 
 
   const CHANGELOG = [
+    { version: "0.34.6", date: "25/09/2026", title: "FAQ contextual e transferências por setor", changes: ["Novo FAQ no cabeçalho adapta as orientações ao perfil e às permissões da conta.", "Atendentes e Supervisores podem transferir conversas para qualquer categoria pública ativa permitida pelo canal.", "Categorias não liberadas continuam ocultas na barra lateral e a conversa sai da tela após ser transferida para uma fila sem acesso.", "Categorias Somente Master permanecem invisíveis e bloqueadas para os demais perfis.", "A permissão Transferir conversas foi renomeada para Alterar responsável, separando a troca de Atendente da mudança de categoria.", "Os manuais de Atendente, Supervisor e Master foram atualizados com as novas regras."] },
     { version: "0.34.5", date: "24/09/2026", title: "Aprendizado corrigido e regenerado", changes: ["O Qwen local agora analisa e reescreve as respostas de treinamento antes da revisão humana.", "Nomes e cargos dos atendentes não são assumidos pelo Bot; apresentações usam somente {{botName}}.", "Sugestões antigas foram preservadas, mas retiradas da fila atual.", "A fila atual contém somente sugestões geradas pelo pareamento corrigido.", "Novas intenções só são agrupadas quando o texto coincide.", "Saudações compostas e confirmações são ignoradas."] },
     { version: "0.34.4", date: "24/09/2026", title: "Sugestões de aprendizado claras", changes: ["Saudações e confirmações isoladas não viram novas intenções.", "Cartões diferenciam claramente nova intenção de resposta sugerida.", "Sugestões pendentes foram regeneradas sem nomes pessoais."] },
     { version: "0.34.3", date: "24/09/2026", title: "Aprendizado por conversa", changes: ["Cada sugestão mostra a pergunta específica do cliente e a resposta humana correspondente.", "Toda a conversa finalizada é analisada em pares pergunta–resposta.", "Nomes de clientes e atendentes não são aprendidos; apresentações usam {{botName}}."] },
