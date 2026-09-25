@@ -189,6 +189,10 @@ html[data-theme="dark"] .category-dialog { color:#eef0f3; background:#1b1e23; }
 html[data-theme="dark"] .transfer-history-option { border-color:#704131; color:#e1e4e8; background:#2b211e; }
 html[data-theme="dark"] .transfer-history-option small { color:#aeb4bd; }
 html[data-theme="dark"] .transfer-actions button { border-color:#3b4149; color:#d7dbe0; background:#24282e; }
+.transfer-text-field { margin-top:12px; display:grid; gap:5px; color:#4f5963; font-size:11px; font-weight:700; }
+.transfer-text-field input,.transfer-text-field textarea { width:100%; padding:9px 11px; border:1px solid var(--line); border-radius:10px; font:inherit; font-weight:400; color:inherit; background:#fff; resize:vertical; }
+html[data-theme="dark"] .transfer-text-field { color:#d7dbe0; }
+html[data-theme="dark"] .transfer-text-field input,html[data-theme="dark"] .transfer-text-field textarea { border-color:#3b4149; background:#24282e; }
 html[data-theme="dark"] .transfer-actions button[type="submit"] { border-color:var(--orange); color:#fff; background:var(--orange); }
 html[data-theme="dark"] .dialog-header > button,html[data-theme="dark"] .dialog-header-actions button { color:#d4d7dc; background:#2b3037; }
 html[data-theme="dark"] .contact-files-dialog { color:#eef0f3; background:#1b1e23; }
@@ -871,6 +875,40 @@ html[data-theme="dark"] .changelog-release-heading b {
   font-weight: 700;
   cursor: pointer;
 }
+
+.internal-chat-new-group-row { padding: 12px 12px 0; }
+.internal-chat-new-group-row button { width: 100%; height: 38px; border: 1px dashed #ff6633; border-radius: 10px; background: transparent; color: #ff9a76; font-weight: 700; cursor: pointer; }
+.internal-chat-new-group-row button:hover { background: rgba(255, 102, 51, 0.12); color: #fff; }
+.internal-chat-section-title { margin: 6px 4px 0; color: #98a4b5; font-size: 10px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+.internal-chat-subtitle { display: block; margin-top: 4px; color: #98a4b5; font-size: 12px; }
+.internal-chat-header { justify-content: space-between; gap: 12px; }
+.internal-chat-participants-button { height: 34px; padding: 0 14px; border: 1px solid #323a46; border-radius: 10px; background: #202732; color: #eef2f7; font-weight: 700; cursor: pointer; }
+.internal-chat-participants-button:hover { border-color: #ff6633; }
+.internal-system-line { align-self: center; max-width: 90%; padding: 6px 12px; border-radius: 999px; background: #1d2430; color: #98a4b5; font-size: 12px; text-align: center; }
+.internal-group-dialog { width: min(460px, calc(100vw - 32px)); max-height: 86vh; padding: 0; border: 1px solid #2a313b; border-radius: 16px; background: #171d25; color: #eef2f7; }
+.internal-group-dialog::backdrop { background: #0008; }
+.internal-group-panel { display: flex; flex-direction: column; gap: 12px; padding: 18px; max-height: 86vh; overflow-y: auto; }
+.internal-group-panel header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.internal-group-panel header span { color: #98a4b5; font-size: 10px; font-weight: 800; letter-spacing: .12em; }
+.internal-group-panel header h3 { margin: 4px 0 0; font-size: 20px; color: #fff; }
+.internal-group-panel header small { color: #98a4b5; font-size: 12px; }
+.internal-group-panel header button { width: 32px; height: 32px; border: 1px solid #323a46; border-radius: 10px; background: #202732; color: #d8e0ea; font-size: 20px; cursor: pointer; }
+.internal-group-field { display: grid; gap: 6px; color: #98a4b5; font-size: 11px; font-weight: 700; }
+.internal-group-field input, .internal-group-inline input { height: 38px; padding: 0 12px; border: 1px solid #323a46; border-radius: 10px; background: #202732; color: #eef2f7; outline: none; }
+.internal-group-inline { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+.internal-group-user-list { display: flex; flex-direction: column; gap: 6px; max-height: 240px; overflow-y: auto; }
+.internal-group-user { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid #2d3541; border-radius: 10px; background: #1d2430; }
+.internal-group-user > span { flex: 1; min-width: 0; }
+.internal-group-user b { display: block; font-size: 13px; }
+.internal-group-user small { color: #98a4b5; font-size: 11px; }
+.internal-group-user input { accent-color: #ff6633; }
+.internal-group-user button { height: 28px; padding: 0 10px; border: 1px solid #323a46; border-radius: 8px; background: #202732; color: #d8e0ea; font-size: 11px; cursor: pointer; }
+.internal-group-user button.danger, .internal-group-panel footer button.danger { border-color: #7a2e2e; color: #ffb4b4; }
+.internal-group-panel footer { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+.internal-group-panel footer button, .internal-group-inline button, .internal-group-add > button { height: 36px; padding: 0 14px; border: 1px solid #323a46; border-radius: 10px; background: #202732; color: #eef2f7; font-weight: 700; cursor: pointer; }
+.internal-group-panel footer button[type="submit"], .internal-group-inline button, .internal-group-add > button { border-color: #ff6633; background: #ff6633; color: #fff; }
+.internal-group-add { display: grid; gap: 8px; padding-top: 10px; border-top: 1px solid #2a313b; }
+.internal-group-empty { color: #98a4b5; font-size: 12px; padding: 6px 2px; }
 
 .internal-chat-main {
   min-width: 0;

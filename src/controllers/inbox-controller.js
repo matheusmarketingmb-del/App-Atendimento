@@ -1,5 +1,4 @@
 const inbox = require("../services/inbox-service");
-const prisma = require("../database/prisma");
 const { resolveMedia } = require("../services/media-storage-service");
 const { finalizeConversation, sendDocument, sendImage, sendText, sendVideo } = require("../services/message-service");
 const inboxEvents = require("../realtime/inbox-events");
@@ -303,12 +302,10 @@ async signalTransfer(req, res, next) {
     },
     async media(req, res, next) {
       try {
-        const message = await prisma.message.findUnique({
-          where: { id: req.params.messageId },
-          select: { conversationId: true, mediaStorageKey: true, mediaMimeType: true, mediaFileName: true },
-        });
-        if (!message?.mediaStorageKey) return res.status(404).json({ error: "Mídia não encontrada." });
-        await authorization.assertCanViewConversation(req.user, message.conversationId);
+        // Acesso à conversa + mensagem dentro do histórico visível do usuário
+        // (anexo de etapa oculta não é servido nem para quem sabe o ID).
+        const message = await inbox.assertCanViewMessage(req.user, req.params.messageId);
+        if (!message.mediaStorageKey) return res.status(404).json({ error: "Mídia não encontrada." });
         res.set({
           "Content-Type": message.mediaMimeType,
           "Content-Disposition": `inline; filename="${encodeURIComponent(message.mediaFileName || "midia")}"`,

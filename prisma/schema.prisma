@@ -117,6 +117,15 @@ enum InternalChatType {
   GENERAL
   SECTOR
   DIRECT
+  // Grupo criado por um usuário (chat interno com grupos): nome livre,
+  // membros escolhidos pelo criador, papel ADMIN/MEMBER em
+  // InternalChatMember. Reaproveita InternalMessage/lastReadAt/SSE.
+  GROUP
+}
+
+enum InternalChatMemberRole {
+  MEMBER
+  ADMIN
 }
 
 enum InternalMessageType {
@@ -425,6 +434,7 @@ model User {
   conversationActivities       ConversationActivity[]   @relation("ConversationActivityActor")
   auditLogs                    AuditLog[]               @relation("AuditLogActor")
   internalChatMemberships      InternalChatMember[]
+  internalChatsCreated         InternalChat[]           @relation("InternalChatCreatedBy")
   internalMessages             InternalMessage[]
   observationFeedback          BotObservation[]         @relation("ObservationFeedbackUser")
   reviewedLearningSuggestions  BotLearningSuggestion[]  @relation("LearningSuggestionReviewer")
@@ -1616,25 +1626,33 @@ model UserHiddenCategory {
 }
 
 model InternalChat {
-  id         String           @id @default(cuid())
-  key        String           @unique
-  type       InternalChatType
-  name       String?
-  categoryId String?
-  createdAt  DateTime         @default(now())
-  updatedAt  DateTime         @updatedAt
+  id              String           @id @default(cuid())
+  key             String           @unique
+  type            InternalChatType
+  name            String?
+  categoryId      String?
+  // Somente grupos (type GROUP): quem criou e quando foi encerrado. Grupo
+  // encerrado vira somente leitura — o histórico nunca é apagado.
+  createdByUserId String?
+  archivedAt      DateTime?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
 
-  category Category?            @relation(fields: [categoryId], references: [id], onDelete: Cascade)
-  members  InternalChatMember[]
-  messages InternalMessage[]
+  category  Category?            @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  createdBy User?                @relation("InternalChatCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  members   InternalChatMember[]
+  messages  InternalMessage[]
 
   @@index([type])
   @@index([categoryId])
+  @@index([createdByUserId])
 }
 
 model InternalChatMember {
   chatId     String
   userId     String
+  // Só tem efeito em grupos (GENERAL/SECTOR/DIRECT continuam MEMBER).
+  role       InternalChatMemberRole @default(MEMBER)
   lastReadAt DateTime?
   createdAt  DateTime  @default(now())
 

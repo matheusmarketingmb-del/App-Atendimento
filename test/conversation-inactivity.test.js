@@ -7,8 +7,11 @@ const { saveIncoming } = require("../src/services/message-service");
 
 const testContacts = ["inactive-outgoing-test", "inactive-incoming-test", "inactive-routing-test"];
 
+const lastAgentEmail = "inactive-last-agent@mibro.test";
+
 test.after(async () => {
   await prisma.contact.deleteMany({ where: { externalId: { in: testContacts } } });
+  await prisma.user.deleteMany({ where: { email: lastAgentEmail } });
   await prisma.$disconnect();
 });
 
@@ -25,8 +28,10 @@ test("finaliza após 24 horas com última mensagem da empresa ou do cliente", as
   const routingContact = await prisma.contact.create({
     data: { externalId: testContacts[2], phone: "5511977770003", name: "Cliente recém-encaminhado" },
   });
+  await prisma.user.deleteMany({ where: { email: lastAgentEmail } });
+  const lastAgent = await prisma.user.create({ data: { name: "Último atendente", email: lastAgentEmail, role: "ATENDENTE" } });
   const outgoingConversation = await prisma.conversation.create({
-    data: { contactId: outgoingContact.id, categoryId: support.id, status: "EM_ATENDIMENTO", lastMessageAt: old },
+    data: { contactId: outgoingContact.id, categoryId: support.id, assignedUserId: lastAgent.id, status: "EM_ATENDIMENTO", lastMessageAt: old },
   });
   const incomingConversation = await prisma.conversation.create({
     data: { contactId: incomingContact.id, categoryId: support.id, status: "AGUARDANDO_EQUIPE", lastMessageAt: old },
@@ -43,8 +48,9 @@ test("finaliza após 24 horas com última mensagem da empresa ou do cliente", as
   assert.equal(await finalizeInactiveConversations({ now }), 2);
   const finalized = await prisma.conversation.findUnique({ where: { id: outgoingConversation.id } });
   assert.equal(finalized.status, "FINALIZADO");
+  // Continua na categoria e com o último atendente (privada para ele).
   assert.equal(finalized.categoryId, support.id);
-  assert.equal(finalized.assignedUserId, null);
+  assert.equal(finalized.assignedUserId, lastAgent.id);
   assert.ok(finalized.finalizedAt);
   const finalizedIncoming = await prisma.conversation.findUnique({ where: { id: incomingConversation.id } });
   assert.equal(finalizedIncoming.status, "FINALIZADO");

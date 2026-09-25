@@ -31,9 +31,12 @@ async function finalizeInactiveConversations({
     await client.$transaction(async (transaction) => {
       const updated = await transaction.conversation.updateMany({
         where: { id: conversation.id, status: { not: "FINALIZADO" }, lastMessageAt: { lte: cutoff } },
+        // Mantém categoria e último responsável: a conversa finalizada segue
+        // na categoria, visível só a quem atendeu por último (e ao Master).
+        // Se o cliente voltar a escrever, a reabertura (message-service)
+        // limpa categoria/responsável para a triagem escolher de novo.
         data: {
-          status: "FINALIZADO", assignedUserId: null,
-          unreadCount: 0, finalizedAt: now,
+          status: "FINALIZADO", unreadCount: 0, finalizedAt: now,
         },
       });
       if (!updated.count) return;

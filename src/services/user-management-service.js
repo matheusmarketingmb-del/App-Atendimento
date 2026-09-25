@@ -93,7 +93,10 @@ async function listTeamActivity(viewer) {
   if (!authorization.isMaster(viewer) && !viewer.canViewTeamActivity) {
     throw authorization.forbidden("Você não pode acompanhar a atividade da equipe.");
   }
-  const scope = await authorization.conversationScope(viewer);
+  // Só contagens agregadas por responsável (nenhum conteúdo de conversa):
+  // usa o escopo por setor para o supervisor continuar acompanhando a carga
+  // da equipe mesmo sem acesso às conversas assumidas por outros.
+  const scope = await authorization.sectorScope(viewer);
   const [users, assigned] = await Promise.all([
     prisma.user.findMany({
       where: { active: true, role: { not: "BOT" } },

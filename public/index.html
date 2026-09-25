@@ -341,7 +341,17 @@
     <div class="dialog-header"><div><span>ENCAMINHAMENTO</span><h2>Transferir conversa</h2><p id="transfer-destination">Confirme o novo setor deste atendimento.</p></div><button id="close-transfer" type="button" aria-label="Fechar">×</button></div>
     <form id="transfer-form" class="transfer-form">
       <label class="transfer-history-option"><input id="transfer-limit-history" type="checkbox"><span><b>Ocultar histórico anterior para o novo setor</b><small>Marque somente quando o novo setor não puder visualizar o histórico. Sem marcar, permanece a regra de recuperação do histórico permitido.</small></span></label>
+      <label class="transfer-text-field"><span>Motivo (opcional)</span><input id="transfer-reason" maxlength="500" placeholder="Ex.: cliente pediu segunda via de boleto"></label>
       <div class="transfer-actions"><button id="cancel-transfer" type="button">Cancelar</button><button type="submit">Confirmar transferência</button></div>
+    </form>
+  </dialog>
+  <dialog id="user-transfer-dialog" class="category-dialog transfer-dialog">
+    <div class="dialog-header"><div><span>ENCAMINHAMENTO</span><h2>Transferir para outro atendente</h2><p id="user-transfer-destination">Confirme o novo responsável.</p></div><button id="close-user-transfer" type="button" aria-label="Fechar">×</button></div>
+    <form id="user-transfer-form" class="transfer-form">
+      <label class="transfer-history-option"><input id="user-transfer-share-history" type="checkbox" checked><span><b>Compartilhar histórico com o novo atendente</b><small>Desmarcado, o novo atendente começa sem o histórico anterior (ele continua salvo e volta a aparecer se a conversa retornar a você; o Master sempre vê tudo).</small></span></label>
+      <label class="transfer-text-field"><span>Motivo (opcional)</span><input id="user-transfer-reason" maxlength="500" placeholder="Ex.: assunto financeiro"></label>
+      <label class="transfer-text-field"><span>Resumo para o novo atendente (opcional)</span><textarea id="user-transfer-summary" maxlength="2000" rows="3" placeholder="Contexto que o próximo atendente precisa saber"></textarea></label>
+      <div class="transfer-actions"><button id="cancel-user-transfer" type="button">Cancelar</button><button type="submit">Transferir</button></div>
     </form>
   </dialog>
   <dialog id="category-dialog" class="category-dialog">
@@ -401,6 +411,7 @@
         <option value="BOT">Bots</option>
         <option value="CAMPAIGN_SETTINGS">Configurações de Campanhas</option>
         <option value="CONVERSATION_SETTINGS">Configurações de Conversas</option>
+        <option value="INTERNAL_CHAT">Grupos do chat interno</option>
       </select>
       <button type="submit">Filtrar</button>
     </form>
@@ -458,6 +469,10 @@
   <button id="close-internal-chat" type="button" aria-label="Fechar">×</button>
 </div>
 
+      <div class="internal-chat-new-group-row">
+        <button id="internal-chat-new-group" type="button">+ Novo grupo</button>
+      </div>
+
       <div id="internal-chat-list" class="internal-chat-list"></div>
 
       <div class="internal-chat-direct">
@@ -478,7 +493,9 @@
   <div>
     <span id="internal-chat-type">CHAT INTERNO</span>
     <h3 id="internal-chat-title">Selecione uma conversa</h3>
+    <small id="internal-chat-subtitle" class="internal-chat-subtitle" hidden></small>
   </div>
+  <button id="internal-chat-participants" class="internal-chat-participants-button" type="button" hidden>Participantes</button>
 </header>
 
       <div id="internal-chat-messages" class="internal-chat-messages">
@@ -511,6 +528,34 @@
       </form>
     </section>
   </div>
+  <dialog id="internal-group-dialog" class="internal-group-dialog">
+    <form id="internal-group-form" class="internal-group-panel">
+      <header><div><span>CHAT INTERNO</span><h3>Novo grupo</h3></div><button id="close-internal-group" type="button" aria-label="Fechar">×</button></header>
+      <label class="internal-group-field"><span>Nome do grupo</span><input id="internal-group-name" maxlength="60" placeholder="Ex.: Lançamentos" required></label>
+      <label class="internal-group-field"><span>Participantes (além de você)</span><input id="internal-group-user-search" type="search" placeholder="Buscar pessoa"></label>
+      <div id="internal-group-user-list" class="internal-group-user-list"></div>
+      <footer><button id="cancel-internal-group" type="button">Cancelar</button><button type="submit">Criar grupo</button></footer>
+    </form>
+  </dialog>
+  <dialog id="internal-members-dialog" class="internal-group-dialog">
+    <div class="internal-group-panel">
+      <header><div><span>GRUPO</span><h3 id="internal-members-title">Participantes</h3><small id="internal-members-count"></small></div><button id="close-internal-members" type="button" aria-label="Fechar">×</button></header>
+      <form id="internal-rename-form" class="internal-group-inline" hidden>
+        <input id="internal-rename-input" maxlength="60" aria-label="Nome do grupo" required>
+        <button type="submit">Salvar nome</button>
+      </form>
+      <div id="internal-members-list" class="internal-group-user-list"></div>
+      <div id="internal-add-members" class="internal-group-add" hidden>
+        <label class="internal-group-field"><span>Adicionar participantes</span><input id="internal-add-search" type="search" placeholder="Buscar pessoa"></label>
+        <div id="internal-add-list" class="internal-group-user-list"></div>
+        <button id="internal-add-submit" type="button">Adicionar selecionados</button>
+      </div>
+      <footer>
+        <button id="internal-archive-group" type="button" class="danger" hidden>Encerrar grupo</button>
+        <button id="internal-leave-group" type="button" class="danger">Sair do grupo</button>
+      </footer>
+    </div>
+  </dialog>
 </dialog>
   <aside id="update-banner" class="update-banner" hidden><span><b>Nova versão disponível</b><small>Atualize para receber as melhorias do atendimento.</small></span><button id="update-later" type="button">Depois</button><button id="apply-update" type="button">Atualizar agora</button></aside>
   <div id="toast" class="toast" role="status"></div>

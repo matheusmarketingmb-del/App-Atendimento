@@ -262,6 +262,33 @@ async function listConversations({
     }
   }
 
+  // A listagem só traz metadata + a prévia da última mensagem. Quando o
+  // atendente recebeu a conversa sem histórico, a prévia não pode ser de uma
+  // mensagem da etapa oculta. Só as conversas com transferência explícita
+  // sem histórico para ele precisam do cálculo completo (consulta única).
+  const hiddenPreviewIds = new Set();
+  if (!master && conversations.length) {
+    const limitedTransfers = await prisma.conversationActivity.findMany({
+      where: {
+        conversationId: { in: conversations.map(({ id }) => id) },
+        action: "CONVERSATION_TRANSFERRED",
+        AND: [
+          { details: { path: ["toUserId"], equals: viewer.id } },
+          { details: { path: ["historyShared"], equals: false } },
+        ],
+      },
+      select: { conversationId: true },
+      distinct: ["conversationId"],
+    });
+    for (const { conversationId } of limitedTransfers) {
+      const conversation = conversations.find(({ id }) => id === conversationId);
+      const preview = conversation?.messages?.[0];
+      if (!preview) continue;
+      const { start } = await historyVisibility(conversation, viewer);
+      if (start && preview.occurredAt < start) hiddenPreviewIds.add(conversationId);
+    }
+  }
+
   let masterUnreadCounts = new Map();
 
   if (master && conversations.length) {
@@ -311,6 +338,7 @@ async function listConversations({
 
       return {
         ...rest,
+        ...(hiddenPreviewIds.has(conversation.id) ? { messages: [] } : {}),
 
         unreadCount: master
           ? masterUnreadCounts.get(conversation.id) || 0
@@ -413,11 +441,18 @@ const incoming = messages.filter((message) => {
   };
 }
 
-async function restrictedMessageVisibility(conversationId, viewer) {
-  const activities = await prisma.conversationActivity.findMany({
-    where: { conversationId, action: { in: ["CONVERSATION_TRANSFERRED", "CATEGORY_CHANGED"] } },
-    select: { action: true, createdAt: true, details: true }, orderBy: { createdAt: "asc" },
-  });
+// Transferência para pessoa com escolha explícita "compartilhar histórico?"
+// (details.historyShared boolean). Transferências antigas/sem escolha não
+// têm o campo e seguem a regra anterior (canViewPreviousMessages/limitHistory).
+function isExplicitHistoryTransfer(activity) {
+  return activity.action === "CONVERSATION_TRANSFERRED" && typeof activity.details?.historyShared === "boolean";
+}
+
+// Regra anterior de recorte (limitHistory do setor / canViewPreviousMessages),
+// preservada para fila de setor, "assumir" e transferências sem escolha.
+// Retorna null (histórico completo) ou a data a partir da qual vê.
+async function legacyHistoryStart(activities, viewer) {
+  if (viewer.canViewPreviousMessages) return null;
   const categoryIds = [...new Set(activities.flatMap(({ details }) => [
     details?.fromCategoryId, details?.toCategoryId,
   ]).filter(Boolean))];
@@ -436,18 +471,101 @@ async function restrictedMessageVisibility(conversationId, viewer) {
   };
   const reversed = [...activities].reverse();
   const latestCategoryChange = reversed.find(isSectorChange);
-  if (latestCategoryChange?.details?.historyLimited === false) {
-    return { where: undefined, limited: false };
-  }
+  if (latestCategoryChange?.details?.historyLimited === false) return null;
   const strictBoundary = reversed.find((activity) => {
     if (activity.action === "CONVERSATION_TRANSFERRED") return activity.details?.toUserId === viewer.id;
     if (!isSectorChange(activity)) return false;
     return allowedCategoryIds.has(activity.details?.toCategoryId || null);
   });
+  return strictBoundary ? strictBoundary.createdAt : null;
+}
+
+// Início do histórico visível para um atendente (Master nunca passa por
+// aqui). Cada forma de acesso que o atendente já recebeu nesta conversa é
+// um "ponto de entrada"; ele enxerga a partir do MAIS ANTIGO deles:
+//   - transferência explícita COM histórico  → histórico completo;
+//   - transferência explícita SEM histórico  → a partir da transferência;
+//   - assumiu da fila / transferência antiga / fila atual → regra anterior;
+//   - mensagens que ele mesmo enviou         → a partir da primeira delas.
+// Por isso quem recebe a conversa de volta (A → B sem histórico → A) volta a
+// ver tudo: a etapa original dele E a etapa do B. Nada é apagado — é só um
+// filtro de leitura. Retorna null (completo) ou a data de corte.
+function resolveHistoryStart({ viewerId, activities, legacyStart, firstOwnMessageAt, inQueue }) {
+  const entries = [];
+  let legacyAccess = Boolean(inQueue);
+  let explicitAccess = false;
+  for (const activity of activities) {
+    if (activity.details?.toUserId !== viewerId) continue;
+    if (isExplicitHistoryTransfer(activity)) {
+      explicitAccess = true;
+      entries.push(activity.details.historyShared ? null : new Date(activity.createdAt));
+    } else if (["CONVERSATION_TRANSFERRED", "CONVERSATION_CLAIMED"].includes(activity.action)) {
+      legacyAccess = true;
+    }
+  }
+  if (legacyAccess || !explicitAccess) entries.push(legacyStart || null);
+  if (firstOwnMessageAt) entries.push(new Date(firstOwnMessageAt));
+  if (!entries.length || entries.some((entry) => entry === null)) return null;
+  return new Date(Math.min(...entries.map((entry) => entry.getTime())));
+}
+
+async function historyVisibility(conversation, viewer) {
+  if (authorization.isMaster(viewer)) return { start: null, limited: false };
+  const [activities, firstOwnMessage] = await Promise.all([
+    prisma.conversationActivity.findMany({
+      where: {
+        conversationId: conversation.id,
+        action: { in: ["CONVERSATION_TRANSFERRED", "CONVERSATION_CLAIMED", "CATEGORY_CHANGED"] },
+      },
+      select: { action: true, createdAt: true, details: true }, orderBy: { createdAt: "asc" },
+    }),
+    prisma.message.findFirst({
+      where: { conversationId: conversation.id, sentByUserId: viewer.id },
+      orderBy: { occurredAt: "asc" }, select: { occurredAt: true },
+    }),
+  ]);
+  const legacyStart = await legacyHistoryStart(activities.filter((activity) => !isExplicitHistoryTransfer(activity)), viewer);
+  const start = resolveHistoryStart({
+    viewerId: viewer.id, activities, legacyStart,
+    firstOwnMessageAt: firstOwnMessage?.occurredAt, inQueue: !conversation.assignedUserId,
+  });
+  return { start, limited: Boolean(start) };
+}
+
+// Transferência mais recente para o responsável atual: mostra ao novo
+// atendente de quem veio, se o histórico foi compartilhado, motivo e resumo
+// de handoff — inclusive quando o histórico anterior está oculto.
+async function currentHandoffFor(conversation, viewer) {
+  if (!conversation.assignedUserId || conversation.assignedUserId !== viewer.id) return null;
+  const transfer = await prisma.conversationActivity.findFirst({
+    where: { conversationId: conversation.id, action: "CONVERSATION_TRANSFERRED" },
+    orderBy: { createdAt: "desc" },
+    select: { createdAt: true, details: true, actorUser: { select: { id: true, name: true } } },
+  });
+  if (!transfer || transfer.details?.toUserId !== viewer.id) return null;
   return {
-    where: strictBoundary ? { occurredAt: { gte: strictBoundary.createdAt } } : undefined,
-    limited: Boolean(strictBoundary),
+    at: transfer.createdAt,
+    from: transfer.details.from || null,
+    transferredBy: transfer.actorUser?.name || null,
+    historyShared: typeof transfer.details.historyShared === "boolean" ? transfer.details.historyShared : null,
+    reason: transfer.details.reason || null,
+    handoffSummary: transfer.details.handoffSummary || null,
   };
+}
+
+// Anexo/mensagem por ID: além do acesso à conversa, a mensagem precisa estar
+// dentro do histórico visível do usuário (evita baixar anexo de etapa oculta
+// só por conhecer o ID).
+async function assertCanViewMessage(viewer, messageId) {
+  const message = await prisma.message.findUnique({
+    where: { id: messageId },
+    select: { id: true, conversationId: true, occurredAt: true, mediaStorageKey: true, mediaMimeType: true, mediaFileName: true },
+  });
+  if (!message) throw Object.assign(new Error("Mídia não encontrada."), { statusCode: 404 });
+  const conversation = await authorization.assertCanViewConversation(viewer, message.conversationId);
+  const { start } = await historyVisibility(conversation, viewer);
+  if (start && message.occurredAt < start) throw Object.assign(new Error("Mídia não encontrada."), { statusCode: 404 });
+  return message;
 }
 
 async function getConversation(id, viewer) {
@@ -456,11 +574,17 @@ async function getConversation(id, viewer) {
   const access = await prisma.conversation.findFirst({
     where: { AND: [{ id }, scope] }, select: { id: true, categoryId: true, assignedUserId: true },
   });
-  if (!access) return null;
-  let messageVisibility = { where: undefined, limited: false };
-  if (!authorization.isMaster(viewer) && !viewer.canViewPreviousMessages) {
-    messageVisibility = await restrictedMessageVisibility(id, viewer);
+  if (!access) {
+    const error = await authorization.conversationAccessError(viewer, id);
+    if (error.statusCode === 403) throw error;
+    return null;
   }
+  const visibility = await historyVisibility(access, viewer);
+  const messageVisibility = {
+    where: visibility.start ? { occurredAt: { gte: visibility.start } } : undefined,
+    limited: visibility.limited,
+  };
+  const currentHandoff = await currentHandoffFor(access, viewer);
   return prisma.conversation.findFirst({
     where: { AND: [{ id }, scope] },
     include: {
@@ -481,7 +605,11 @@ async function getConversation(id, viewer) {
         },
       },
       pins: { where: { userId: viewer.id }, select: { createdAt: true }, take: 1 },
+      botState: { select: { humanPausedAt: true } },
       activities: canViewHistory ? {
+        // O histórico de eventos segue o mesmo recorte das mensagens: quem
+        // recebeu sem histórico não vê notas/eventos da etapa anterior.
+        where: visibility.start ? { createdAt: { gte: visibility.start } } : undefined,
         include: { actorUser: { select: { id: true, name: true } } },
         orderBy: { createdAt: "desc" },
         take: 100,
@@ -489,8 +617,12 @@ async function getConversation(id, viewer) {
     },
   }).then((conversation) => {
     if (!conversation) return null;
-    const { pins, ...result } = conversation;
-    return { ...result, isPinned: pins.length > 0, canViewHistory, messageHistoryLimited: messageVisibility.limited };
+    const { pins, botState, ...result } = conversation;
+    return {
+      ...result, isPinned: pins.length > 0, canViewHistory, messageHistoryLimited: messageVisibility.limited,
+      historyVisibleFrom: visibility.start, currentHandoff,
+      botPausedAt: botState?.humanPausedAt || null,
+    };
   });
 }
 
@@ -678,7 +810,24 @@ async function setContactNotePinned(contactId, noteId, { pinned, conversationId 
   });
 }
 
-async function updateConversation(id, { categoryId, status, assignedUserId, priority, limitHistory }, viewer) {
+function optionalTransferText(value, label, maxLength) {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string") throw Object.assign(new Error(`${label} inválido.`), { statusCode: 400 });
+  const text = value.trim();
+  if (text.length > maxLength) {
+    throw Object.assign(new Error(`${label} deve ter no máximo ${maxLength} caracteres.`), { statusCode: 400 });
+  }
+  return text || null;
+}
+
+async function updateConversation(id, {
+  categoryId, status, assignedUserId, priority, limitHistory, shareHistory, transferReason, handoffSummary,
+}, viewer) {
+  if (shareHistory !== undefined && typeof shareHistory !== "boolean") {
+    throw Object.assign(new Error("Informe se o histórico deve ser compartilhado."), { statusCode: 400 });
+  }
+  const reason = optionalTransferText(transferReason, "Motivo da transferência", 500);
+  const summary = optionalTransferText(handoffSummary, "Resumo de handoff", 2000);
   const currentAccess = await authorization.assertCanViewConversation(viewer, id);
   const currentSnapshot = await prisma.conversation.findUnique({
     where: { id },
@@ -745,8 +894,11 @@ async function updateConversation(id, { categoryId, status, assignedUserId, prio
   }
   try {
     const result = await prisma.$transaction(async (transaction) => {
+      // Troca de responsável é condicionada ao responsável lido acima: se
+      // outro atendente assumiu no meio tempo, a atualização não acontece
+      // (dois "assumir" simultâneos nunca deixam a conversa com o errado).
       const updated = await transaction.conversation.update({
-        where: { id }, data,
+        where: data.assignedUserId !== undefined ? { id, assignedUserId: currentSnapshot.assignedUserId } : { id }, data,
         include: { contact: true, category: { include: { parent: true } }, assignedUser: { select: { id: true, name: true, email: true } } },
       });
       const activities = [];
@@ -757,17 +909,38 @@ async function updateConversation(id, { categoryId, status, assignedUserId, prio
           to: updated.category ? categoryLabelForHistory(updated.category) : "Sem categoria",
           fromCategoryId: currentSnapshot.categoryId, toCategoryId: updated.categoryId,
           sectorChanged, historyLimited: limitHistory === true,
+          ...(reason ? { reason } : {}),
         }));
       }
+      // Auditoria da transferência entre pessoas: quem transferiu, de quem,
+      // para quem, setores de origem/destino, se o histórico foi
+      // compartilhado, motivo e resumo de handoff. `historyShared` só é
+      // gravado quando a escolha foi feita (ausente = regra anterior).
+      let transferDetails = null;
       if (currentSnapshot.assignedUserId !== updated.assignedUserId) {
         const action = !updated.assignedUserId ? "ASSIGNEE_REMOVED"
           : !currentSnapshot.assignedUserId && updated.assignedUserId === viewer.id ? "CONVERSATION_CLAIMED"
             : "CONVERSATION_TRANSFERRED";
-        activities.push(activityRecord(id, viewer.id, action, {
+        const details = {
           from: currentSnapshot.assignedUser?.name || "Sem responsável",
           to: updated.assignedUser?.name || "Sem responsável",
           fromUserId: currentSnapshot.assignedUserId, toUserId: updated.assignedUserId,
-        }));
+        };
+        if (action === "CONVERSATION_TRANSFERRED") {
+          transferDetails = {
+            transferredByUserId: viewer.id,
+            fromCategoryId: currentSnapshot.categoryId, toCategoryId: updated.categoryId,
+            fromCategory: currentSnapshot.category ? categoryLabelForHistory(currentSnapshot.category) : "Sem categoria",
+            toCategory: updated.category ? categoryLabelForHistory(updated.category) : "Sem categoria",
+            ...(typeof shareHistory === "boolean" ? { historyShared: shareHistory } : {}),
+            ...(reason ? { reason } : {}),
+            ...(summary ? { handoffSummary: summary } : {}),
+          };
+          Object.assign(details, transferDetails);
+        } else if (reason) {
+          details.reason = reason;
+        }
+        activities.push(activityRecord(id, viewer.id, action, details));
       }
       if (status && currentSnapshot.status !== updated.status) {
         activities.push(activityRecord(id, viewer.id, "STATUS_CHANGED", { from: currentSnapshot.status, to: updated.status }));
@@ -796,7 +969,10 @@ async function updateConversation(id, { categoryId, status, assignedUserId, prio
         audits.push({
           action: "CONVERSATION_ASSIGNEE_CHANGED",
           summary: `Alterou o responsável da conversa de ${contactDisplayName(updated.contact)}: ${from} → ${to}`,
-          details: { ...contact, from, to, fromUserId: currentSnapshot.assignedUserId, toUserId: updated.assignedUserId },
+          details: {
+            ...contact, from, to, fromUserId: currentSnapshot.assignedUserId, toUserId: updated.assignedUserId,
+            ...(transferDetails || {}),
+          },
         });
       }
       if (currentSnapshot.status !== updated.status) {
@@ -830,6 +1006,9 @@ async function updateConversation(id, { categoryId, status, assignedUserId, prio
 
     return result;
   } catch (error) {
+    if (error.code === "P2025" && data.assignedUserId !== undefined) {
+      throw Object.assign(new Error("O responsável desta conversa acabou de mudar. Atualize e tente novamente."), { statusCode: 409 });
+    }
     if (error.code === "P2025") throw Object.assign(new Error("Conversa não encontrada."), { statusCode: 404 });
     throw error;
   }
@@ -1219,8 +1398,9 @@ async function listUsers(viewer) {
 }
 
 module.exports = {
-  addContactNote, conversationPriorities, conversationStatuses, createCategory, deleteContactNote, deleteConversation,
+  addContactNote, assertCanViewMessage, conversationPriorities, conversationStatuses, createCategory, deleteContactNote, deleteConversation,
   getConversation, getConversationSummary, getUserAlerts, listCategories, listTransferCategories,
+  resolveHistoryStart,
   listConversations, listUsers, markAsRead, recordConversationActivity, setContactNotePinned, setConversationPinned,
   getCategoryVisibility, setCategoryVisibility, updateCategory, updateContactCustomName, updateConversation,
 };

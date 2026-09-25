@@ -6,6 +6,8 @@
     selectedFile: null,
     selectedFileUrl: null,
     openSequence: 0,
+    users: [],
+    group: null,
   };
 
   const $ = (selector) => document.querySelector(selector);
@@ -83,6 +85,7 @@
   function chatIcon(chat) {
     if (chat.type === "GENERAL") return "#";
     if (chat.type === "SECTOR") return "#";
+    if (chat.type === "GROUP") return "👥";
     return "●";
   }
 
@@ -96,44 +99,56 @@
       return;
     }
 
-    container.innerHTML = state.chats.map((chat) => {
-      const active = chat.id === state.currentChatId;
-      const preview = chat.lastMessage?.text
-        || (chat.lastMessage?.metadata?.media?.fileName
-          ? `📎 ${chat.lastMessage.metadata.media.fileName}`
-          : (chat.lastMessage?.type === "TRANSFER"
-            ? "Nova transferência"
-            : "Sem mensagens"));
-
-      return `
-        <button
-          type="button"
-          class="internal-chat-item ${active ? "active" : ""}"
-          data-chat-id="${escapeHtml(chat.id)}"
-        >
-          <span class="internal-chat-item-icon">
-            ${escapeHtml(chatIcon(chat))}
-          </span>
-
-          <span class="internal-chat-item-content">
-            <strong>${escapeHtml(chatDisplayName(chat))}</strong>
-            <small>${escapeHtml(preview)}</small>
-          </span>
-
-          ${
-            chat.unreadCount
-              ? `<b>${chat.unreadCount}</b>`
-              : ""
-          }
-        </button>
-      `;
-    }).join("");
+    // Lateral separada em seções: canais da empresa (Geral/setores),
+    // conversas diretas e grupos criados por usuários.
+    const sections = [
+      ["Canais", state.chats.filter((chat) => ["GENERAL", "SECTOR"].includes(chat.type))],
+      ["Diretas", state.chats.filter((chat) => chat.type === "DIRECT")],
+      ["Grupos", state.chats.filter((chat) => chat.type === "GROUP")],
+    ];
+    container.innerHTML = sections.map(([title, chats]) => `
+      <div class="internal-chat-section-title">${escapeHtml(title)}</div>
+      ${chats.length ? chats.map(chatItemMarkup).join("") : `<div class="internal-group-empty">${title === "Grupos" ? "Nenhum grupo ainda." : "Nenhuma conversa."}</div>`}
+    `).join("");
 
     container.querySelectorAll("[data-chat-id]").forEach((button) => {
       button.addEventListener("click", () => {
         openChat(button.dataset.chatId);
       });
     });
+  }
+
+  function chatItemMarkup(chat) {
+    const active = chat.id === state.currentChatId;
+    const preview = chat.lastMessage?.text
+      || (chat.lastMessage?.metadata?.media?.fileName
+        ? `📎 ${chat.lastMessage.metadata.media.fileName}`
+        : (chat.lastMessage?.type === "TRANSFER"
+          ? "Nova transferência"
+          : "Sem mensagens"));
+
+    return `
+      <button
+        type="button"
+        class="internal-chat-item ${active ? "active" : ""}"
+        data-chat-id="${escapeHtml(chat.id)}"
+      >
+        <span class="internal-chat-item-icon">
+          ${escapeHtml(chatIcon(chat))}
+        </span>
+
+        <span class="internal-chat-item-content">
+          <strong>${escapeHtml(chatDisplayName(chat))}</strong>
+          <small>${escapeHtml(preview)}</small>
+        </span>
+
+        ${
+          chat.unreadCount
+            ? `<b>${chat.unreadCount}</b>`
+            : ""
+        }
+      </button>
+    `;
   }
 
   function syncGlobalUnread() {
@@ -200,6 +215,10 @@
         return renderTransferMessage(message);
       }
 
+      if (message.type === "SYSTEM") {
+        return `<div class="internal-system-line">${escapeHtml(message.text || "")} <small>${escapeHtml(formatTime(message.createdAt))}</small></div>`;
+      }
+
       const own = message.senderUserId === state.currentUser?.id;
 
       const media = message.metadata?.media;
@@ -249,11 +268,20 @@ const attachment = media?.storageKey ? (isImage
       GENERAL: "CHAT GERAL",
       SECTOR: "CHAT DO SETOR",
       DIRECT: "MENSAGEM DIRETA",
+      GROUP: chat.archivedAt ? "GRUPO ENCERRADO" : "GRUPO",
     }[chat.type] || "CHAT INTERNO";
 
-    $("#internal-chat-input").disabled = false;
-    $("#internal-chat-file-input").disabled = false;
-    $("#internal-chat-send").disabled = false;
+    const isGroup = chat.type === "GROUP";
+    const subtitle = $("#internal-chat-subtitle");
+    subtitle.hidden = !isGroup;
+    subtitle.textContent = isGroup ? `${chat.memberCount} ${chat.memberCount === 1 ? "membro" : "membros"}` : "";
+    $("#internal-chat-participants").hidden = !isGroup;
+
+    const readOnly = Boolean(chat.archivedAt);
+    $("#internal-chat-input").disabled = readOnly;
+    $("#internal-chat-input").placeholder = readOnly ? "Grupo encerrado — somente leitura." : "Digite uma mensagem interna...";
+    $("#internal-chat-file-input").disabled = readOnly;
+    $("#internal-chat-send").disabled = readOnly;
 
     renderChatList();
 
@@ -287,6 +315,8 @@ const attachment = media?.storageKey ? (isImage
     } catch {}
 
     if (!Array.isArray(users)) return;
+
+    state.users = users.filter((user) => user.active !== false && user.id !== state.currentUser.id);
 
     select.innerHTML =
       '<option value="">Selecionar usuário</option>' +
@@ -508,6 +538,182 @@ $("#internal-chat-remove-image")?.addEventListener(
     }
   );
 
+  // ---------------------------------------------------------------- grupos
+  function leaveCurrentChatView(message) {
+    state.currentChatId = null;
+    state.group = null;
+    $("#internal-members-dialog")?.open && $("#internal-members-dialog").close();
+    $("#internal-chat-title").textContent = "Selecione uma conversa";
+    $("#internal-chat-type").textContent = "CHAT INTERNO";
+    $("#internal-chat-subtitle").hidden = true;
+    $("#internal-chat-participants").hidden = true;
+    $("#internal-chat-messages").innerHTML = `<div class="internal-chat-empty">${escapeHtml(message)}</div>`;
+    $("#internal-chat-input").disabled = true;
+    $("#internal-chat-file-input").disabled = true;
+    $("#internal-chat-send").disabled = true;
+  }
+
+  function userPickerMarkup(users, { name, emptyText }) {
+    if (!users.length) return `<div class="internal-group-empty">${escapeHtml(emptyText)}</div>`;
+    return users.map((user) => `
+      <label class="internal-group-user">
+        <input type="checkbox" name="${escapeHtml(name)}" value="${escapeHtml(user.id)}">
+        <span><b>${escapeHtml(user.name)}</b></span>
+      </label>`).join("");
+  }
+
+  function filterUsers(users, term) {
+    const query = String(term || "").trim().toLocaleLowerCase("pt-BR");
+    return query ? users.filter((user) => user.name.toLocaleLowerCase("pt-BR").includes(query)) : users;
+  }
+
+  function checkedValues(container) {
+    return [...container.querySelectorAll("input[type=checkbox]:checked")].map((input) => input.value);
+  }
+
+  // Busca só filtra a lista visível; seleções já marcadas são preservadas.
+  function renderPicker(container, users, term, options) {
+    const selected = new Set(checkedValues(container));
+    container.innerHTML = userPickerMarkup(filterUsers(users, term), options);
+    container.querySelectorAll("input[type=checkbox]").forEach((input) => { input.checked = selected.has(input.value); });
+  }
+
+  async function openNewGroupDialog() {
+    if (!state.users.length) await loadUsers();
+    $("#internal-group-name").value = "";
+    $("#internal-group-user-search").value = "";
+    $("#internal-group-user-list").innerHTML = "";
+    renderPicker($("#internal-group-user-list"), state.users, "", { name: "member", emptyText: "Nenhum usuário disponível." });
+    $("#internal-group-dialog").showModal();
+    $("#internal-group-name").focus();
+  }
+
+  async function loadGroupDetails() {
+    if (!state.currentChatId) return;
+    const group = await api(`/api/internal-chats/${encodeURIComponent(state.currentChatId)}/group`);
+    state.group = group;
+    renderGroupDetails();
+  }
+
+  function renderGroupDetails() {
+    const group = state.group;
+    if (!group) return;
+    const isAdmin = group.viewerRole === "ADMIN";
+    const active = !group.archivedAt;
+    const adminCount = group.members.filter((member) => member.chatRole === "ADMIN").length;
+    $("#internal-members-title").textContent = group.name;
+    $("#internal-members-count").textContent = `${group.memberCount} ${group.memberCount === 1 ? "membro" : "membros"}${group.archivedAt ? " • encerrado" : ""}`;
+    $("#internal-rename-form").hidden = !(isAdmin && active);
+    $("#internal-rename-input").value = group.name;
+    $("#internal-members-list").innerHTML = group.members.map((member) => {
+      const self = member.id === state.currentUser?.id;
+      const controls = isAdmin && active && !self ? `
+        <button type="button" data-role-user="${escapeHtml(member.id)}" data-role="${member.chatRole === "ADMIN" ? "MEMBER" : "ADMIN"}" ${member.chatRole === "ADMIN" && adminCount <= 1 ? "disabled" : ""}>${member.chatRole === "ADMIN" ? "Tirar admin" : "Tornar admin"}</button>
+        <button type="button" class="danger" data-remove-user="${escapeHtml(member.id)}">Remover</button>` : "";
+      return `
+        <div class="internal-group-user">
+          <span><b>${escapeHtml(member.name)}${self ? " (você)" : ""}</b><small>${member.chatRole === "ADMIN" ? "Administrador" : "Membro"}</small></span>
+          ${controls}
+        </div>`;
+    }).join("");
+    const memberIds = new Set(group.members.map((member) => member.id));
+    const candidates = state.users.filter((user) => !memberIds.has(user.id));
+    $("#internal-add-members").hidden = !(isAdmin && active);
+    renderPicker($("#internal-add-list"), candidates, $("#internal-add-search").value, { name: "add", emptyText: "Todos os usuários já participam." });
+    $("#internal-archive-group").hidden = !(isAdmin && active);
+  }
+
+  async function runGroupAction(action) {
+    try {
+      await action();
+      await loadChats();
+      const chat = state.chats.find((item) => item.id === state.currentChatId);
+      if (chat) {
+        $("#internal-chat-title").textContent = chatDisplayName(chat);
+        await openChat(chat.id);
+      }
+      if (state.currentChatId && $("#internal-members-dialog").open) await loadGroupDetails();
+    } catch (error) {
+      alert(error.message);
+    }
+  }
+
+  $("#internal-chat-new-group")?.addEventListener("click", () => openNewGroupDialog().catch((error) => alert(error.message)));
+  $("#close-internal-group")?.addEventListener("click", () => $("#internal-group-dialog").close());
+  $("#cancel-internal-group")?.addEventListener("click", () => $("#internal-group-dialog").close());
+  $("#internal-group-user-search")?.addEventListener("input", (event) => {
+    renderPicker($("#internal-group-user-list"), state.users, event.target.value, { name: "member", emptyText: "Nenhum usuário encontrado." });
+  });
+  $("#internal-group-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const memberIds = checkedValues($("#internal-group-user-list"));
+    if (!memberIds.length) { alert("Selecione pelo menos um participante."); return; }
+    try {
+      const chat = await api("/api/internal-chats/groups", {
+        method: "POST",
+        body: JSON.stringify({ name: $("#internal-group-name").value, memberIds }),
+      });
+      $("#internal-group-dialog").close();
+      await loadChats();
+      await openChat(chat.id);
+    } catch (error) {
+      alert(error.message);
+    }
+  });
+
+  $("#internal-chat-participants")?.addEventListener("click", async () => {
+    try {
+      if (!state.users.length) await loadUsers();
+      $("#internal-add-search").value = "";
+      $("#internal-add-list").innerHTML = "";
+      await loadGroupDetails();
+      $("#internal-members-dialog").showModal();
+    } catch (error) {
+      alert(error.message);
+    }
+  });
+  $("#close-internal-members")?.addEventListener("click", () => $("#internal-members-dialog").close());
+  $("#internal-add-search")?.addEventListener("input", renderGroupDetails);
+  $("#internal-rename-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    runGroupAction(() => api(`/api/internal-chats/${encodeURIComponent(state.currentChatId)}/group`, {
+      method: "PATCH", body: JSON.stringify({ name: $("#internal-rename-input").value }),
+    }));
+  });
+  $("#internal-add-submit")?.addEventListener("click", () => {
+    const userIds = checkedValues($("#internal-add-list"));
+    if (!userIds.length) { alert("Selecione quem deseja adicionar."); return; }
+    runGroupAction(() => api(`/api/internal-chats/${encodeURIComponent(state.currentChatId)}/members`, {
+      method: "POST", body: JSON.stringify({ userIds }),
+    }));
+  });
+  $("#internal-members-list")?.addEventListener("click", (event) => {
+    const removeButton = event.target.closest("[data-remove-user]");
+    const roleButton = event.target.closest("[data-role-user]");
+    if (removeButton) {
+      if (!confirm("Remover este participante do grupo?")) return;
+      runGroupAction(() => api(`/api/internal-chats/${encodeURIComponent(state.currentChatId)}/members/${encodeURIComponent(removeButton.dataset.removeUser)}`, { method: "DELETE" }));
+    } else if (roleButton) {
+      runGroupAction(() => api(`/api/internal-chats/${encodeURIComponent(state.currentChatId)}/members/${encodeURIComponent(roleButton.dataset.roleUser)}`, {
+        method: "PATCH", body: JSON.stringify({ role: roleButton.dataset.role }),
+      }));
+    }
+  });
+  $("#internal-leave-group")?.addEventListener("click", async () => {
+    if (!state.currentChatId || !confirm("Sair deste grupo? Você deixará de ver as mensagens dele.")) return;
+    try {
+      await api(`/api/internal-chats/${encodeURIComponent(state.currentChatId)}/leave`, { method: "POST" });
+      leaveCurrentChatView("Você saiu do grupo.");
+      await loadChats();
+    } catch (error) {
+      alert(error.message);
+    }
+  });
+  $("#internal-archive-group")?.addEventListener("click", () => {
+    if (!confirm("Encerrar o grupo? Ninguém poderá enviar novas mensagens; o histórico continua disponível para leitura.")) return;
+    runGroupAction(() => api(`/api/internal-chats/${encodeURIComponent(state.currentChatId)}/archive`, { method: "POST" }));
+  });
+
   let internalNotificationReady = false;
 
   document.addEventListener("DOMContentLoaded", async () => {
@@ -576,7 +782,9 @@ $("#internal-chat-remove-image")?.addEventListener(
       internalNotificationReady = true;
 
       const chatId = state.currentChatId;
-      if (chatId && $("#internal-chat-dialog")?.open) {
+      if (chatId && !state.chats.some((chat) => chat.id === chatId)) {
+        leaveCurrentChatView("Você não participa mais deste chat.");
+      } else if (chatId && $("#internal-chat-dialog")?.open) {
         const messages = await api(
           `/api/internal-chats/${encodeURIComponent(chatId)}/messages`
         );
@@ -611,5 +819,18 @@ $("#internal-chat-remove-image")?.addEventListener(
   }
 
   events.addEventListener("inbox.updated", scheduleRealtimeRefresh);
+  // Evento direcionado do chat interno (só membros recebem). "removed" =
+  // você saiu/foi removido: fecha o grupo aberto e some da lista.
+  events.addEventListener("internal-chat.updated", (event) => {
+    let data = {};
+    try { data = JSON.parse(event.data || "{}"); } catch {}
+    if (data.kind === "removed" && data.chatId === state.currentChatId) {
+      leaveCurrentChatView("Você não participa mais deste grupo.");
+    }
+    if (data.chatId === state.currentChatId && $("#internal-members-dialog")?.open) {
+      loadGroupDetails().catch(() => {});
+    }
+    scheduleRealtimeRefresh();
+  });
   window.addEventListener("beforeunload", () => events.close(), { once: true });
 })();

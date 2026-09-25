@@ -21,21 +21,18 @@ async function allowedCategoryIds(user) {
   return access.map(({ categoryId }) => categoryId);
 }
 
-async function conversationScope(user) {
-  if (isMaster(user)) return {};
-  const categoryIds = await allowedCategoryIds(user);
-  const visible = [{ assignedUserId: user.id }];
-  if (categoryIds.length) visible.push({ categoryId: { in: categoryIds } });
-  if (user.canViewUncategorized) visible.push({ categoryId: null });
-  const operationalScope = visible.length ? { OR: visible } : { id: { in: [] } };
-  const channelAccountScope = {
+function channelAccountScope(user) {
+  return {
     OR: [
       { channelAccountId: null },
       { channel: { notIn: ["EMAIL", "META"] } },
       { channelAccount: { is: { accessUsers: { some: { userId: user.id } } } } },
     ],
   };
-  const categoryScope = {
+}
+
+function publicCategoryScope() {
+  return {
     OR: [
       { categoryId: null },
       { category: { is: {
@@ -44,12 +41,43 @@ async function conversationScope(user) {
       } } },
     ],
   };
-  return { AND: [operationalScope, categoryScope, channelAccountScope] };
+}
+
+async function queueCategoryFilters(user) {
+  const categoryIds = await allowedCategoryIds(user);
+  const filters = [];
+  if (categoryIds.length) filters.push({ categoryId: { in: categoryIds } });
+  if (user.canViewUncategorized) filters.push({ categoryId: null });
+  return filters;
+}
+
+// Privacidade de conversa assumida: enquanto a conversa não tem responsável
+// ela fica na fila do setor (categorias liberadas / Sem categoria); depois
+// que alguém assume, só o responsável atual (e o Master) enxerga. Este é o
+// escopo único usado para entregar conteúdo.
+async function conversationScope(user) {
+  if (isMaster(user)) return {};
+  const queue = await queueCategoryFilters(user);
+  const visible = [{ assignedUserId: user.id }];
+  if (queue.length) visible.push({ AND: [{ assignedUserId: null }, { OR: queue }] });
+  return { AND: [{ OR: visible }, publicCategoryScope(), channelAccountScope(user)] };
+}
+
+// Inclui conversas assumidas por outros atendentes somente para métricas
+// agregadas e para informar quem já está atendendo.
+async function sectorScope(user) {
+  if (isMaster(user)) return {};
+  const queue = await queueCategoryFilters(user);
+  const visible = [{ assignedUserId: user.id }, ...queue];
+  return { AND: [{ OR: visible }, publicCategoryScope(), channelAccountScope(user)] };
 }
 
 async function canAccessChannelAccount(user, channelAccountId) {
   if (isMaster(user) || !channelAccountId) return true;
-  return Boolean(await prisma.channelAccountUserAccess.findUnique({ where: { channelAccountId_userId: { channelAccountId, userId: user.id } }, select: { userId: true } }));
+  return Boolean(await prisma.channelAccountUserAccess.findUnique({
+    where: { channelAccountId_userId: { channelAccountId, userId: user.id } },
+    select: { userId: true },
+  }));
 }
 
 async function assertChannelAccountAllowsCategory(channelAccountId, categoryId) {
@@ -69,13 +97,32 @@ async function canAccessCategory(user, categoryId) {
   return (await allowedCategoryIds(user)).includes(categoryId);
 }
 
+// 403 "em atendimento por Fulano" para quem é do setor e perdeu acesso
+// porque outro atendente assumiu; 404 para qualquer outro caso (não revela
+// nem a existência da conversa a quem nunca poderia vê-la).
+async function conversationAccessError(user, conversationId) {
+  if (user && !isMaster(user)) {
+    const locked = await prisma.conversation.findFirst({
+      where: { AND: [{ id: conversationId }, { assignedUserId: { not: null } }, await sectorScope(user)] },
+      select: { assignedUser: { select: { name: true } } },
+    });
+    if (locked) {
+      return Object.assign(
+        new Error(`Conversa em atendimento por ${locked.assignedUser?.name || "outro atendente"}.`),
+        { statusCode: 403, code: "CONVERSATION_ASSIGNED_TO_OTHER" },
+      );
+    }
+  }
+  return Object.assign(new Error("Conversa não encontrada."), { statusCode: 404 });
+}
+
 async function assertCanViewConversation(user, conversationId) {
   const scope = await conversationScope(user);
   const conversation = await prisma.conversation.findFirst({
     where: { AND: [{ id: conversationId }, scope] },
     select: { id: true, categoryId: true, assignedUserId: true, contactId: true },
   });
-  if (!conversation) throw Object.assign(new Error("Conversa não encontrada."), { statusCode: 404 });
+  if (!conversation) throw await conversationAccessError(user, conversationId);
   return conversation;
 }
 
@@ -153,5 +200,5 @@ module.exports = {
   allowedCategoryIds, assertCanAccessContact, assertCanManageCampaigns, assertCanManageCategories, assertCanMergeContacts, assertCanStartConversations,
   assertCanSetPriority, assertCanViewConversation, assertCanViewConversationSettings, assertMaster,
   assertChannelAccountAllowsCategory, canAccessCategory, canAccessChannelAccount, canManageCampaigns, canMergeContacts, canSetPriority, canStartConversations, canTransfer, canViewConversationSettings,
-  conversationScope, forbidden, isMaster,
+  conversationAccessError, conversationScope, forbidden, isMaster, sectorScope,
 };

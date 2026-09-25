@@ -103,6 +103,23 @@ function syncCategoryConfirmation() {
   $("#confirm-category").disabled = !state.selectedId || unavailableRoot
     || pendingCategoryId() === state.selectedCategoryId;
 }
+// Aviso no topo das mensagens: de quem veio a transferência, se o histórico
+// foi compartilhado, motivo e resumo de handoff (visível mesmo quando o
+// histórico anterior está oculto para este atendente).
+function handoffNoticeMarkup(c) {
+  const handoff = c.currentHandoff;
+  const parts = [];
+  if (handoff) {
+    const origin = handoff.transferredBy || handoff.from;
+    parts.push(`<b>Transferida${origin ? ` por ${escapeHtml(origin)}` : ""}</b>`);
+    if (handoff.historyShared === true) parts.push("Histórico anterior compartilhado com você.");
+    if (handoff.reason) parts.push(`Motivo: ${escapeHtml(handoff.reason)}`);
+    if (handoff.handoffSummary) parts.push(`Resumo: ${escapeHtml(handoff.handoffSummary)}`);
+  }
+  if (c.messageHistoryLimited) parts.push("As mensagens anteriores ao encaminhamento estão ocultas para esta conta.");
+  return parts.length ? `<div class="limited-history-notice">${parts.join("<br>")}</div>` : "";
+}
+
 function closeConversationView() {
   conversationLoadSequence += 1;
   state.selectedId = null;
@@ -563,6 +580,7 @@ async function api(path, options) {
   if (!response.ok) {
     const error = new Error(data.error || "Não foi possível concluir a operação.");
     error.code = data.code;
+    error.status = response.status;
     error.customerServiceWindow = data.customerServiceWindow;
     throw error;
   }
@@ -1122,7 +1140,7 @@ async function openConversation(id, { refreshList = true, markRead = true } = {}
   state.selectedContactName = c.contact.customName || c.contact.name || c.contact.email || c.contact.phone;
   const hasReactionEvents = displayMessages.length !== c.messages.length;
   const messageItems = displayMessages.map((message) => JSON.stringify([message.id, message.externalId, message.direction, message.type, message.text, message.occurredAt, message.mediaStorageKey, message.mediaMimeType, message.mediaFileName, message.mediaSize, message.reactionEmoji, message.sentByUser?.id, message.sentByUser?.name]));
-  const messagesSignature = JSON.stringify([c.messageHistoryLimited, messageItems]);
+  const messagesSignature = JSON.stringify([c.messageHistoryLimited, c.currentHandoff, messageItems]);
   const notesSignature = JSON.stringify((c.contact.notes || []).map((note) => [note.id, note.content, note.pinned, note.createdAt, note.updatedAt, note.author?.name]));
   const activitiesSignature = JSON.stringify((c.activities || []).map((activity) => [activity.id, activity.action, activity.details, activity.createdAt, activity.actorUser?.name]));
   state.selectedContactId = c.contact.id;
@@ -1178,7 +1196,7 @@ async function openConversation(id, { refreshList = true, markRead = true } = {}
       const previousMessage = state.selectedMessageItems.length ? displayMessages[state.selectedMessageItems.length - 1] : null;
       $("#messages").insertAdjacentHTML("beforeend", messageRowsMarkup(displayMessages.slice(state.selectedMessageItems.length), previousMessage));
     } else {
-      $("#messages").innerHTML = `${c.messageHistoryLimited ? `<div class="limited-history-notice">As mensagens anteriores ao encaminhamento estão ocultas para esta conta.</div>` : ""}${messageRowsMarkup(displayMessages)}`;
+      $("#messages").innerHTML = `${handoffNoticeMarkup(c)}${messageRowsMarkup(displayMessages)}`;
     }
     state.selectedMessageItems = messageItems;
     $("#messages").scrollTop = $("#messages").scrollHeight;
@@ -1206,7 +1224,17 @@ async function refreshInbox() {
   realtimeRefreshRunning = true;
   try {
     await loadCategories();
-    if (state.selectedId) await openConversation(state.selectedId, { refreshList:false, markRead:!document.hidden });
+    if (state.selectedId) {
+      try {
+        await openConversation(state.selectedId, { refreshList:false, markRead:!document.hidden });
+      } catch (error) {
+        // Outro atendente assumiu (403) ou a conversa saiu do seu acesso
+        // (404): fecha a tela sem derrubar a atualização da fila.
+        if (![403, 404].includes(error.status)) throw error;
+        closeConversationView();
+        toast(error.message, true);
+      }
+    }
     await loadConversations();
     await checkAlerts();
   } finally {
@@ -1328,7 +1356,7 @@ function activityText(activity) {
   return ({
     CONVERSATION_CREATED: "iniciou esta conversa pelo painel",
     CONVERSATION_CLAIMED: "assumiu a conversa como responsável",
-    CONVERSATION_TRANSFERRED: `transferiu a conversa de ${details.from || "Sem responsável"} para ${details.to || "Sem responsável"}`,
+    CONVERSATION_TRANSFERRED: `transferiu a conversa de ${details.from || "Sem responsável"} para ${details.to || "Sem responsável"}${details.historyShared === true ? " (com histórico)" : details.historyShared === false ? " (sem histórico)" : ""}${details.reason ? ` — motivo: ${details.reason}` : ""}`,
     ASSIGNEE_REMOVED: `removeu ${details.from || "o atendente"} da responsabilidade pela conversa`,
     CATEGORY_CHANGED: `alterou a categoria de ${details.from || "Sem categoria"} para ${details.to || "Sem categoria"}`,
     STATUS_CHANGED: `alterou o status de ${status(details.from)} para ${status(details.to)}`,
@@ -1920,6 +1948,7 @@ function openConversationCategoryTransfer() {
   const secondary = $("#subcategory-select").value ? $("#subcategory-select").selectedOptions[0]?.textContent : "";
   $("#transfer-destination").textContent = `Destino: ${secondary ? `${primary}: ${secondary}` : primary}`;
   $("#transfer-limit-history").checked = false;
+  $("#transfer-reason").value = "";
   $("#transfer-dialog").showModal();
 }
 async function confirmConversationCategory(event) {
@@ -1933,6 +1962,7 @@ async function confirmConversationCategory(event) {
   try {
     await api(`/api/conversations/${state.selectedId}`, { method:"PATCH", body:JSON.stringify({
       categoryId:categoryId || null, limitHistory:$("#transfer-limit-history").checked,
+      transferReason:$("#transfer-reason").value.trim() || null,
     }) });
     $("#transfer-dialog").close();
     toast("Conversa transferida para a categoria selecionada.");
@@ -1955,7 +1985,63 @@ $("#transfer-form").addEventListener("submit", confirmConversationCategory);
 $("#close-transfer").addEventListener("click", () => $("#transfer-dialog").close());
 $("#cancel-transfer").addEventListener("click", () => $("#transfer-dialog").close());
 $("#transfer-dialog").addEventListener("click", (event) => { if (event.target === $("#transfer-dialog")) $("#transfer-dialog").close(); });
-$("#assignee-select").addEventListener("change", async (event) => { try { await api(`/api/conversations/${state.selectedId}`, { method:"PATCH", body:JSON.stringify({ assignedUserId:event.target.value || null }) }); toast(event.target.value ? "Responsável atualizado." : "Conversa sem responsável."); await openConversation(state.selectedId); } catch (e) { toast(e.message, true); } });
+// Transferência para outra pessoa: antes de trocar o responsável, pergunta
+// se o histórico vai junto (o histórico nunca é apagado — sem compartilhar,
+// ele só fica oculto para o novo atendente nesta etapa). Assumir para si ou
+// deixar sem responsável continuam imediatos.
+let pendingUserTransferId = null;
+async function saveAssignee(assignedUserId, transfer = {}) {
+  await api(`/api/conversations/${state.selectedId}`, { method:"PATCH", body:JSON.stringify({ assignedUserId, ...transfer }) });
+  // Depois de transferir para outra pessoa, quem transferiu deixa de ter
+  // acesso (conversa privada do novo responsável) — exceto o Master.
+  if (assignedUserId && assignedUserId !== state.currentUser?.id && !state.currentUser?.isMaster) {
+    toast("Conversa transferida.");
+    closeConversationView();
+    await loadConversations();
+    return;
+  }
+  toast(assignedUserId ? "Responsável atualizado." : "Conversa sem responsável.");
+  await openConversation(state.selectedId);
+}
+function revertAssigneeSelect() {
+  const current = state.conversations.find(({ id }) => id === state.selectedId);
+  $("#assignee-select").value = current?.assignedUserId || "";
+}
+$("#assignee-select").addEventListener("change", async (event) => {
+  const assignedUserId = event.target.value || null;
+  if (assignedUserId && assignedUserId !== state.currentUser?.id) {
+    pendingUserTransferId = assignedUserId;
+    $("#user-transfer-destination").textContent = `Novo atendente: ${event.target.selectedOptions[0]?.textContent || "Atendente"}`;
+    $("#user-transfer-share-history").checked = true;
+    $("#user-transfer-reason").value = "";
+    $("#user-transfer-summary").value = "";
+    $("#user-transfer-dialog").showModal();
+    return;
+  }
+  try { await saveAssignee(assignedUserId); } catch (e) { revertAssigneeSelect(); toast(e.message, true); }
+});
+$("#user-transfer-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!pendingUserTransferId) return;
+  const submit = event.submitter;
+  if (submit) submit.disabled = true;
+  try {
+    await saveAssignee(pendingUserTransferId, {
+      shareHistory: $("#user-transfer-share-history").checked,
+      transferReason: $("#user-transfer-reason").value.trim() || null,
+      handoffSummary: $("#user-transfer-summary").value.trim() || null,
+    });
+    pendingUserTransferId = null;
+    $("#user-transfer-dialog").close();
+  } catch (e) {
+    toast(e.message, true);
+  } finally { if (submit) submit.disabled = false; }
+});
+$("#user-transfer-dialog").addEventListener("close", () => {
+  if (pendingUserTransferId) { pendingUserTransferId = null; revertAssigneeSelect(); }
+});
+$("#close-user-transfer").addEventListener("click", () => $("#user-transfer-dialog").close());
+$("#cancel-user-transfer").addEventListener("click", () => $("#user-transfer-dialog").close());
 $("#priority-select").addEventListener("change", async (event) => {
   const previous = state.selectedId ? (state.conversations.find((c) => c.id === state.selectedId)?.priority || "NORMAL") : "NORMAL";
   try {

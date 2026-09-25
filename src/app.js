@@ -408,8 +408,21 @@ app.post(
   "/api/internal-chats/direct/:userId",
   internalChatController.direct
 );
+  // Grupos do chat interno (permissões de membro/admin validadas no serviço).
+  app.post("/api/internal-chats/groups", internalChatController.createGroup);
+  app.get("/api/internal-chats/:id/group", internalChatController.group);
+  app.patch("/api/internal-chats/:id/group", internalChatController.renameGroup);
+  app.post("/api/internal-chats/:id/members", internalChatController.addGroupMembers);
+  app.patch("/api/internal-chats/:id/members/:userId", internalChatController.setGroupMemberRole);
+  app.delete("/api/internal-chats/:id/members/:userId", internalChatController.removeGroupMember);
+  app.post("/api/internal-chats/:id/leave", internalChatController.leaveGroup);
+  app.post("/api/internal-chats/:id/archive", internalChatController.archiveGroup);
   app.get("/api/messages", async (req, res, next) => {
     try {
+      // Endpoint legado (exportação bruta de várias conversas de uma vez):
+      // não tem como aplicar o recorte de histórico por conversa, então fica
+      // restrito ao Master. O painel não usa esta rota.
+      if (!authorization.isMaster(req.user)) throw authorization.forbidden("Somente uma conta Master pode exportar mensagens em lote.");
       const scope = await authorization.conversationScope(req.user);
       const rows = await prisma.message.findMany({
         where: { conversation: { is: scope } },
