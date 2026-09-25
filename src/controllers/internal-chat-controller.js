@@ -1,6 +1,18 @@
 const chats = require("../services/internal-chat-service");
 const inboxEvents = require("../realtime/inbox-events");
 
+// Tempo real do chat interno: o aviso vai só para quem é membro do chat
+// (e, em remoção/saída, também para quem acabou de perder o acesso, para a
+// tela dele fechar o grupo). O payload leva só identificadores — o conteúdo
+// é sempre buscado pela API, que confere a participação.
+function notifyChat(chatId, userIds, kind, extra = {}) {
+  inboxEvents.publishToUsers(userIds, "internal-chat.updated", { chatId, kind, ...extra });
+}
+
+async function notifyMembers(chatId, kind) {
+  notifyChat(chatId, await chats.chatMemberIds(chatId), kind);
+}
+
 module.exports = {
   async users(req, res, next) {
     try {
@@ -50,7 +62,7 @@ module.exports = {
       req.user
     );
 
-    inboxEvents.publish();
+    await notifyMembers(req.params.id, "message");
 
     return res.status(201).json(message);
   } catch (error) {
@@ -88,7 +100,7 @@ async media(req, res, next) {
         req.user
       );
 
-      inboxEvents.publish();
+      await notifyMembers(req.params.id, "message");
 
       return res.status(201).json(message);
     } catch (error) {
@@ -118,9 +130,89 @@ async media(req, res, next) {
         req.user
       );
 
-      inboxEvents.publish();
+      await notifyMembers(chat.id, "chat");
 
       return res.json(chat);
+    } catch (error) {
+      return next(error);
+    }
+  },
+
+  async createGroup(req, res, next) {
+    try {
+      const { chat, memberIds } = await chats.createGroup(req.body || {}, req.user);
+      notifyChat(chat.id, memberIds, "group-created");
+      return res.status(201).json(chat);
+    } catch (error) {
+      return next(error);
+    }
+  },
+
+  async group(req, res, next) {
+    try {
+      return res.json(await chats.getGroup(req.params.id, req.user));
+    } catch (error) {
+      return next(error);
+    }
+  },
+
+  async renameGroup(req, res, next) {
+    try {
+      const { chat, memberIds } = await chats.renameGroup(req.params.id, req.body?.name, req.user);
+      notifyChat(chat.id, memberIds, "group-renamed");
+      return res.json(await chats.getGroup(req.params.id, req.user));
+    } catch (error) {
+      return next(error);
+    }
+  },
+
+  async addGroupMembers(req, res, next) {
+    try {
+      const { chat, memberIds } = await chats.addGroupMembers(req.params.id, req.body?.userIds, req.user);
+      notifyChat(chat.id, memberIds, "members-added");
+      return res.json(await chats.getGroup(req.params.id, req.user));
+    } catch (error) {
+      return next(error);
+    }
+  },
+
+  async removeGroupMember(req, res, next) {
+    try {
+      const { chat, memberIds, removedUserId } = await chats.removeGroupMember(req.params.id, req.params.userId, req.user);
+      notifyChat(chat.id, memberIds, "member-removed");
+      notifyChat(chat.id, [removedUserId], "removed");
+      return res.json(await chats.getGroup(req.params.id, req.user));
+    } catch (error) {
+      return next(error);
+    }
+  },
+
+  async setGroupMemberRole(req, res, next) {
+    try {
+      const { chat, memberIds } = await chats.setGroupMemberRole(req.params.id, req.params.userId, req.body?.role, req.user);
+      notifyChat(chat.id, memberIds, "member-role");
+      return res.json(await chats.getGroup(req.params.id, req.user));
+    } catch (error) {
+      return next(error);
+    }
+  },
+
+  async leaveGroup(req, res, next) {
+    try {
+      const { chat, memberIds, removedUserId } = await chats.leaveGroup(req.params.id, req.user);
+      notifyChat(chat.id, memberIds, "member-left");
+      notifyChat(chat.id, [removedUserId], "removed");
+      return res.json({ left: true });
+    } catch (error) {
+      return next(error);
+    }
+  },
+
+  async archiveGroup(req, res, next) {
+    try {
+      const { chat, memberIds } = await chats.archiveGroup(req.params.id, req.user);
+      notifyChat(chat.id, memberIds, "group-archived");
+      return res.json(await chats.getGroup(req.params.id, req.user));
     } catch (error) {
       return next(error);
     }
