@@ -9,7 +9,7 @@
   <script>try{const saved=localStorage.getItem("mibro-theme");document.documentElement.dataset.theme=saved||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light")}catch{}</script>
   <link rel="stylesheet" href="/css/skeleton.css">
   <link rel="stylesheet" href="/css/bots.css">
-  <link rel="stylesheet" href="/css/quick-replies.css">
+  <link rel="stylesheet" href="/css/quick-replies.css?v=0.34.7-2">
   <script src="/js/feature-flags.js"></script>
   <link rel="stylesheet" href="/css/responsive.css">
 </head>
@@ -61,7 +61,11 @@
             <div class="fields two-columns">
               <label><span>Nome *</span><input id="qr-name" maxlength="100" required placeholder="Ex.: Solicitar número do pedido"></label>
               <label><span>Atalho * (com /)</span><input id="qr-shortcut" maxlength="31" required placeholder="/pedido"></label>
-              <label><span>Categoria / setor</span><select id="qr-category"></select></label>
+              <div class="full">
+                <span>Categorias / setores (vazio = todos)</span>
+                <p class="card-help">Você pode marcar várias. Uma categoria principal também libera automaticamente a resposta para todas as subcategorias dela.</p>
+                <div id="qr-categories-checklist" class="qr-categories-checklist"></div>
+              </div>
               <label><span>Tipo</span><select id="qr-type">
                 <option value="QUICK_REPLY">Resposta rápida (ativo)</option>
                 <option value="SUGGESTED_REPLY">Sugestão (experimental)</option>
@@ -98,6 +102,6 @@
   </main>
 
   <div id="toast" class="toast"></div>
-  <script src="/js/quick-replies.js"></script>
+  <script src="/js/quick-replies.js?v=0.34.7-2"></script>
 </body>
 </html>

@@ -548,6 +548,7 @@ model Category {
   botIntents      BotIntent[]
   botObservations BotObservation[]
   quickReplies    QuickReply[]
+  quickReplyLinks QuickReplyCategory[]
   campaigns       Campaign[]
   triageOptions   BotTriageOption[]
 
@@ -1545,6 +1546,7 @@ model QuickReply {
   category                Category?            @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   createdBy               User?                @relation("QuickReplyCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
   intents                 QuickReplyIntent[]
+  categories              QuickReplyCategory[]
   favorites               QuickReplyFavorite[]
   usages                  QuickReplyUsage[]
   suggestedInObservations BotObservation[]     @relation("ObservationSuggestedQuickReply")
@@ -1552,6 +1554,21 @@ model QuickReply {
   @@index([active, categoryId])
   @@index([shortcut])
   @@index([createdAt])
+}
+
+// Uma mesma Resposta Rápida pode ser disponibilizada em vários setores.
+// Selecionar uma categoria principal também a disponibiliza nas suas
+// subcategorias; essa herança é resolvida no serviço, sem duplicar vínculos.
+model QuickReplyCategory {
+  quickReplyId String
+  categoryId   String
+  createdAt    DateTime @default(now())
+
+  quickReply QuickReply @relation(fields: [quickReplyId], references: [id], onDelete: Cascade)
+  category   Category   @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@id([quickReplyId, categoryId])
+  @@index([categoryId])
 }
 
 // Liga uma resposta rápida a uma ou mais BotIntent existentes (nunca

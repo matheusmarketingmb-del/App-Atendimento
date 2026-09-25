@@ -4,3 +4,10 @@
 .qr-filters select{height:32px;padding:0 8px;border:1px solid var(--line);border-radius:8px;color:var(--ink);background:var(--surface);font-size:9px}
 .qr-shortcut-pill{padding:3px 7px;border-radius:8px;color:#7a3418;background:var(--orange-soft);font-size:7px;font-weight:900}
 .qr-intents-checklist{grid-template-columns:repeat(auto-fill,minmax(220px,1fr))}
+.qr-categories-checklist{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:7px;margin-top:8px}
+.qr-category-option{display:grid;grid-template-columns:auto 1fr;align-items:center;gap:7px;min-height:38px;padding:8px 10px;border:1px solid var(--line);border-radius:9px;background:var(--surface);cursor:pointer}
+.qr-category-option.child{margin-left:12px}
+.qr-category-option input{accent-color:var(--orange)}
+.qr-category-option span{font-size:10px;font-weight:750;color:var(--ink)}
+.qr-category-option small{grid-column:2;color:var(--muted);font-size:8px}
+.qr-category-option:has(input:checked){border-color:var(--orange);background:var(--orange-soft)}

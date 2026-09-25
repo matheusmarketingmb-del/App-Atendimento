@@ -30,9 +30,21 @@ function toast(message, error = false) {
 }
 
 function categoryOptions(selected = "") {
-  return `<option value="">Sem setor específico (aparece para todos)</option>${state.categories.map((category) => (
+  return `<option value="">Todas as categorias</option>${state.categories.map((category) => (
     `<option value="${escapeHtml(category.id)}" ${category.id === selected ? "selected" : ""}>${escapeHtml(category.parentId ? `- ${category.name}` : category.name)}</option>`
   )).join("")}`;
+}
+
+function renderCategoriesChecklist(selected = []) {
+  const selectedIds = new Set(selected);
+  const parentsWithChildren = new Set(state.categories.filter((category) => category.parentId).map((category) => category.parentId));
+  $("#qr-categories-checklist").innerHTML = state.categories.map((category) => `
+    <label class="qr-category-option ${category.parentId ? "child" : "parent"}">
+      <input type="checkbox" value="${escapeHtml(category.id)}" ${selectedIds.has(category.id) ? "checked" : ""}>
+      <span>${escapeHtml(category.name)}</span>
+      ${parentsWithChildren.has(category.id) ? '<small>inclui subcategorias</small>' : ""}
+    </label>
+  `).join("");
 }
 
 function currentFilters() {
@@ -60,7 +72,7 @@ function renderList() {
     <button class="bot-card ${state.selected?.id === item.id ? "active" : ""}" type="button" data-qr-id="${escapeHtml(item.id)}">
       <header><b>${escapeHtml(item.name)}</b><span class="mini-status ${item.active ? "ACTIVE" : "PAUSED"}">${item.active ? "ATIVA" : "INATIVA"}</span></header>
       <small class="qr-shortcut-pill">${escapeHtml(item.shortcut)}</small>
-      <div class="bot-meta"><span>${escapeHtml(item.category?.name || "Sem setor")}</span><span>•</span><span>${item.usageCount} uso(s)</span></div>
+      <div class="bot-meta"><span>${escapeHtml(item.categories?.length ? item.categories.map((category) => category.name).join(", ") : (item.category?.name || "Todos os setores"))}</span><span>•</span><span>${item.usageCount} uso(s)</span></div>
     </button>
   `).join("") : '<div class="intent-empty">Nenhuma resposta encontrada.</div>';
   document.querySelectorAll("[data-qr-id]").forEach((button) => button.addEventListener("click", () => selectQuickReply(button.dataset.qrId)));
@@ -90,7 +102,7 @@ function renderIntentsChecklist(selected = []) {
 function fillForm(item = null) {
   $("#qr-name").value = item?.name || "";
   $("#qr-shortcut").value = item?.shortcut || "";
-  $("#qr-category").innerHTML = categoryOptions(item?.categoryId || "");
+  renderCategoriesChecklist(item?.categoryIds || (item?.categoryId ? [item.categoryId] : []));
   $("#qr-type").value = item?.type || "QUICK_REPLY";
   $("#qr-text").value = item?.text || "";
   $("#qr-available-agents").checked = item ? item.availableToAgents : true;
@@ -149,7 +161,7 @@ function formPayload() {
   return {
     name: $("#qr-name").value,
     shortcut: $("#qr-shortcut").value,
-    categoryId: $("#qr-category").value || null,
+    categoryIds: Array.from(document.querySelectorAll("#qr-categories-checklist input:checked")).map((input) => input.value),
     type: $("#qr-type").value,
     text: $("#qr-text").value,
     channels: Array.from(document.querySelectorAll("#qr-channels-checklist input:checked")).map((input) => input.value),
@@ -223,7 +235,7 @@ $("#logout").addEventListener("click", async () => {
     state.categories = (await api("/api/categories")).filter((category) => category.active !== false);
     state.intents = await api("/api/bots/intents");
     renderFilterOptions();
-    $("#qr-category").innerHTML = categoryOptions();
+    renderCategoriesChecklist();
     await loadList();
   } catch (error) {
     if ($("#qr-list").querySelector(".skeleton-list")) $("#qr-list").innerHTML = `<div class="empty-list">Não foi possível carregar as respostas rápidas.</div>`;

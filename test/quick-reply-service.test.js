@@ -120,6 +120,38 @@ test("filtro por categoria/setor: resposta sem setor aparece para todos; com set
   assert.ok(!listedWrong.some((item) => item.id === sectorized.id), "setorizada NÃO aparece em outro setor");
 });
 
+test("uma resposta aceita várias categorias e a categoria principal inclui suas subcategorias", async () => {
+  const suffix = Date.now().toString(36);
+  const parent = await prisma.category.create({ data: { code: `QR_PARENT_${suffix}`, name: `${namePrefix} Principal ${suffix}`, color: "#ef5b2a" } });
+  const child = await prisma.category.create({ data: { code: `QR_CHILD_${suffix}`, name: `${namePrefix} Sub ${suffix}`, parentId: parent.id, color: "#ef5b2a" } });
+  const extra = await prisma.category.create({ data: { code: `QR_EXTRA_${suffix}`, name: `${namePrefix} Extra ${suffix}`, color: "#ef5b2a" } });
+  const outside = await prisma.category.create({ data: { code: `QR_OUT_${suffix}`, name: `${namePrefix} Fora ${suffix}`, color: "#ef5b2a" } });
+  try {
+    const created = await quickReplies.createQuickReply({
+      name: `${namePrefix} Multicategoria ${suffix}`, shortcut: `/qrmulti_${suffix}`, text: "x",
+      categoryIds: [parent.id, extra.id],
+    }, master);
+    assert.deepEqual(new Set(created.categoryIds), new Set([parent.id, extra.id]));
+    const makeConversation = async (label, categoryId) => {
+      const contact = await prisma.contact.create({
+        data: { externalId: `qr-multi-${suffix}-${label}`, phone: `55${Date.now()}${label.length}`, channel: "META" },
+      });
+      return prisma.conversation.create({ data: { contactId: contact.id, channel: "META", categoryId } });
+    };
+    const childConversation = await makeConversation("child", child.id);
+    const extraConversation = await makeConversation("extra", extra.id);
+    const outsideConversation = await makeConversation("outside", outside.id);
+    assert.ok((await quickReplies.listForComposer({ conversationId: childConversation.id }, master)).some((item) => item.id === created.id));
+    assert.ok((await quickReplies.listForComposer({ conversationId: extraConversation.id }, master)).some((item) => item.id === created.id));
+    assert.ok(!(await quickReplies.listForComposer({ conversationId: outsideConversation.id }, master)).some((item) => item.id === created.id));
+  } finally {
+    await prisma.conversation.deleteMany({ where: { contact: { is: { externalId: { startsWith: `qr-multi-${suffix}-` } } } } });
+    await prisma.contact.deleteMany({ where: { externalId: { startsWith: `qr-multi-${suffix}-` } } });
+    await prisma.quickReply.deleteMany({ where: { name: { contains: suffix } } });
+    await prisma.category.deleteMany({ where: { id: { in: [child.id, extra.id, outside.id, parent.id] } } });
+  }
+});
+
 test("filtro por canal: resposta restrita a um canal não aparece em conversa de outro canal", async () => {
   const restricted = await quickReplies.createQuickReply({
     name: `${namePrefix} Canal`, shortcut: "/qrcanal", text: "x", channels: ["EMAIL"],

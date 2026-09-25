@@ -84,26 +84,52 @@ async function accessibleConversation(viewer, value) {
   const conversationId = requireConversationId(value);
   await authorization.assertCanViewConversation(viewer, conversationId);
   const conversation = await prisma.conversation.findUnique({
-    where: { id: conversationId }, include: { contact: true },
+    where: { id: conversationId },
+    include: { contact: true, category: { select: { id: true, parentId: true } } },
   });
   if (!conversation) throw fail("Conversa não encontrada.", 404);
   return conversation;
 }
 
-function assertApplicableToConversation(quickReply, conversation) {
+async function categoryAndAncestorIds(categoryId) {
+  const ids = [];
+  const visited = new Set();
+  let currentId = categoryId || null;
+  while (currentId && !visited.has(currentId)) {
+    visited.add(currentId);
+    ids.push(currentId);
+    const category = await prisma.category.findUnique({ where: { id: currentId }, select: { parentId: true } });
+    currentId = category?.parentId || null;
+  }
+  return ids;
+}
+function linkedCategoryIds(quickReply) {
+  const linked = (quickReply.categories || []).map((link) => link.categoryId);
+  return [...new Set(linked.length ? linked : (quickReply.categoryId ? [quickReply.categoryId] : []))];
+}
+async function assertApplicableToConversation(quickReply, conversation) {
   if (quickReply.channels.length && !quickReply.channels.includes(conversation.channel)) {
     throw fail("Esta resposta rápida não está disponível para o canal desta conversa.");
   }
-  if (quickReply.categoryId && quickReply.categoryId !== conversation.categoryId) {
+  const selectedIds = linkedCategoryIds(quickReply);
+  if (!selectedIds.length) return;
+  const conversationScope = await categoryAndAncestorIds(conversation.categoryId);
+  if (!selectedIds.some((categoryId) => conversationScope.includes(categoryId))) {
     throw fail("Esta resposta rápida não está disponível para o setor desta conversa.");
   }
 }
-
-async function validateCategoryId(categoryId) {
-  if (!categoryId) return null;
-  const category = await prisma.category.findUnique({ where: { id: categoryId }, select: { id: true } });
-  if (!category) throw fail("Categoria/setor não encontrado.");
-  return categoryId;
+async function validateCategoryIds(categoryIds, legacyCategoryId) {
+  const source = categoryIds === undefined ? (legacyCategoryId ? [legacyCategoryId] : []) : categoryIds;
+  if (!Array.isArray(source)) throw fail("categoryIds deve ser uma lista de categorias.");
+  const ids = [...new Set(source.filter(Boolean))];
+  if (!ids.length) return [];
+  const found = await prisma.category.findMany({ where: { id: { in: ids }, active: true }, select: { id: true } });
+  if (found.length !== ids.length) throw fail("Uma ou mais categorias/setores não foram encontradas.");
+  return ids;
+}
+function addAnd(where, condition) {
+  if (!where.AND) where.AND = [];
+  where.AND.push(condition);
 }
 
 async function validateIntentIds(intentIds) {
@@ -125,7 +151,11 @@ async function assertShortcutAvailable(shortcut, excludeId = null) {
 }
 
 const quickReplyInclude = {
-  category: { select: { id: true, name: true, code: true, color: true } },
+  category: { select: { id: true, name: true, code: true, color: true, parentId: true } },
+  categories: {
+    include: { category: { select: { id: true, name: true, code: true, color: true, parentId: true } } },
+    orderBy: { createdAt: "asc" },
+  },
   createdBy: { select: { id: true, name: true } },
   intents: { include: { botIntent: { select: { id: true, name: true, botId: true } } } },
   _count: { select: { usages: true, favorites: true } },
@@ -138,7 +168,9 @@ function serialize(quickReply, { favoritedByUserId } = {}) {
     shortcut: quickReply.shortcut,
     text: quickReply.text,
     categoryId: quickReply.categoryId,
-    category: quickReply.category || null,
+    category: quickReply.category || quickReply.categories?.[0]?.category || null,
+    categoryIds: linkedCategoryIds(quickReply),
+    categories: (quickReply.categories || []).map((link) => link.category),
     channels: quickReply.channels,
     availableToAgents: quickReply.availableToAgents,
     availableToBots: quickReply.availableToBots,
@@ -165,7 +197,8 @@ async function ensureQuickReply(id) {
 function snapshot(quickReply) {
   return {
     name: quickReply.name, shortcut: quickReply.shortcut, text: quickReply.text,
-    categoryId: quickReply.categoryId, channels: quickReply.channels, type: quickReply.type,
+    categoryId: quickReply.categoryId, categoryIds: linkedCategoryIds(quickReply),
+    channels: quickReply.channels, type: quickReply.type,
     active: quickReply.active, availableToAgents: quickReply.availableToAgents, availableToBots: quickReply.availableToBots,
   };
 }
@@ -178,19 +211,26 @@ async function listQuickReplies(filters, viewer) {
   if (filters.active === "true") where.active = true;
   if (filters.active === "false") where.active = false;
   if (filters.includeArchived !== "true") where.archivedAt = null;
-  if (filters.categoryId) where.categoryId = filters.categoryId;
+  if (filters.categoryId) {
+    const categoryIds = await categoryAndAncestorIds(filters.categoryId);
+    addAnd(where, { OR: [
+      { categories: { some: { categoryId: { in: categoryIds } } } },
+      { categoryId: { in: categoryIds } },
+    ] });
+  }
   if (filters.channel) where.OR = [{ channels: { isEmpty: true } }, { channels: { has: filters.channel } }];
   if (filters.type) where.type = validateType(filters.type);
   if (filters.search?.trim()) {
     const term = filters.search.trim().slice(0, 120);
-    where.AND = [{
+    addAnd(where, {
       OR: [
         { name: { contains: term, mode: "insensitive" } },
         { shortcut: { contains: term, mode: "insensitive" } },
         { text: { contains: term, mode: "insensitive" } },
         { category: { is: { name: { contains: term, mode: "insensitive" } } } },
+        { categories: { some: { category: { name: { contains: term, mode: "insensitive" } } } } },
       ],
-    }];
+    });
   }
   const rows = await prisma.quickReply.findMany({
     where, include: quickReplyInclude, orderBy: [{ name: "asc" }],
@@ -205,11 +245,12 @@ async function getQuickReply(id, viewer) {
 
 async function createQuickReply(data, actor) {
   assertQuickReplyManager(actor);
+  const categoryIds = await validateCategoryIds(data.categoryIds, data.categoryId);
   const create = {
     name: requiredText(data.name, "Nome", 100),
     shortcut: validateShortcut(data.shortcut),
     text: requiredBody(data.text, "Texto", 4000),
-    categoryId: await validateCategoryId(data.categoryId),
+    categoryId: categoryIds[0] || null,
     channels: validateChannels(data.channels),
     availableToAgents: data.availableToAgents === undefined ? true : validateBoolean(data.availableToAgents, "availableToAgents"),
     availableToBots: data.availableToBots === undefined ? false : validateBoolean(data.availableToBots, "availableToBots"),
@@ -222,6 +263,11 @@ async function createQuickReply(data, actor) {
 
   const quickReply = await prisma.$transaction(async (transaction) => {
     const created = await transaction.quickReply.create({ data: create });
+    if (categoryIds.length) {
+      await transaction.quickReplyCategory.createMany({
+        data: categoryIds.map((categoryId) => ({ quickReplyId: created.id, categoryId })),
+      });
+    }
     if (intentIds.length) {
       await transaction.quickReplyIntent.createMany({
         data: intentIds.map((botIntentId) => ({ quickReplyId: created.id, botIntentId })),
@@ -230,7 +276,7 @@ async function createQuickReply(data, actor) {
     await audit.recordAudit({
       actor, action: "QUICK_REPLY_CREATED", entityType: "QUICK_REPLY", entityId: created.id,
       summary: `Criou a resposta rápida "${created.name}" (${created.shortcut})`,
-      details: { after: snapshot(created) },
+      details: { after: { ...snapshot(created), categoryIds } },
     }, transaction);
     return transaction.quickReply.findUnique({ where: { id: created.id }, include: quickReplyInclude });
   });
@@ -247,13 +293,16 @@ async function updateQuickReply(id, data, actor) {
     await assertShortcutAvailable(update.shortcut, id);
   }
   if (data.text !== undefined) update.text = requiredBody(data.text, "Texto", 4000);
-  if (data.categoryId !== undefined) update.categoryId = await validateCategoryId(data.categoryId);
+  const categoryIds = data.categoryIds !== undefined || data.categoryId !== undefined
+    ? await validateCategoryIds(data.categoryIds, data.categoryId)
+    : null;
+  if (categoryIds !== null) update.categoryId = categoryIds[0] || null;
   if (data.channels !== undefined) update.channels = validateChannels(data.channels);
   if (data.availableToAgents !== undefined) update.availableToAgents = validateBoolean(data.availableToAgents, "availableToAgents");
   if (data.availableToBots !== undefined) update.availableToBots = validateBoolean(data.availableToBots, "availableToBots");
   if (data.type !== undefined) update.type = validateType(data.type);
   if (data.active !== undefined) update.active = validateBoolean(data.active, "active");
-  if (!Object.keys(update).length && data.intentIds === undefined) {
+  if (!Object.keys(update).length && data.intentIds === undefined && categoryIds === null) {
     throw fail("Informe ao menos um campo para atualizar.");
   }
 
@@ -261,6 +310,14 @@ async function updateQuickReply(id, data, actor) {
 
   const quickReply = await prisma.$transaction(async (transaction) => {
     if (Object.keys(update).length) await transaction.quickReply.update({ where: { id }, data: update });
+    if (categoryIds !== null) {
+      await transaction.quickReplyCategory.deleteMany({ where: { quickReplyId: id } });
+      if (categoryIds.length) {
+        await transaction.quickReplyCategory.createMany({
+          data: categoryIds.map((categoryId) => ({ quickReplyId: id, categoryId })),
+        });
+      }
+    }
     if (intentIds !== null) {
       await transaction.quickReplyIntent.deleteMany({ where: { quickReplyId: id } });
       if (intentIds.length) {
@@ -306,11 +363,13 @@ async function listForComposer({ conversationId, search, categoryId }, viewer) {
   }
 
   const where = { active: true, archivedAt: null, availableToAgents: true };
-  where.OR = [{ channels: { isEmpty: true } }, { channels: { has: conversation.channel } }];
-  if (categoryId) where.categoryId = categoryId;
-  else if (conversation?.categoryId) {
-    where.AND = [{ OR: [{ categoryId: null }, { categoryId: conversation.categoryId }] }];
-  }
+  addAnd(where, { OR: [{ channels: { isEmpty: true } }, { channels: { has: conversation.channel } }] });
+  const categoryIds = await categoryAndAncestorIds(conversation.categoryId);
+  addAnd(where, categoryIds.length ? { OR: [
+    { AND: [{ categories: { none: {} } }, { categoryId: null }] },
+    { categories: { some: { categoryId: { in: categoryIds } } } },
+    { categoryId: { in: categoryIds } },
+  ] } : { AND: [{ categories: { none: {} } }, { categoryId: null }] });
   if (search?.trim()) {
     const term = search.trim().slice(0, 120);
     const searchOr = {
@@ -319,10 +378,10 @@ async function listForComposer({ conversationId, search, categoryId }, viewer) {
         { shortcut: { contains: term, mode: "insensitive" } },
         { text: { contains: term, mode: "insensitive" } },
         { category: { is: { name: { contains: term, mode: "insensitive" } } } },
+        { categories: { some: { category: { name: { contains: term, mode: "insensitive" } } } } },
       ],
     };
-    if (!where.AND) where.AND = [];
-    where.AND.push(searchOr);
+    addAnd(where, searchOr);
   }
 
   const [rows, favorites] = await Promise.all([
@@ -346,7 +405,7 @@ async function setFavorite(quickReplyId, { conversationId, favorite }, actor) {
   if (!quickReply.active || quickReply.archivedAt || !quickReply.availableToAgents) {
     throw fail("Esta resposta rápida não está disponível para atendentes.");
   }
-  assertApplicableToConversation(quickReply, conversation);
+  await assertApplicableToConversation(quickReply, conversation);
   const normalizedFavorite = validateBoolean(favorite, "favorite");
   if (normalizedFavorite) {
     await prisma.quickReplyFavorite.upsert({
@@ -371,7 +430,7 @@ async function useQuickReply(quickReplyId, { conversationId }, actor, { source =
   }
 
   const conversation = preview && !conversationId ? null : await accessibleConversation(actor, conversationId);
-  if (conversation) assertApplicableToConversation(quickReply, conversation);
+  if (conversation) await assertApplicableToConversation(quickReply, conversation);
 
   const context = conversation
     ? contextFromConversation({ conversation, agent: actor })
@@ -413,7 +472,7 @@ async function listSuggestions({ intentId, conversationId }, viewer) {
   const suggestion = await suggestQuickReplyForIntent(intentId);
   if (!suggestion) return [];
   const quickReply = await ensureQuickReply(suggestion.id);
-  try { assertApplicableToConversation(quickReply, conversation); }
+  try { await assertApplicableToConversation(quickReply, conversation); }
   catch { return []; }
   return [suggestion];
 }

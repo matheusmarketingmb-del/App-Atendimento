@@ -2240,7 +2240,10 @@ async function loadQuickRepliesCache(conversationId) {
 
 function quickReplyCategories() {
   const map = new Map();
-  state.quickReplies.forEach((item) => { if (item.category) map.set(item.category.id, item.category.name); });
+  state.quickReplies.forEach((item) => {
+    const categories = item.categories?.length ? item.categories : (item.category ? [item.category] : []);
+    categories.forEach((category) => map.set(category.id, category.name));
+  });
   return [...map.entries()];
 }
 
@@ -2257,9 +2260,10 @@ function renderQuickReplyCategories() {
 function filteredQuickReplies() {
   const term = state.quickReplySearch.trim().toLowerCase();
   return state.quickReplies.filter((item) => {
-    if (state.quickReplyCategoryFilter && item.categoryId !== state.quickReplyCategoryFilter) return false;
+    if (state.quickReplyCategoryFilter && !(item.categoryIds || [item.categoryId]).includes(state.quickReplyCategoryFilter)) return false;
     if (!term) return true;
-    return [item.name, item.shortcut, item.text, item.category?.name].filter(Boolean).some((field) => field.toLowerCase().includes(term));
+    const categoryNames = (item.categories || []).map((category) => category.name);
+    return [item.name, item.shortcut, item.text, item.category?.name, ...categoryNames].filter(Boolean).some((field) => field.toLowerCase().includes(term));
   });
 }
 
