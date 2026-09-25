@@ -8,6 +8,7 @@ const { startInactivityMonitor } = require("./src/services/conversation-inactivi
 const { startSlaMonitor } = require("./src/services/conversation-sla-service");
 const { startCampaignWorker } = require("./src/services/campaign-worker-service");
 const { startGmailSyncWorker } = require("./src/services/channels/gmail-sync-service");
+const { startVisualFlowWorker } = require("./src/services/bot-visual-flow-service");
 const localAiStatusService = require("./src/services/local-ai-status-service");
 const inboxEvents = require("./src/realtime/inbox-events");
 
@@ -26,6 +27,9 @@ const stopSlaMonitor = startSlaMonitor({ onChange: () => inboxEvents.publish() }
 // a cada tick dentro do próprio worker.
 const stopCampaignWorker = startCampaignWorker({ channel, onChange: () => inboxEvents.publish() });
 const stopGmailSyncWorker = startGmailSyncWorker();
+// Flow Builder: retoma execuções em WAITING_TIMER (nó Intervalo) — mesmo
+// padrão de monitor em processo; só age em Bot FLOW_BUILDER ativo.
+const stopVisualFlowWorker = startVisualFlowWorker({ channel, onChange: () => inboxEvents.publish() });
 // IA local (LOCAL_QWEN): monitor de disponibilidade em processo, mesmo
 // padrão dos demais workers acima. Nunca bloqueia o boot: sem
 // LocalAiProviderSettings.enabled/baseUrl configurado, fica OFFLINE sem
@@ -38,6 +42,7 @@ async function shutdown(signal) {
   stopSlaMonitor();
   stopCampaignWorker();
   stopGmailSyncWorker();
+  stopVisualFlowWorker();
   localAiStatusService.stop();
   server.close(async () => {
     await prisma.$disconnect();

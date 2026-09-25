@@ -274,4 +274,28 @@ async function previewShadowReply({ bot, message, history = [], simulateAutoRepl
   };
 }
 
-module.exports = { shadowIncomingMessage, previewShadowReply };
+// Nó "IA" do Flow Builder (bot-visual-flow-service.js): mesmo pipeline do
+// shadow/preview (hint -> RAG Server -> planner-output-guard -> gate), sem
+// IA paralela. O nó é o opt-in explícito de usar IA naquele ponto do fluxo,
+// então não exige flags.useAi/aiMode do Bot — mas continua só LOCAL_QWEN e
+// a decisão de envio continua presa ao send-mode atual (DRY_RUN): quem
+// chama recebe `sendDecision`, nunca um envio real.
+async function runFlowAiStep({ bot, message, history = [], model = null }) {
+  const flags = { ...resolveFeatureFlags(bot), ...(model ? { aiModel: model } : {}) };
+  const localAiStatus = getLocalAiState().status;
+  const globalSettings = await getGlobalSettings(prisma);
+  const outcome = await runShadowPipeline({
+    bot, flags, messageText: message, history, localAiStatus,
+    globalAutomationEnabled: globalSettings.automationEnabled,
+  });
+  if (!outcome.ok) return { ok: false, status: outcome.status, errorCode: outcome.errorCode, providerStatus: localAiStatus };
+  const { result, sendDecision } = outcome;
+  return {
+    ok: true, answer: result.answer, action: result.action, intent: result.intent, product: result.product,
+    confidence: result.confidence, needsHuman: Boolean(result.needsHuman), reason: result.reason,
+    provider: "LOCAL_QWEN", model: flags.aiModel || "qwen3:14b",
+    sendDecision: { shouldSend: sendDecision.shouldSend, reason: sendDecision.reason, sendMode: sendDecision.sendMode },
+  };
+}
+
+module.exports = { shadowIncomingMessage, previewShadowReply, runFlowAiStep };
