@@ -14,7 +14,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/css/skeleton.css">
-  <link rel="stylesheet" href="/css/app.css?v=0.34.2">
+  <link rel="stylesheet" href="/css/app.css?v=0.34.5-r4">
   <script src="/js/feature-flags.js"></script>
   <link rel="stylesheet" href="/css/responsive.css">
 </head>
@@ -23,6 +23,7 @@
     <button id="sidebar-toggle" type="button" title="Abrir menu" aria-label="Abrir menu"><span aria-hidden="true">☰</span></button>
     <div class="brand"><img class="brand-logo" src="/assets/mibro-logo.png" alt="Mibro"><span class="brand-divider"></span><small>Central de Atendimento</small></div>
     <button id="command-palette-trigger" class="cmdk-trigger" type="button" aria-haspopup="dialog"><span aria-hidden="true">⌕</span><span>Buscar conversas ou executar uma ação...</span><kbd>Ctrl K</kbd></button>
+    <button id="faq-button" class="faq-button" type="button" title="Ajuda e perguntas frequentes"><span aria-hidden="true">?</span><b>Ajuda</b></button>
     <div id="connection-indicator" class="connection" data-state="online" role="status" aria-live="polite"><span class="connection-dot"></span><span id="connection-label">WhatsApp conectado</span></div>
     <button id="install-app" class="install-app" type="button" hidden>Instalar aplicativo</button>
     <div class="app-version-actions">
@@ -373,7 +374,7 @@
         <label id="team-active-field" class="team-check single" hidden><input id="team-active" type="checkbox" checked><span>Conta ativa</span></label>
         <fieldset class="team-permissions"><legend>Permissões adicionais</legend>
           <label class="team-check"><input id="permission-categories" type="checkbox"><span><b>Gerenciar categorias</b><small>Criar, editar e desativar categorias.</small></span></label>
-          <label class="team-check"><input id="permission-transfer" type="checkbox"><span><b>Transferir conversas</b><small>Alterar o atendente responsável.</small></span></label>
+          <label class="team-check"><input id="permission-transfer" type="checkbox"><span><b>Alterar responsável</b><small>Transferir a conversa para outro atendente.</small></span></label>
           <label class="team-check"><input id="permission-team" type="checkbox"><span><b>Acompanhar equipe</b><small>Filtrar atendimentos de outros membros.</small></span></label>
           <label class="team-check"><input id="permission-history" type="checkbox"><span><b>Visualizar histórico</b><small>Consultar as ações registradas nas conversas permitidas.</small></span></label>
           <label class="team-check"><input id="permission-previous-messages" type="checkbox"><span><b>Ver mensagens anteriores</b><small>Ao receber um encaminhamento, visualizar também as mensagens anteriores.</small></span></label>
@@ -433,6 +434,17 @@
   </div>
 
   <div id="changelog-list" class="changelog-list"></div>
+</dialog>
+<dialog id="faq-dialog" class="faq-dialog">
+  <div class="dialog-header"><div><span>AJUDA DO APLICATIVO</span><h2>Como podemos ajudar?</h2><p id="faq-role-label"></p></div><button id="close-faq" type="button" aria-label="Fechar">×</button></div>
+  <div class="faq-layout">
+    <aside class="faq-summary">
+      <strong id="faq-profile-name"></strong>
+      <p>As orientações abaixo consideram seu perfil e suas permissões atuais.</p>
+      <div id="faq-permissions"></div>
+    </aside>
+    <section id="faq-content" class="faq-content"></section>
+  </div>
 </dialog>
 <dialog id="internal-chat-dialog" class="internal-chat-dialog">
   <div class="internal-chat-shell">
@@ -502,7 +514,7 @@
 </dialog>
   <aside id="update-banner" class="update-banner" hidden><span><b>Nova versão disponível</b><small>Atualize para receber as melhorias do atendimento.</small></span><button id="update-later" type="button">Depois</button><button id="apply-update" type="button">Atualizar agora</button></aside>
   <div id="toast" class="toast" role="status"></div>
-  <script src="/js/app.js?v=0.34.2"></script>
+  <script src="/js/app.js?v=0.34.5-r4"></script>
   <script src="/js/changelog.js?v=0.34.2"></script>
   <script src="/js/internal-chat.js"></script>
   <script src="/js/pwa.js"></script>

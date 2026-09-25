@@ -1856,3 +1856,28 @@ html[data-theme="dark"] .email-mailboxes{background:linear-gradient(145deg,#1d23
 html[data-theme="dark"] .workspace[data-channel-view="email"] .conversation-card{background:#191d24}
 html[data-theme="dark"] .workspace[data-channel-view="email"] .conversation-card:hover{background:#202632}
 @media(max-width:700px){.app-sidebar:not(.expanded) .sidebar-item-label{width:auto;max-width:none;opacity:1;visibility:visible}.email-mailboxes{margin-inline:4px}}
+
+/* FAQ contextual por perfil */
+.faq-button{height:38px;padding:0 13px;display:flex;align-items:center;gap:7px;border:1px solid var(--line);border-radius:20px;color:var(--ink);background:var(--panel);white-space:nowrap}
+.faq-button span{width:20px;height:20px;display:grid;place-items:center;border-radius:50%;color:#fff;background:var(--orange);font-weight:800}
+.faq-button b{font-size:12px}
+.faq-dialog{width:min(900px,calc(100vw - 32px));max-height:min(760px,calc(100vh - 32px));padding:0;border:1px solid var(--line);border-radius:18px;color:var(--ink);background:var(--panel);box-shadow:0 24px 80px #0005}
+.faq-dialog::backdrop{background:#06080bc7;backdrop-filter:blur(3px)}
+.faq-dialog .dialog-header{padding:24px 26px;border-bottom:1px solid var(--line)}
+.faq-dialog .dialog-header span{color:var(--orange);font-size:10px;font-weight:800;letter-spacing:.12em}
+.faq-dialog .dialog-header h2{margin:5px 0 3px;font-size:24px}
+.faq-dialog .dialog-header p{margin:0;color:var(--muted);font-size:12px}
+.faq-layout{padding:20px 26px 26px;display:grid;grid-template-columns:230px minmax(0,1fr);gap:22px;overflow:auto}
+.faq-summary{padding:18px;border:1px solid var(--line);border-radius:14px;background:var(--soft)}
+.faq-summary>strong{display:block;margin-bottom:7px;font-size:14px}
+.faq-summary>p{margin:0 0 15px;color:var(--muted);font-size:11px;line-height:1.5}
+#faq-permissions{display:grid;gap:6px}
+.faq-permission{padding:7px 9px;border-radius:8px;color:var(--muted);background:var(--panel);font-size:10px;font-weight:700}
+.faq-permission.enabled{color:#16743a;background:#eaf8ef}
+.faq-content{display:grid;align-content:start;gap:9px}
+.faq-item{border:1px solid var(--line);border-radius:12px;background:var(--panel);overflow:hidden}
+.faq-item summary{padding:14px 16px;cursor:pointer;font-size:12px;font-weight:800;list-style:none}
+.faq-item summary::after{content:"+";float:right;color:var(--orange);font-size:17px}
+.faq-item[open] summary::after{content:"–"}
+.faq-item p{margin:0;padding:0 16px 15px;color:var(--muted);font-size:12px;line-height:1.6}
+html[data-theme="dark"] .faq-permission.enabled{color:#82dba1;background:#193324}

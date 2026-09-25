@@ -72,13 +72,13 @@ Use prioridade Alta ou Urgente apenas quando houver impacto real, prazo crítico
 6. Marque **Ocultar histórico anterior para o novo setor** somente quando o setor de destino não puder visualizar o conteúdo anterior.
 7. Confirme.
 
-Sem a permissão **Transferir conversas**, o Atendente só pode selecionar categorias às quais já possui acesso. Com a permissão, pode realizar a transferência para outras categorias permitidas pelo canal, exceto categorias exclusivas de Master.
+Todo Atendente pode transferir para qualquer categoria ativa permitida pelo canal, exceto categorias exclusivas de Master. Categorias sem acesso aparecem somente como destino; não aparecem na barra lateral. Após a transferência, a conversa sai da tela se a categoria de destino não estiver liberada para o usuário.
 
 Ao mudar de setor sem escolher um novo responsável, o responsável atual pode ser removido para que o novo setor assuma a conversa.
 
 ## 9. Transferir para outro atendente
 
-Para alterar o campo **Responsável** para outra pessoa, é necessária a permissão **Transferir conversas**.
+Para alterar o campo **Responsável** para outra pessoa, é necessária a permissão **Alterar responsável**.
 
 O destino precisa:
 
@@ -133,7 +133,7 @@ Peça ao Master para conferir:
 
 ### Não consigo transferir
 
-Confirme a permissão **Transferir conversas**, a categoria de destino e os acessos do atendente que receberá o caso.
+Para mudar o responsável, confirme a permissão **Alterar responsável** e os acessos do atendente que receberá o caso. Para mudar apenas a categoria, confirme se ela está ativa e permitida para o canal.
 
 ### Não vejo mensagens antigas
 

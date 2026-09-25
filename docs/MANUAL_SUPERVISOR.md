@@ -15,7 +15,7 @@ Para exercer a supervisão, a conta normalmente deve receber:
 - acesso aos números/contas dos canais supervisionados;
 - **Visualizar histórico**, quando precisar auditar ações da conversa;
 - **Ver mensagens anteriores**, quando precisar analisar o atendimento antes de uma transferência;
-- **Transferir conversas**, quando for responsável pela redistribuição.
+- **Alterar responsável**, quando for responsável pela redistribuição entre Atendentes.
 
 ## 3. Visualizar conversas dos Atendentes
 
@@ -53,10 +53,10 @@ Evite marcar todos os casos como urgentes; isso elimina a utilidade da fila de p
 
 ## 6. Transferência e redistribuição
 
-Com **Transferir conversas**, o Supervisor pode:
+Todo Supervisor pode mover a conversa para uma categoria pública permitida pelo canal. Com **Alterar responsável**, também pode:
 
 - trocar o atendente responsável;
-- mover a conversa para outra categoria/setor permitido;
+- trocar o atendente mesmo quando ele próprio não é o destino;
 - remover o responsável ao encaminhar para um novo setor;
 - decidir se o histórico anterior deve ser ocultado do destino.
 

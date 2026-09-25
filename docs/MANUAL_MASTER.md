@@ -48,7 +48,7 @@ Além do escopo operacional, considere:
 - **Acompanhar equipe**;
 - **Visualizar histórico**;
 - **Ver mensagens anteriores**;
-- **Transferir conversas**;
+- **Alterar responsável**;
 - acesso a todas as categorias e canais da equipe supervisionada.
 
 O Supervisor já pode definir prioridade e visualizar Configurações de Conversas em modo somente leitura.
@@ -63,9 +63,9 @@ O perfil possui acesso administrativo completo. Evite usar Master como conta com
 
 Permite criar, editar e desativar categorias. Não concede administração de usuários.
 
-### Transferir conversas
+### Alterar responsável
 
-Permite alterar o atendente responsável e realizar mudanças de categoria/setor, respeitando as restrições do canal e categorias exclusivas de Master.
+Permite transferir a conversa para outro atendente. A mudança de categoria pública é permitida a todos os perfis; categorias Somente Master continuam restritas ao Master.
 
 ### Acompanhar equipe
 

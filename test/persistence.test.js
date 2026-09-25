@@ -572,7 +572,7 @@ test("fixa conversas por conta, restringe exclusão de notas e registra o histó
   await prisma.user.delete({ where: { id: otherMaster.id } });
 });
 
-test("permite ao atendente autorizado transferir setores e oculta mensagens anteriores", async () => {
+test("qualquer atendente transfere para categoria pública sem ganhar visibilidade da fila", async () => {
   const conversation = await prisma.conversation.findFirst();
   await prisma.message.updateMany({
     where: { conversationId: conversation.id }, data: { occurredAt: new Date(Date.now() - 1000) },
@@ -583,12 +583,12 @@ test("permite ao atendente autorizado transferir setores e oculta mensagens ante
   const transferAgent = await prisma.user.create({
     data: {
       name: "Atendente Comercial", email: "transferencia-setor@mibro.local", role: "ATENDENTE",
-      canTransferConversations: true, canViewPreviousMessages: false,
+      canTransferConversations: false, canViewPreviousMessages: false,
       categoryAccess: { create: [{ categoryId: commercial.id }] },
     },
   });
   const viewer = {
-    id: transferAgent.id, role: "ATENDENTE", canTransferConversations: true,
+    id: transferAgent.id, role: "ATENDENTE", canTransferConversations: false,
     canViewPreviousMessages: false,
   };
 
@@ -611,10 +611,13 @@ test("permite ao atendente autorizado transferir setores e oculta mensagens ante
   assert.deepEqual(assignedLimited.messages.map(({ id }) => id), [visibleMessage.id]);
 
   const categories = await inbox.listCategories(viewer);
-  assert.equal(categories.find(({ id }) => id === support.id).selectable, true);
+  assert.equal(categories.find(({ id }) => id === support.id), undefined);
+  const destinations = await inbox.listTransferCategories(conversation.id, viewer);
+  assert.equal(destinations.find(({ id }) => id === support.id).selectable, true);
   const moved = await inbox.updateConversation(conversation.id, { categoryId: support.id }, viewer);
   assert.equal(moved.categoryId, support.id);
   assert.equal(moved.assignedUserId, null);
+  assert.equal(await inbox.getConversation(conversation.id, viewer), null);
   await prisma.user.delete({ where: { id: transferAgent.id } });
 });
 

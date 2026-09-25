@@ -62,7 +62,8 @@ function createInboxController(channel) {
         const postContext = SOCIAL_COMMENT_CHANNELS.has(conversation.channel) && conversation.externalConversationId
           ? await resolveForPost(conversation.channel, conversation.externalConversationId)
           : null;
-        return res.json({ ...conversation, customerServiceWindow, mergedDestinations, channelCapabilities: channelCaps, postContext });
+        const transferCategories = await inbox.listTransferCategories(conversation.id, req.user);
+        return res.json({ ...conversation, customerServiceWindow, mergedDestinations, channelCapabilities: channelCaps, postContext, transferCategories });
       } catch (error) { return next(error); }
     },
     async mergeCandidates(req, res, next) {
@@ -160,12 +161,10 @@ async signalTransfer(req, res, next) {
       });
     }
 
-    if (
-      !authorization.canTransfer(req.user) &&
-      !(await authorization.canAccessCategory(req.user, toCategoryId))
-    ) {
+    const destinations = await inbox.listTransferCategories(req.params.id, req.user);
+    if (!destinations.some((category) => category.id === toCategoryId && category.selectable !== false)) {
       throw authorization.forbidden(
-        "Você não possui acesso ao setor selecionado."
+        "O setor selecionado não está disponível para esta conversa."
       );
     }
 

@@ -707,9 +707,6 @@ async function updateConversation(id, { categoryId, status, assignedUserId, prio
     if (!authorization.isMaster(viewer) && (targetCategory.masterOnly || targetCategory.parent?.masterOnly)) {
       throw authorization.forbidden("Esta categoria e exclusiva para contas Master.");
     }
-    if (!authorization.canTransfer(viewer) && !(await authorization.canAccessCategory(viewer, categoryId))) {
-      throw authorization.forbidden("Você não possui acesso à categoria selecionada.");
-    }
   }
   if (categoryId === null) targetCategory = null;
   if (categoryId === null && !authorization.canTransfer(viewer)
@@ -1002,7 +999,7 @@ async function listCategories(viewer) {
   };
   let where = authorization.isMaster(viewer) ? undefined : publicCategoryScope;
   let selectableIds = null;
-  if (!authorization.isMaster(viewer) && !viewer.canManageCategories && !authorization.canTransfer(viewer)) {
+  if (!authorization.isMaster(viewer)) {
     const categoryIds = await authorization.allowedCategoryIds(viewer);
     selectableIds = new Set(categoryIds);
     where = { AND: [publicCategoryScope, { OR: [
@@ -1022,6 +1019,46 @@ async function listCategories(viewer) {
   return categories.map((category) => ({
     ...category, selectable: selectableIds ? selectableIds.has(category.id) : true, hidden: hiddenIds.has(category.id),
   }));
+}
+
+async function listTransferCategories(conversationId, viewer) {
+  const scope = await authorization.conversationScope(viewer);
+  const conversation = await prisma.conversation.findFirst({
+    where: { AND: [{ id: conversationId }, scope] },
+    select: { id: true, channelAccountId: true },
+  });
+  if (!conversation) throw Object.assign(new Error("Conversa não encontrada."), { statusCode: 404 });
+
+  const publicCategoryScope = {
+    masterOnly: false,
+    OR: [{ parentId: null }, { parent: { is: { masterOnly: false } } }],
+  };
+  const categories = await prisma.category.findMany({
+    where: authorization.isMaster(viewer)
+      ? { active: true }
+      : { AND: [{ active: true }, publicCategoryScope] },
+    include: { parent: { select: { id: true, name: true, code: true, active: true } } },
+    orderBy: [{ displayOrder: "asc" }, { name: "asc" }],
+  });
+  if (!conversation.channelAccountId) return categories.map((category) => ({ ...category, selectable: true }));
+
+  const account = await prisma.channelAccount.findUnique({
+    where: { id: conversation.channelAccountId },
+    select: { config: true },
+  });
+  const allowedIds = Array.isArray(account?.config?.allowedCategoryIds)
+    ? account.config.allowedCategoryIds.filter(Boolean)
+    : [];
+  if (!allowedIds.length) return categories.map((category) => ({ ...category, selectable: true }));
+
+  const allowed = new Set(allowedIds);
+  const groupingParents = new Set(categories
+    .filter((category) => allowed.has(category.id) || allowed.has(category.parentId))
+    .map((category) => category.parentId)
+    .filter(Boolean));
+  return categories
+    .filter((category) => allowed.has(category.id) || allowed.has(category.parentId) || groupingParents.has(category.id))
+    .map((category) => ({ ...category, selectable: allowed.has(category.id) || allowed.has(category.parentId) }));
 }
 
 async function getCategoryVisibility(viewer) {
@@ -1183,7 +1220,7 @@ async function listUsers(viewer) {
 
 module.exports = {
   addContactNote, conversationPriorities, conversationStatuses, createCategory, deleteContactNote, deleteConversation,
-  getConversation, getConversationSummary, getUserAlerts, listCategories,
+  getConversation, getConversationSummary, getUserAlerts, listCategories, listTransferCategories,
   listConversations, listUsers, markAsRead, recordConversationActivity, setContactNotePinned, setConversationPinned,
   getCategoryVisibility, setCategoryVisibility, updateCategory, updateContactCustomName, updateConversation,
 };

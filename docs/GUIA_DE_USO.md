@@ -31,7 +31,7 @@ Possui acesso administrativo completo: equipe, permissões, categorias, canais, 
 | Registrar notas e fixar conversa | Sim | Sim | Sim |
 | Definir prioridade | Com permissão | Sim | Sim |
 | Transferir responsável | Com permissão | Com permissão | Sim |
-| Mudar categoria/setor | Conforme acesso; permissão de transferência amplia a ação | Conforme acesso; permissão de transferência amplia a ação | Sim |
+| Mudar categoria/setor | Qualquer categoria pública permitida pelo canal | Qualquer categoria pública permitida pelo canal | Sim |
 | Ver conversas de outros atendentes | Com **Acompanhar equipe** | Com **Acompanhar equipe** | Sim |
 | Ver histórico de ações | Com permissão | Com permissão | Sim |
 | Ver mensagens anteriores após transferência | Com permissão | Com permissão | Sim |
@@ -56,7 +56,7 @@ Para uma conversa aparecer, não basta o perfil da conta. O usuário precisa est
 ## Permissões adicionais
 
 - **Gerenciar categorias:** criar, editar e desativar categorias.
-- **Transferir conversas:** mudar o atendente responsável e permitir transferências de categoria, respeitando as restrições de canal e de categorias Master.
+- **Alterar responsável:** transferir a conversa para outro atendente. A mudança de categoria pública não depende dessa permissão.
 - **Acompanhar equipe:** filtrar e consultar atendimentos de outros membros dentro do escopo liberado.
 - **Visualizar histórico:** consultar ações registradas nas conversas permitidas.
 - **Ver mensagens anteriores:** ao receber uma transferência, visualizar também mensagens anteriores ao encaminhamento.

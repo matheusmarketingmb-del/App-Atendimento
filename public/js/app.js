@@ -3,7 +3,7 @@ const isMarketplaceChannel = (channel) => window.isMarketplaceFeatureChannel?.(c
 if (MARKETPLACE_UI_ENABLED) document.querySelectorAll("[data-marketplace-feature]").forEach((element) => { element.hidden = false; });
 
 const state = {
-  conversations: [], categories: [], users: [], currentUser: null,
+  conversations: [], categories: [], transferCategories: [], users: [], currentUser: null,
   selectedId: null, selectedContactId: null, selectedCategoryId: "", status: "", category: "", search: "", channel: "", emailMailbox: "GENERAL",
   // Filtros combináveis adicionais (item 11): multi-select, somam-se ao filtro
   // de status principal (single-select, inalterado) em vez de substituí-lo —
@@ -79,12 +79,20 @@ function orderedCategories(categories) {
   const included = new Set(nested.map((category) => category.id));
   return [...nested, ...categories.filter((category) => !included.has(category.id))];
 }
-function populateSubcategorySelect(parentId, selectedId = "") {
+function populateSubcategorySelect(parentId, selectedId = "", categories = state.transferCategories) {
   const select = $("#subcategory-select");
-  const children = state.categories.filter((category) => category.active && category.parentId === parentId && category.selectable !== false);
+  const children = categories.filter((category) => category.active && category.parentId === parentId && category.selectable !== false);
   select.innerHTML = `<option value="">Subcategoria (opcional)</option>` + children.map((category) => `<option value="${category.id}">${escapeHtml(category.name)}</option>`).join("");
   select.hidden = !parentId || !children.length;
   if (children.some((category) => category.id === selectedId)) select.value = selectedId;
+}
+function populateTransferCategorySelect(categories, selectedPrimaryId = "", selectedSubcategoryId = "") {
+  const active = categories.filter((category) => category.active);
+  const roots = active.filter((category) => !category.parentId);
+  $("#category-select").innerHTML = `${state.currentUser?.canViewUncategorized ? '<option value="">Sem categoria</option>' : '<option value="" disabled>Selecione a categoria</option>'}` +
+    roots.map((category) => `<option value="${category.id}" data-selectable="${category.selectable !== false}">${escapeHtml(category.name)}</option>`).join("");
+  if (roots.some((category) => category.id === selectedPrimaryId)) $("#category-select").value = selectedPrimaryId;
+  populateSubcategorySelect($("#category-select").value, selectedSubcategoryId, categories);
 }
 function pendingCategoryId() {
   return $("#subcategory-select").value || $("#category-select").value || "";
@@ -464,6 +472,53 @@ function syncMessageStatuses(messages) {
   }
 }
 
+function renderFaq() {
+  const user = state.currentUser;
+  if (!user) return;
+  const profile = ({ ADMIN:"Master", SUPERVISOR:"Supervisor", ATENDENTE:"Atendente" })[user.role] || user.role;
+  const common = [
+    ["Quais conversas aparecem para mim?", "Você vê conversas atribuídas a você ou pertencentes às categorias e aos números/canais liberados para sua conta. Categorias não liberadas não aparecem na barra lateral."],
+    ["Posso transferir para uma categoria que não vejo?", "Sim. Ao abrir uma conversa, o seletor de destino mostra as categorias ativas permitidas para aquele canal. Categorias Somente Master não aparecem para Atendentes ou Supervisores."],
+    ["O que acontece após transferir para uma categoria sem acesso?", "A transferência é concluída e a conversa sai da sua tela, pois você não possui acesso à fila de destino."],
+    ["Transferir e sinalizar envio são iguais?", "Não. Transferir muda a categoria da conversa. Sinalizar envio apenas avisa o setor no chat interno."],
+    ["O histórico anterior acompanha a conversa?", "Normalmente sim. Marque a opção de ocultar histórico apenas quando o setor de destino não puder consultar as mensagens anteriores."],
+  ];
+  const byRole = {
+    ATENDENTE: [
+      ["Como começo um atendimento?", "Abra a conversa, confira o canal e o cliente e use Assumir conversa quando ela ainda não tiver responsável."],
+      ["Posso trocar o responsável?", user.canTransferConversations ? "Sim. Sua conta possui a permissão Alterar responsável." : "Não. Sua conta não possui a permissão Alterar responsável; solicite ao Master quando necessário."],
+      ["Como uso uma resposta rápida?", "Clique no ícone de raio, escolha a resposta, revise o texto e envie. A seleção nunca envia automaticamente."],
+    ],
+    SUPERVISOR: [
+      ["Como vejo conversas dos Atendentes?", user.canViewTeamActivity ? "Use o filtro de responsável. Você verá os membros dentro das categorias e canais liberados para sua conta." : "Sua conta precisa da permissão Acompanhar equipe, além dos acessos às categorias e canais supervisionados."],
+      ["Posso alterar prioridades?", "Sim. Supervisores podem definir prioridade Normal, Alta ou Urgente."],
+      ["Posso alterar configurações?", "Configurações de Conversas ficam disponíveis apenas para consulta. Alterações administrativas são feitas pelo Master."],
+    ],
+    ADMIN: [
+      ["Como libero um novo usuário?", "Em Equipe, defina o perfil, as permissões, cada categoria/subcategoria e depois libere também os números ou contas de canal necessários."],
+      ["Quando usar Somente Master?", "Use apenas para categorias realmente restritas. Elas não aparecem nem aceitam transferências feitas por Atendentes ou Supervisores."],
+      ["Onde verifico alterações importantes?", "Use a Auditoria geral para consultar mudanças em usuários, conversas, categorias, Bots e configurações."],
+    ],
+  };
+  const permissions = [
+    ["Alterar responsável", user.canTransferConversations],
+    ["Acompanhar equipe", user.canViewTeamActivity],
+    ["Visualizar histórico", user.canViewConversationHistory],
+    ["Ver mensagens anteriores", user.canViewPreviousMessages],
+    ["Iniciar conversas", user.canStartConversations],
+    ["Fundir contatos", user.canMergeContacts],
+    ["Campanhas e templates", user.canManageCampaigns],
+  ];
+  $("#faq-role-label").textContent = `FAQ do perfil ${profile}`;
+  $("#faq-profile-name").textContent = `${user.name} · ${profile}`;
+  $("#faq-permissions").innerHTML = permissions.map(([label, enabled]) =>
+    `<span class="faq-permission ${enabled ? "enabled" : ""}">${enabled ? "✓" : "–"} ${escapeHtml(label)}</span>`
+  ).join("");
+  $("#faq-content").innerHTML = [...common, ...(byRole[user.role] || [])].map(([question, answer], index) =>
+    `<details class="faq-item" ${index === 0 ? "open" : ""}><summary>${escapeHtml(question)}</summary><p>${escapeHtml(answer)}</p></details>`
+  ).join("");
+}
+
 async function loadCurrentUser() {
   const status = await api("/api/auth/status");
   if (!status.authenticated) return location.replace("/login.html");
@@ -838,7 +893,7 @@ async function loadCategories() {
   $("#category-select").innerHTML = `${state.currentUser?.canViewUncategorized ? `<option value="">Sem categoria</option>` : `<option value="" disabled>Selecione a categoria</option>`}` + roots.map((category) => `<option value="${category.id}" data-selectable="${category.selectable !== false}">${escapeHtml(category.name)}</option>`).join("");
   $("#category-parent").innerHTML = `<option value="">Categoria principal</option>` + roots.map((category) => `<option value="${category.id}">${escapeHtml(category.name)}</option>`).join("");
   if ([...$("#category-select").options].some((option) => option.value === previousPrimaryCategory)) $("#category-select").value = previousPrimaryCategory;
-  populateSubcategorySelect($("#category-select").value, previousSubcategory);
+  populateSubcategorySelect($("#category-select").value, previousSubcategory, state.categories);
   document.querySelectorAll("[data-hide-category]").forEach((button) => button.addEventListener("click", () => setCategoryHidden(button.dataset.hideCategory, button.dataset.hidden !== "true").catch((error) => toast(error.message, true))));
   document.querySelectorAll("[data-category]").forEach((button) => button.addEventListener("click", () => {
     if (button.dataset.categoryGroup) {
@@ -1060,6 +1115,7 @@ async function openConversation(id, { refreshList = true, markRead = true } = {}
     messageHistoryLimited: c.messageHistoryLimited,
     customerServiceWindow: c.customerServiceWindow,
     mergedDestinations: (c.mergedDestinations || []).map((item) => [item.id, item.channel, item.contact?.email, item.contact?.phone, item.channelAccount?.name]),
+    transferCategories: (c.transferCategories || []).map((category) => [category.id, category.parentId, category.name, category.active, category.selectable]),
   });
   const displayMessages = messagesWithReactions(c.messages);
   state.selectedMessages = displayMessages;
@@ -1073,6 +1129,7 @@ async function openConversation(id, { refreshList = true, markRead = true } = {}
   state.customerServiceWindow = c.customerServiceWindow;
   state.selectedChannel = c.channel;
   state.selectedChannelCapabilities = c.channelCapabilities || null;
+  state.transferCategories = c.transferCategories || [];
   syncCustomerServiceWindow();
   syncSocialReplyMode(c.channel, c.channelCapabilities);
   renderContextDetails(c);
@@ -1086,12 +1143,12 @@ async function openConversation(id, { refreshList = true, markRead = true } = {}
     renderMergedDestinations(c.mergedDestinations, c.id);
     const primaryCategory = c.category?.parent || (c.category && !c.category.parentId ? c.category : null);
     const primaryId = primaryCategory?.id || "";
+    const selectedSubcategory = c.category?.parentId ? c.categoryId : "";
+    populateTransferCategorySelect(state.transferCategories, primaryId, selectedSubcategory);
     if (primaryId && ![...$("#category-select").options].some((option) => option.value === primaryId)) {
       $("#category-select").add(new Option(`${primaryCategory.name || "Categoria"} (inativa)`, primaryId, false, false));
     }
     $("#category-select").value = primaryId;
-    const selectedSubcategory = c.category?.parentId ? c.categoryId : "";
-    populateSubcategorySelect(primaryId, selectedSubcategory);
     if (selectedSubcategory && ![...$("#subcategory-select").options].some((option) => option.value === selectedSubcategory)) {
       $("#subcategory-select").add(new Option(`${c.category.name} (inativa)`, selectedSubcategory, false, true));
       $("#subcategory-select").hidden = false;
@@ -1604,6 +1661,10 @@ $("#campaigns-button").addEventListener("click", () => { location.href = "/campa
 $("#conversation-settings-button").addEventListener("click", () => { location.href = "/configuracoes"; });
 $("#integrations-button").addEventListener("click", () => { location.href = "/integrations"; });
 $("#user-button").addEventListener("click", async () => { await api("/api/auth/logout", { method:"POST" }); location.replace("/login.html"); });
+$("#faq-button").addEventListener("click", () => { renderFaq(); $("#faq-dialog").showModal(); });
+$("#close-faq").addEventListener("click", () => $("#faq-dialog").close());
+$("#faq-dialog").addEventListener("click", (event) => { if (event.target === $("#faq-dialog")) $("#faq-dialog").close(); });
+
 $("#team-button").addEventListener("click", async () => { try { await loadAdminUsers(); resetTeamForm(); $("#new-team-user").hidden = !state.currentUser.isMaster; $("#team-form").hidden = !state.currentUser.isMaster; $("#team-dialog").classList.toggle("activity-only", !state.currentUser.isMaster); $("#team-dialog").showModal(); } catch (e) { toast(e.message, true); } });
 $("#close-team").addEventListener("click", () => $("#team-dialog").close());
 $("#team-dialog").addEventListener("click", (event) => { if (event.target === $("#team-dialog")) $("#team-dialog").close(); });
@@ -1885,7 +1946,7 @@ async function confirmConversationCategory(event) {
 }
 $("#category-select").addEventListener("change", (event) => {
   const primaryId = event.target.value;
-  populateSubcategorySelect(primaryId);
+  populateSubcategorySelect(primaryId, "", state.transferCategories);
   syncCategoryConfirmation();
 });
 $("#subcategory-select").addEventListener("change", syncCategoryConfirmation);
