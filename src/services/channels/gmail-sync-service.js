@@ -14,6 +14,7 @@ const { getGlobalSettings } = require("./integration-global-settings-service");
 const DEFAULT_INTERVAL_MS = 30 * 1000;
 const OVERLAP_MS = 2 * 60 * 1000;
 const MAX_PAGES = 20;
+const DEFAULT_SYNC_LABEL = "Shopify";
 
 function cursorDate(account) {
   const configured = account.config?.gmailAttachmentSyncVersion === 1 ? account.config?.gmailSyncCursorAt : null;
@@ -43,18 +44,31 @@ async function downloadGmailAttachments(message, headers, http) {
   }
   return attachments;
 }
-async function fetchGmailInbox({ accessToken, since, http = axios }) {
+
+// Marcador do Gmail que limita o que entra no app. Ordem: config da conta,
+// GMAIL_SYNC_LABEL e, por fim, "Shopify". String vazia desliga o filtro.
+function syncLabel(account) {
+  const configured = account.config?.gmailSyncLabel ?? process.env.GMAIL_SYNC_LABEL ?? DEFAULT_SYNC_LABEL;
+  return String(configured).trim() || null;
+}
+
+async function fetchGmailInbox({ accessToken, since, label = null, http = axios }) {
   const headers = { Authorization: `Bearer ${accessToken}` };
   const after = Math.max(0, Math.floor((since.getTime() - OVERLAP_MS) / 1000));
   const ids = new Map();
-  for (const labelId of ["INBOX", "SPAM"]) {
+  // Com marcador, a busca do Gmail (label:"...") resolve o nome direto, sem
+  // precisar descobrir o ID do marcador. Sem marcador, mantém INBOX + SPAM.
+  const queries = label
+    ? [{ sourceLabel: "INBOX", params: { q: `label:"${label.replace(/"/g, "")}" after:${after}` } }]
+    : ["INBOX", "SPAM"].map((labelId) => ({ sourceLabel: labelId, params: { labelIds: labelId, q: `after:${after}` } }));
+  for (const { sourceLabel, params } of queries) {
     let pageToken;
     for (let page = 0; page < MAX_PAGES; page += 1) {
       const response = await http.get("https://gmail.googleapis.com/gmail/v1/users/me/messages", {
-        headers, params: { labelIds: labelId, q: `after:${after}`, maxResults: 100, ...(pageToken ? { pageToken } : {}) }, timeout: 10000,
+        headers, params: { ...params, maxResults: 100, ...(pageToken ? { pageToken } : {}) }, timeout: 10000,
       });
       for (const item of response.data?.messages || []) {
-        if (item.id && !ids.has(item.id)) ids.set(item.id, labelId);
+        if (item.id && !ids.has(item.id)) ids.set(item.id, sourceLabel);
       }
       pageToken = response.data?.nextPageToken;
       if (!pageToken) break;
@@ -88,12 +102,12 @@ async function syncGmailAccount(account, { http = axios } = {}) {
   let secrets = decryptSecrets(current);
   let inbox;
   try {
-    inbox = await fetchGmailInbox({ accessToken: secrets.accessToken, since: cursorDate(current), http });
+    inbox = await fetchGmailInbox({ accessToken: secrets.accessToken, since: cursorDate(current), label: syncLabel(current), http });
   } catch (error) {
     if (error.response?.status !== 401) throw error;
     current = await loadAuthorizedAccount(current, true);
     secrets = decryptSecrets(current);
-    inbox = await fetchGmailInbox({ accessToken: secrets.accessToken, since: cursorDate(current), http });
+    inbox = await fetchGmailInbox({ accessToken: secrets.accessToken, since: cursorDate(current), label: syncLabel(current), http });
   }
 
   const adapter = createAdapter("EMAIL", { ...current, secrets });
@@ -171,4 +185,4 @@ function startGmailSyncWorker({ intervalMs = Number(process.env.GMAIL_SYNC_INTER
   return () => clearInterval(timer);
 }
 
-module.exports = { fetchGmailInbox, startGmailSyncWorker, syncGmailAccount, syncGmailAccounts };
+module.exports = { fetchGmailInbox, syncLabel, startGmailSyncWorker, syncGmailAccount, syncGmailAccounts };
