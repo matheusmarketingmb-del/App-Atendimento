@@ -162,6 +162,7 @@
               <div class="chat-overflow-panel" role="menu">
                 <button id="signal-transfer" class="secondary-action" type="button" role="menuitem">Sinalizar envio</button>
                 <button id="toggle-finalized" class="secondary-action" role="menuitem"></button>
+                <button id="toggle-email-spam" class="secondary-action" type="button" hidden role="menuitem">Marcar como spam</button>
                 <button id="delete-conversation" class="danger-action" type="button" hidden role="menuitem">Apagar</button>
               </div>
             </div>
@@ -278,6 +279,7 @@
       <label><span>E-mail do destinatário</span><input id="outbound-email" type="email" maxlength="254" autocomplete="email" placeholder="cliente@empresa.com" required></label>
       <label><span>Assunto</span><input id="outbound-subject" maxlength="240" placeholder="Assunto do e-mail" required></label>
       <label class="email-outbound-message"><span>Mensagem</span><textarea id="outbound-message" maxlength="20000" placeholder="Digite a mensagem" required></textarea></label>
+      <label class="email-outbound-message"><span>Documentos (opcional, até 10 arquivos e 20 MB no total)</span><input id="outbound-documents" type="file" multiple accept=".pdf,.txt,.doc,.docx,.xls,.xlsx,.ppt,.pptx,application/pdf,text/plain,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation"><small id="outbound-documents-summary">Nenhum documento selecionado.</small></label>
       <button id="send-outbound" type="submit">Enviar e-mail</button>
     </form>
   </dialog>
@@ -559,7 +561,7 @@
 </dialog>
   <aside id="update-banner" class="update-banner" hidden><span><b>Nova versão disponível</b><small>Atualize para receber as melhorias do atendimento.</small></span><button id="update-later" type="button">Depois</button><button id="apply-update" type="button">Atualizar agora</button></aside>
   <div id="toast" class="toast" role="status"></div>
-  <script src="/js/app.js?v=0.34.9"></script>
+  <script src="/js/app.js?v=0.34.9-3"></script>
   <script src="/js/changelog.js?v=0.34.2"></script>
   <script src="/js/internal-chat.js"></script>
   <script src="/js/pwa.js"></script>

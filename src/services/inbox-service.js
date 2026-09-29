@@ -12,6 +12,7 @@ const conversationPriorities = new Set(["NORMAL", "ALTA", "URGENTE"]);
 // Status "ativos" para os efeitos de fila/alerta de gestão (exclui BOT —
 // fluxo de triagem automatizada — e FINALIZADO).
 const activeManagedStatuses = ["NOVO", "EM_ATENDIMENTO", "AGUARDANDO_EQUIPE", "AGUARDANDO_CLIENTE", "HANDOFF_BOT"];
+const notManualSpam = { OR: [{ emailMailboxOverride: null }, { emailMailboxOverride: { not: "SPAM" } }] };
 const categoryColorPattern = /^#[0-9a-f]{6}$/i;
 
 function validateCategoryName(value) {
@@ -345,7 +346,7 @@ async function listConversations({
           : conversation.unreadCount,
 
         isPinned: pins.length > 0,
-        ...(conversation.channel === "EMAIL" ? { emailMailbox: emailMailboxByConversation.get(conversation.id) || "GENERAL" } : {}),
+        ...(conversation.channel === "EMAIL" ? { emailMailbox: conversation.emailMailboxOverride || emailMailboxByConversation.get(conversation.id) || "GENERAL" } : {}),
         slaMinutesRemaining: computeSlaMinutesRemaining(conversation, slaSettings, now),
       };
     })
@@ -370,8 +371,9 @@ async function getUserAlerts({ since }, viewer) {
   const occurredAfter = alertSince(since);
   const scope = await authorization.conversationScope(viewer);
   const master = authorization.isMaster(viewer);
+  const alertScope = { AND: [scope, notManualSpam] };
   const waitingForViewer = {
-    AND: [scope, { status: "AGUARDANDO_EQUIPE" }, {
+    AND: [alertScope, { status: "AGUARDANDO_EQUIPE" }, {
       OR: [{ assignedUserId: null }, { assignedUserId: viewer.id }],
     }],
   };
@@ -394,7 +396,7 @@ async function getUserAlerts({ since }, viewer) {
       where: {
         createdAt: { gt: occurredAfter, lte: checkedAt },
         action: { in: ["CATEGORY_CHANGED", "CONVERSATION_TRANSFERRED"] },
-        conversation: { is: scope },
+        conversation: { is: alertScope },
       },
       include: { conversation: { include: { contact: true, category: { include: { parent: true } } } } },
       orderBy: { createdAt: "asc" }, take: 30,
@@ -618,33 +620,38 @@ async function getConversation(id, viewer) {
   }).then((conversation) => {
     if (!conversation) return null;
     const { pins, botState, ...result } = conversation;
+    const latestInboundEmail = conversation.channel === "EMAIL"
+      ? [...conversation.messages].reverse().find((message) => message.direction === "RECEBIDA" && message.type !== "reaction")
+      : null;
     return {
       ...result, isPinned: pins.length > 0, canViewHistory, messageHistoryLimited: messageVisibility.limited,
       historyVisibleFrom: visibility.start, currentHandoff,
       botPausedAt: botState?.humanPausedAt || null,
+      ...(conversation.channel === "EMAIL" ? { emailMailbox: conversation.emailMailboxOverride || latestInboundEmail?.rawPayload?.gmailMailbox || "GENERAL" } : {}),
     };
   });
 }
 
 async function getConversationSummary(viewer) {
   const scope = await authorization.conversationScope(viewer);
+  const summaryScope = { AND: [scope, notManualSpam] };
   const master = authorization.isMaster(viewer);
-  const attentionScope = { AND: [scope, { status: "AGUARDANDO_EQUIPE" }, {
+  const attentionScope = { AND: [summaryScope, { status: "AGUARDANDO_EQUIPE" }, {
     OR: [{ assignedUserId: null }, { assignedUserId: viewer.id }],
   }] };
   // Contadores novos (item 12): Atrasadas/Urgentes/Sem responsável — sempre
   // dentro do escopo do usuário (mesma regra de visibilidade das demais
   // contagens) e só entre conversas ativas (nunca FINALIZADO/BOT).
-  const overdueScope = { AND: [scope, { status: { in: activeManagedStatuses } },
+  const overdueScope = { AND: [summaryScope, { status: { in: activeManagedStatuses } },
     { OR: [{ firstResponseSlaBreached: true }, { responseSlaBreached: true }] }] };
-  const urgentScope = { AND: [scope, { status: { in: activeManagedStatuses } }, { priority: "URGENTE" }] };
-  const unassignedScope = { AND: [scope, { status: { in: activeManagedStatuses } }, { assignedUserId: null }] };
+  const urgentScope = { AND: [summaryScope, { status: { in: activeManagedStatuses } }, { priority: "URGENTE" }] };
+  const unassignedScope = { AND: [summaryScope, { status: { in: activeManagedStatuses } }, { assignedUserId: null }] };
   const [total, statuses, categories, waitingConversations, overdue, urgent, unassignedCount] = await Promise.all([
-    prisma.conversation.count({ where: scope }),
-    prisma.conversation.groupBy({ by: ["status"], where: scope, _count: { _all: true } }),
+    prisma.conversation.count({ where: summaryScope }),
+    prisma.conversation.groupBy({ by: ["status"], where: summaryScope, _count: { _all: true } }),
     prisma.conversation.groupBy({
       by: ["categoryId"],
-      where: scope,
+      where: summaryScope,
       _count: { _all: true },
     }),
     prisma.conversation.findMany({
@@ -778,6 +785,38 @@ async function deleteConversation(id, viewer) {
   const mediaKeys = [...new Set(conversation.messages.map(({ mediaStorageKey }) => mediaStorageKey).filter(Boolean))];
   await Promise.allSettled(mediaKeys.map((storageKey) => removeImage(storageKey)));
   return { deleted: true, id };
+}
+
+async function setEmailSpamStatus(id, { spam }, viewer) {
+  if (typeof spam !== "boolean") {
+    throw Object.assign(new Error("Informe se a conversa deve ser marcada como spam."), { statusCode: 400 });
+  }
+  await authorization.assertCanViewConversation(viewer, id);
+  const current = await prisma.conversation.findUnique({
+    where: { id },
+    select: { id: true, channel: true, emailMailboxOverride: true, contact: { select: { name: true, customName: true, email: true, phone: true } } },
+  });
+  if (!current) throw Object.assign(new Error("Conversa não encontrada."), { statusCode: 404 });
+  if (current.channel !== "EMAIL") {
+    throw Object.assign(new Error("A ação de spam está disponível somente para conversas de e-mail."), { statusCode: 409 });
+  }
+  const mailbox = spam ? "SPAM" : "GENERAL";
+  return prisma.$transaction(async (transaction) => {
+    const conversation = await transaction.conversation.update({
+      where: { id }, data: { emailMailboxOverride: mailbox },
+      include: { contact: true, category: { include: { parent: true } }, assignedUser: { select: { id: true, name: true, email: true } } },
+    });
+    await recordConversationActivity({
+      conversationId: id, actorUserId: viewer.id, action: "EMAIL_SPAM_CHANGED",
+      details: { spam, from: current.emailMailboxOverride || "PROVIDER", to: mailbox },
+    }, transaction);
+    await audit.recordAudit({
+      actor: viewer, action: "EMAIL_SPAM_CHANGED", entityType: "CONVERSATION", entityId: id,
+      summary: `${spam ? "Marcou" : "Removeu"} a conversa de ${contactDisplayName(current.contact)} ${spam ? "como spam" : "do spam"}`,
+      details: { conversationId: id, spam, from: current.emailMailboxOverride || "PROVIDER", to: mailbox },
+    }, transaction);
+    return { ...conversation, emailMailbox: mailbox };
+  });
 }
 
 async function setContactNotePinned(contactId, noteId, { pinned, conversationId }, viewer) {
@@ -1401,6 +1440,6 @@ module.exports = {
   addContactNote, assertCanViewMessage, conversationPriorities, conversationStatuses, createCategory, deleteContactNote, deleteConversation,
   getConversation, getConversationSummary, getUserAlerts, listCategories, listTransferCategories,
   resolveHistoryStart,
-  listConversations, listUsers, markAsRead, recordConversationActivity, setContactNotePinned, setConversationPinned,
+  listConversations, listUsers, markAsRead, recordConversationActivity, setContactNotePinned, setConversationPinned, setEmailSpamStatus,
   getCategoryVisibility, setCategoryVisibility, updateCategory, updateContactCustomName, updateConversation,
 };

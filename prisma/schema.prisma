@@ -306,6 +306,9 @@ model Conversation {
   assignedUserId           String?
   status                   ConversationStatus         @default(NOVO)
   unreadCount              Int                        @default(0)
+  // Classificacao manual da caixa de e-mail. Null usa o marcador recebido
+  // do provedor; SPAM/GENERAL permite ao atendente sobrescrever no app.
+  emailMailboxOverride     String?
   lastMessageAt            DateTime?
   finalizedAt              DateTime?
   // SLA de primeira resposta (Configurações → Conversas, item 1): true
@@ -359,6 +362,7 @@ model Conversation {
   @@index([categoryId, lastMessageAt])
   @@index([assignedUserId])
   @@index([channelAccountId])
+  @@index([channel, emailMailboxOverride])
   @@index([channel, externalConversationId])
 }
 

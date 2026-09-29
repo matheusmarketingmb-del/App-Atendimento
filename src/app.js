@@ -82,6 +82,16 @@ const documentUpload = multer({
     return callback(null, true);
   },
 }).single("document");
+const outboundDocumentUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 20 * 1024 * 1024, files: 10 },
+  fileFilter(_req, file, callback) {
+    if (!documentMimeTypes.has(file.mimetype)) {
+      return callback(Object.assign(new Error("Envie documentos PDF, TXT, Word, Excel ou PowerPoint."), { statusCode: 400 }));
+    }
+    return callback(null, true);
+  },
+}).array("documents", 10);
 const internalFileUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 100 * 1024 * 1024, files: 1 },
@@ -464,7 +474,7 @@ app.post(
   app.get("/api/meta/status", inbox.metaStatus);
   app.get("/api/meta/templates", requireCampaignAccess, inbox.templates);
   app.get("/api/outbound/channels", inbox.outboundChannels);
-  app.post("/api/conversations/outbound/email", inbox.createOutboundEmail);
+  app.post("/api/conversations/outbound/email", outboundDocumentUpload, inbox.createOutboundEmail);
   app.post("/api/conversations/outbound", inbox.createOutbound);
   app.get("/api/conversations/:id", inbox.detail);
   app.patch("/api/conversations/:id", inbox.update);
@@ -473,6 +483,7 @@ app.post(
     inbox.signalTransfer
   );
   app.delete("/api/conversations/:id", inbox.deleteConversation);
+  app.patch("/api/conversations/:id/spam", inbox.setEmailSpamStatus);
   app.post("/api/conversations/:id/claim", inbox.claim);
   app.patch("/api/conversations/:id/pin", inbox.pinConversation);
   app.post("/api/conversations/:id/read", inbox.read);

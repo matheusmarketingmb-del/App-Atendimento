@@ -778,6 +778,7 @@ function renderOutboundChannels() {
     const emailChannel = state.outboundChannels.find((item) => item.channel === "EMAIL");
     $("#outbound-channel-dialog").close();
     $("#outbound-form").reset();
+    $("#outbound-documents-summary").textContent = "Nenhum documento selecionado.";
     $("#outbound-account").innerHTML = emailChannel.accounts.map((account) =>
       `<option value="${escapeHtml(account.id)}">${escapeHtml(account.name)}${account.address ? ` — ${escapeHtml(account.address)}` : ""}</option>`
     ).join("");
@@ -963,9 +964,10 @@ async function loadConversations() {
     : conversations.filter((conversation) => !isMarketplaceChannel(conversation.channel));
   const visibleConversations = state.channel === "EMAIL"
     ? availableConversations.filter((conversation) => (conversation.emailMailbox || "GENERAL") === state.emailMailbox)
-    : availableConversations;
+    : availableConversations.filter((conversation) => conversation.channel !== "EMAIL" || (conversation.emailMailbox || "GENERAL") !== "SPAM");
   state.conversations = state.category ? visibleConversations : visibleConversations.filter((c) => c.id === state.selectedId || c.unreadCount > 0 || !isConversationCategoryHidden(c));
-  const summaryConversations = (unfilteredConversations || []).filter((conversation) => !isMarketplaceChannel(conversation.channel));
+  const summaryConversations = (unfilteredConversations || []).filter((conversation) => !isMarketplaceChannel(conversation.channel)
+    && (conversation.channel !== "EMAIL" || (conversation.emailMailbox || "GENERAL") !== "SPAM"));
   const displaySummary = MARKETPLACE_UI_ENABLED ? summary : summaryConversations.reduce((result, conversation) => {
     result.total += 1;
     result.statuses[conversation.status] = (result.statuses[conversation.status] || 0) + 1;
@@ -1127,6 +1129,7 @@ async function openConversation(id, { refreshList = true, markRead = true } = {}
     assignedUserId: c.assignedUserId,
     assignedUser: c.assignedUser && [c.assignedUser.id, c.assignedUser.name],
     priority: c.priority,
+    emailMailbox: c.emailMailbox,
     isPinned: c.isPinned,
     canViewHistory: c.canViewHistory,
     contact: [c.contact.id, c.contact.customName, c.contact.name, c.contact.email, c.contact.phone],
@@ -1181,6 +1184,9 @@ async function openConversation(id, { refreshList = true, markRead = true } = {}
     $("#priority-select").value = c.priority || "NORMAL";
     $("#claim-conversation").hidden = c.assignedUserId === state.currentUser?.id;
     $("#toggle-finalized").textContent = c.status === "FINALIZADO" ? "Reabrir" : "Finalizar"; $("#toggle-finalized").dataset.status = c.status;
+    $("#toggle-email-spam").hidden = c.channel !== "EMAIL";
+    $("#toggle-email-spam").textContent = c.emailMailbox === "SPAM" ? "Remover do spam" : "Marcar como spam";
+    $("#toggle-email-spam").dataset.spam = String(c.emailMailbox === "SPAM");
     $("#delete-conversation").hidden = !state.currentUser?.isMaster;
     $("#pin-conversation").textContent = c.isPinned ? "★ Fixada" : "☆ Fixar";
     $("#pin-conversation").dataset.pinned = String(Boolean(c.isPinned));
@@ -1454,6 +1460,7 @@ const auditActionLabel = (action) => ({
   BOT_ARCHIVED:"Bot arquivado", BOT_SCHEDULES_UPDATED:"Horários do Bot",
   BOT_INTENT_CREATED:"Intenção criada", BOT_INTENT_UPDATED:"Intenção alterada",
   BOT_INTENT_DELETED:"Intenção removida",
+  EMAIL_SPAM_CHANGED:"Classificação de spam alterada",
 })[action] || action;
 
 function renderAuditLogs() {
@@ -1575,18 +1582,31 @@ $("#outbound-meta-form").addEventListener("submit", async (event) => {
   finally { button.disabled = false; }
 });$("#close-outbound").addEventListener("click", () => $("#outbound-dialog").close());
 $("#outbound-dialog").addEventListener("click", (event) => { if (event.target === $("#outbound-dialog")) $("#outbound-dialog").close(); });
+$("#outbound-documents").addEventListener("change", (event) => {
+  const files = Array.from(event.target.files || []);
+  const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
+  if (files.length > 10 || totalBytes > 20 * 1024 * 1024) {
+    event.target.value = "";
+    $("#outbound-documents-summary").textContent = "Limite: 10 documentos e 20 MB no total.";
+    return;
+  }
+  $("#outbound-documents-summary").textContent = files.length
+    ? `${files.length} documento(s) · ${(totalBytes / 1024 / 1024).toFixed(1)} MB`
+    : "Nenhum documento selecionado.";
+});
 $("#outbound-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const button = $("#send-outbound");
   button.disabled = true;
   try {
-    const result = await api("/api/conversations/outbound/email", { method:"POST", body:JSON.stringify({
-      accountId:$("#outbound-account").value,
-      to:$("#outbound-email").value.trim(),
-      customName:$("#outbound-name").value.trim(),
-      subject:$("#outbound-subject").value.trim(),
-      text:$("#outbound-message").value.trim(),
-    }) });
+    const body = new FormData();
+    body.set("accountId", $("#outbound-account").value);
+    body.set("to", $("#outbound-email").value.trim());
+    body.set("customName", $("#outbound-name").value.trim());
+    body.set("subject", $("#outbound-subject").value.trim());
+    body.set("text", $("#outbound-message").value.trim());
+    Array.from($("#outbound-documents").files || []).forEach((file) => body.append("documents", file, file.name));
+    const result = await api("/api/conversations/outbound/email", { method:"POST", body });
     $("#outbound-dialog").close();
     await loadConversations();
     await openConversation(result.conversationId);
@@ -2075,6 +2095,20 @@ $("#toggle-finalized").addEventListener("click", async (event) => {
       toast("Mensagem de encerramento enviada e atendimento finalizado.");
     }
     await openConversation(state.selectedId);
+  } catch (e) { toast(e.message, true); }
+  finally { button.disabled = false; }
+});
+$("#toggle-email-spam").addEventListener("click", async (event) => {
+  const conversationId = state.selectedId;
+  if (!conversationId) return;
+  const button = event.currentTarget;
+  const spam = button.dataset.spam !== "true";
+  button.disabled = true;
+  try {
+    await api(`/api/conversations/${conversationId}/spam`, { method:"PATCH", body:JSON.stringify({ spam }) });
+    toast(spam ? "Conversa marcada como spam." : "Conversa removida do spam.");
+    closeConversationView();
+    await loadConversations();
   } catch (e) { toast(e.message, true); }
   finally { button.disabled = false; }
 });

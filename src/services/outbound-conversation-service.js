@@ -3,6 +3,7 @@ const authorization = require("./authorization-service");
 const channelMessageService = require("./channels/channel-message-service");
 const { ALL_MANAGED_CHANNELS, CHANNEL_LABELS } = require("./channels/channel-constants");
 const { updateConversationAfterSending } = require("./message-service");
+const { removeImage, storeDocument } = require("./media-storage-service");
 const {
   listApprovedTemplates,
   sendApprovedTemplate,
@@ -186,12 +187,19 @@ async function listOutboundChannels(user) {
   });
 }
 
-async function createOutboundEmail({ accountId, to, customName, subject, text, user }) {
+async function createOutboundEmail({ accountId, to, customName, subject, text, attachments = [], user }) {
   authorization.assertCanStartConversations(user);
   const email = normalizeEmail(to);
   const name = cleanCustomName(customName || email);
   const cleanSubject = cleanRequiredText(subject, "Assunto", 240);
   const cleanBody = cleanRequiredText(text, "Mensagem", 20000);
+  if (!Array.isArray(attachments) || attachments.length > 10) {
+    throw Object.assign(new Error("Envie no máximo 10 documentos por e-mail."), { statusCode: 400 });
+  }
+  const attachmentBytes = attachments.reduce((total, attachment) => total + (attachment.buffer?.length || 0), 0);
+  if (attachmentBytes > 20 * 1024 * 1024) {
+    throw Object.assign(new Error("Os documentos do e-mail devem somar no máximo 20 MB."), { statusCode: 413 });
+  }
   const account = await prisma.channelAccount.findFirst({
     where: { id: String(accountId || ""), channel: "EMAIL", enabled: true, status: "CONNECTED", ...emailAccountScope(user) },
     select: { id: true },
@@ -205,12 +213,34 @@ async function createOutboundEmail({ accountId, to, customName, subject, text, u
   });
   if (existing) await authorization.assertCanViewConversation(user, existing.id);
 
-  const providerResult = await channelMessageService.send({
-    channel: "EMAIL", channelAccountId: account.id, kind: "text",
-    to: email, subject: cleanSubject, text: cleanBody,
-  });
+  const storedAttachments = [];
+  try {
+    for (const attachment of attachments) {
+      storedAttachments.push(await storeDocument({
+        buffer: attachment.buffer, mimeType: attachment.mimeType, fileName: attachment.fileName,
+      }));
+    }
+  } catch (error) {
+    await Promise.allSettled(storedAttachments.map((attachment) => removeImage(attachment.storageKey)));
+    throw error;
+  }
+  let providerResult;
+  try {
+    providerResult = await channelMessageService.send({
+      channel: "EMAIL", channelAccountId: account.id, kind: storedAttachments.length ? "media" : "text",
+      to: email, subject: cleanSubject, text: cleanBody,
+      ...(storedAttachments.length ? { attachments: storedAttachments.map((stored, index) => ({
+        buffer: attachments[index].buffer, mimeType: stored.mimeType, filename: stored.fileName,
+      })) } : {}),
+    });
+  } catch (error) {
+    await Promise.allSettled(storedAttachments.map((attachment) => removeImage(attachment.storageKey)));
+    throw error;
+  }
   const occurredAt = new Date();
-  const stored = await prisma.$transaction(async (transaction) => {
+  let stored;
+  try {
+    stored = await prisma.$transaction(async (transaction) => {
     const contact = await transaction.contact.upsert({
       where: { channel_externalId: { channel: "EMAIL", externalId: externalContactId } },
       update: { email, customName: name },
@@ -225,16 +255,30 @@ async function createOutboundEmail({ accountId, to, customName, subject, text, u
         status: "EM_ATENDIMENTO", assignedUserId: user.id,
       },
     });
-    const message = await transaction.message.create({ data: {
+      const message = await transaction.message.create({ data: {
       conversationId: conversation.id,
       externalId: providerResult.externalId ? `${account.id}:${providerResult.externalId}` : null,
       channel: "EMAIL", channelAccountId: account.id, direction: "ENVIADA", status: "ENVIADA",
       type: "text", text: cleanBody, occurredAt, sentByUserId: user.id,
       rawPayload: { providerMessage: providerResult.data || null, subject: cleanSubject, threadId: providerResult.data?.threadId || null },
-    } });
-    return { conversation, message };
-  });
+      } });
+      const attachmentMessages = [];
+      for (const attachment of storedAttachments) {
+        attachmentMessages.push(await transaction.message.create({ data: {
+          conversationId: conversation.id, channel: "EMAIL", channelAccountId: account.id,
+          direction: "ENVIADA", status: "ENVIADA", type: "document", text: null, occurredAt,
+          sentByUserId: user.id, mediaStorageKey: attachment.storageKey, mediaMimeType: attachment.mimeType,
+          mediaFileName: attachment.fileName, mediaSize: attachment.size,
+          rawPayload: { providerMessage: providerResult.data || null, subject: cleanSubject, threadId: providerResult.data?.threadId || null, attachment: true },
+        } }));
+      }
+      return { conversation, message, attachmentMessages };
+    });
+  } catch (error) {
+    await Promise.allSettled(storedAttachments.map((attachment) => removeImage(attachment.storageKey)));
+    throw error;
+  }
   await updateConversationAfterSending({ conversationId: stored.conversation.id, sentByUserId: user.id, occurredAt });
-  return { conversationId: stored.conversation.id, created: !existing, message: stored.message };
+  return { conversationId: stored.conversation.id, created: !existing, message: stored.message, attachments: stored.attachmentMessages };
 }
 module.exports = { createOutboundConversation, createOutboundEmail, listOutboundChannels, normalizeOutboundPhone };

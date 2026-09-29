@@ -99,7 +99,10 @@ function createInboxController(channel) {
     },
     async createOutboundEmail(req, res, next) {
       try {
-        const result = await createOutboundEmail({ ...req.body, user: req.user });
+        const attachments = (req.files || []).map((file) => ({
+          buffer: file.buffer, mimeType: file.mimetype, fileName: file.originalname,
+        }));
+        const result = await createOutboundEmail({ ...req.body, attachments, user: req.user });
         inboxEvents.publish();
         return res.status(result.created ? 201 : 200).json(result);
       } catch (error) { return next(error); }
@@ -191,6 +194,13 @@ async signalTransfer(req, res, next) {
     async deleteConversation(req, res, next) {
       try {
         const result = await inbox.deleteConversation(req.params.id, req.user);
+        inboxEvents.publish();
+        return res.json(result);
+      } catch (error) { return next(error); }
+    },
+    async setEmailSpamStatus(req, res, next) {
+      try {
+        const result = await inbox.setEmailSpamStatus(req.params.id, req.body || {}, req.user);
         inboxEvents.publish();
         return res.json(result);
       } catch (error) { return next(error); }

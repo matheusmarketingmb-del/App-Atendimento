@@ -49,3 +49,18 @@ test("Master troca a lista de acesso e a autorização muda imediatamente", asyn
   assert.equal((await inbox.listConversations({}, allowed)).some((item) => item.id === conversationId), false);
   assert.ok((await inbox.listConversations({}, denied)).some((item) => item.id === conversationId));
 });
+
+test("qualquer usuário com acesso pode marcar spam, ocultar da fila e restaurar", async () => {
+  await assert.rejects(
+    () => inbox.setEmailSpamStatus(conversationId, { spam: true }, allowed),
+    (error) => error.statusCode === 404,
+  );
+  const before = await inbox.getConversationSummary(denied);
+  const marked = await inbox.setEmailSpamStatus(conversationId, { spam: true }, denied);
+  assert.equal(marked.emailMailbox, "SPAM");
+  assert.equal((await inbox.listConversations({}, denied)).find((item) => item.id === conversationId)?.emailMailbox, "SPAM");
+  assert.equal((await inbox.getConversationSummary(denied)).total, before.total - 1);
+  const restored = await inbox.setEmailSpamStatus(conversationId, { spam: false }, denied);
+  assert.equal(restored.emailMailbox, "GENERAL");
+  assert.equal((await inbox.getConversationSummary(denied)).total, before.total);
+});
