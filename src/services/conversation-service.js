@@ -23,6 +23,34 @@ function validContactName(name, phone) {
   return cleanName;
 }
 
+// Celular brasileiro chega da Meta às vezes sem o 9º dígito (wa_id
+// 551187791678) mesmo quando a conversa foi iniciada com ele (5511987791678).
+// Os dois formatos são o mesmo cliente: devolve as duas grafias possíveis.
+function whatsappIdVariants(value) {
+  const digits = normalizePhone(value);
+  if (!digits) return [];
+  const variants = [digits];
+  const withNine = digits.match(/^55(\d{2})9([6-9]\d{7})$/);
+  if (withNine) variants.push(`55${withNine[1]}${withNine[2]}`);
+  const withoutNine = digits.match(/^55(\d{2})([6-9]\d{7})$/);
+  if (withoutNine) variants.push(`55${withoutNine[1]}9${withoutNine[2]}`);
+  return variants;
+}
+
+// Contato já salvo com a OUTRA grafia do número. Só entra em jogo quando não
+// existe contato com o ID exato — nunca troca um contato existente por outro.
+async function findMetaContactByOtherVariant(externalId, db = prisma) {
+  const others = whatsappIdVariants(externalId).filter((value) => value !== externalId);
+  if (!others.length) return null;
+  const exact = await db.contact.findUnique({
+    where: { channel_externalId: { channel: "META", externalId } }, select: { id: true },
+  });
+  if (exact) return null;
+  return db.contact.findFirst({
+    where: { channel: "META", externalId: { in: others } }, orderBy: { createdAt: "asc" },
+  });
+}
+
 async function findOrCreateMetaConversation(event, db = prisma) {
   const channelAccountId = event.channelAccountId || null;
   const channelScope = channelAccountId || "LEGACY";
@@ -31,7 +59,13 @@ async function findOrCreateMetaConversation(event, db = prisma) {
     event.phone
   );
 
-  const contact = await db.contact.upsert({
+  const variantContact = await findMetaContactByOtherVariant(event.contactExternalId, db);
+  const contact = variantContact
+    ? await db.contact.update({
+      where: { id: variantContact.id },
+      data: contactName ? { name: contactName } : {},
+    })
+    : await db.contact.upsert({
     where: {
       channel_externalId: {
         channel: "META",
@@ -76,5 +110,7 @@ async function findOrCreateMetaConversation(event, db = prisma) {
 }
 
 module.exports = {
-  findOrCreateMetaConversation
+  findMetaContactByOtherVariant,
+  findOrCreateMetaConversation,
+  whatsappIdVariants
 };

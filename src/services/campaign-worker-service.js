@@ -13,6 +13,7 @@
 // — processo derrubado no meio do envio — voltam a QUEUED só para tentar de
 // novo, respeitando maxRetries).
 const prisma = require("../database/prisma");
+const { whatsappIdVariants } = require("./conversation-service");
 const { getCampaignSettings } = require("./campaign-settings-service");
 const { sendApprovedTemplate } = require("./meta-template-service");
 const { isOptedOut } = require("./campaign-optout-service");
@@ -24,11 +25,13 @@ const { DEFAULT_BATCH_SIZE, DEFAULT_DELAY_BETWEEN_BATCHES_SECONDS, DEFAULT_MAX_R
 // interativo): a conversa nasce sem responsável, pronta para um atendente
 // assumir quando o cliente responder (item 15/16).
 async function findOrCreateCampaignConversation({ phone, name }, client = prisma) {
-  let conversation = await client.conversation.findFirst({
-    where: { channel: "META", contact: { is: { channel: "META", externalId: phone } } },
-    select: { id: true, contactId: true },
-  });
-  if (conversation) return conversation;
+  for (const externalId of whatsappIdVariants(phone)) {
+    const conversation = await client.conversation.findFirst({
+      where: { channel: "META", contact: { is: { channel: "META", externalId } } },
+      select: { id: true, contactId: true },
+    });
+    if (conversation) return conversation;
+  }
 
   return client.$transaction(async (transaction) => {
     const contact = await transaction.contact.upsert({

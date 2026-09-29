@@ -1,5 +1,6 @@
 const prisma = require("../database/prisma");
 const authorization = require("./authorization-service");
+const { whatsappIdVariants } = require("./conversation-service");
 const channelMessageService = require("./channels/channel-message-service");
 const { ALL_MANAGED_CHANNELS, CHANNEL_LABELS } = require("./channels/channel-constants");
 const { updateConversationAfterSending } = require("./message-service");
@@ -46,10 +47,16 @@ async function validateTemplateSelection(channel, selection) {
 }
 
 async function findExistingConversation(phone, channelScope = "LEGACY") {
-  return prisma.conversation.findFirst({
-    where: { channel: "META", channelScope, contact: { is: { channel: "META", externalId: phone } } },
-    select: { id: true, contactId: true },
-  });
+  // Primeiro o número exato; se não houver, a outra grafia (com/sem o 9º
+  // dígito) — evita abrir uma segunda conversa para o mesmo cliente.
+  for (const externalId of whatsappIdVariants(phone)) {
+    const conversation = await prisma.conversation.findFirst({
+      where: { channel: "META", channelScope, contact: { is: { channel: "META", externalId } } },
+      select: { id: true, contactId: true },
+    });
+    if (conversation) return conversation;
+  }
+  return null;
 }
 
 async function createOutboundConversation({ phone, customName, template, accountId = "legacy", user, channel }) {
