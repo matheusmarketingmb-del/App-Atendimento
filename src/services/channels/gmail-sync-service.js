@@ -14,7 +14,9 @@ const { getGlobalSettings } = require("./integration-global-settings-service");
 const DEFAULT_INTERVAL_MS = 30 * 1000;
 const OVERLAP_MS = 2 * 60 * 1000;
 const MAX_PAGES = 20;
-const DEFAULT_SYNC_LABEL = "Shopify";
+// Forma de busca do marcador "Shopify (Site Mibro)" — é o que o Gmail mostra
+// na barra de pesquisa ao clicar no marcador (espaços/parênteses viram hífen).
+const DEFAULT_SYNC_LABEL = "shopify--site-mibro-";
 
 function cursorDate(account) {
   const configured = account.config?.gmailAttachmentSyncVersion === 1 ? account.config?.gmailSyncCursorAt : null;
@@ -46,7 +48,12 @@ async function downloadGmailAttachments(message, headers, http) {
 }
 
 // Marcador do Gmail que limita o que entra no app. Ordem: config da conta,
-// GMAIL_SYNC_LABEL e, por fim, "Shopify". String vazia desliga o filtro.
+// GMAIL_SYNC_LABEL e, por fim, DEFAULT_SYNC_LABEL. String vazia desliga o filtro.
+function labelQuery(label) {
+  const clean = label.replace(/"/g, "");
+  return /\s/.test(clean) ? `label:"${clean}"` : `label:${clean}`;
+}
+
 function syncLabel(account) {
   const configured = account.config?.gmailSyncLabel ?? process.env.GMAIL_SYNC_LABEL ?? DEFAULT_SYNC_LABEL;
   return String(configured).trim() || null;
@@ -56,10 +63,10 @@ async function fetchGmailInbox({ accessToken, since, label = null, http = axios 
   const headers = { Authorization: `Bearer ${accessToken}` };
   const after = Math.max(0, Math.floor((since.getTime() - OVERLAP_MS) / 1000));
   const ids = new Map();
-  // Com marcador, a busca do Gmail (label:"...") resolve o nome direto, sem
+  // Com marcador, a busca do Gmail (label:...) resolve o nome direto, sem
   // precisar descobrir o ID do marcador. Sem marcador, mantém INBOX + SPAM.
   const queries = label
-    ? [{ sourceLabel: "INBOX", params: { q: `label:"${label.replace(/"/g, "")}" after:${after}` } }]
+    ? [{ sourceLabel: "INBOX", params: { q: `${labelQuery(label)} after:${after}` } }]
     : ["INBOX", "SPAM"].map((labelId) => ({ sourceLabel: labelId, params: { labelIds: labelId, q: `after:${after}` } }));
   for (const { sourceLabel, params } of queries) {
     let pageToken;
