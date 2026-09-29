@@ -3,6 +3,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const prisma = require("../src/database/prisma");
 const inbox = require("../src/services/inbox-service");
+const auth = require("../src/services/auth-service");
 
 const testContacts = [
   "queue-overdue-test", "queue-waiting-old-test", "queue-waiting-new-test", "queue-new-test",
@@ -16,6 +17,12 @@ const attendantAllowedEmail = "attendant-priority-allowed-test@teste.local";
 let supervisor;
 let attendant;
 let attendantAllowed;
+
+test("sessão pública preserva a permissão individual de prioridade", () => {
+  assert.equal(auth.publicUser({ id: "a", role: "ATENDENTE", canSetConversationPriority: true }).canSetConversationPriority, true);
+  assert.equal(auth.publicUser({ id: "b", role: "ATENDENTE", canSetConversationPriority: false }).canSetConversationPriority, false);
+  assert.equal(auth.publicUser({ id: "s", role: "SUPERVISOR", canSetConversationPriority: false }).canSetConversationPriority, true);
+});
 
 test.before(async () => {
   supervisor = await prisma.user.upsert({

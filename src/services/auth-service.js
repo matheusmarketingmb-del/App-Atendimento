@@ -21,6 +21,7 @@ function publicUser(user) {
     canViewTeamActivity: user.role === "ADMIN" || user.canViewTeamActivity,
     canViewConversationHistory: user.role === "ADMIN" || user.canViewConversationHistory,
     canViewPreviousMessages: user.role === "ADMIN" || user.canViewPreviousMessages,
+    canSetConversationPriority: user.role === "ADMIN" || user.role === "SUPERVISOR" || Boolean(user.canSetConversationPriority),
     // Campanhas/templates: somente Master por padrão. Qualquer outra conta
     // precisa receber a liberação individual canManageCampaigns.
     canManageCampaigns: user.role === "ADMIN" || Boolean(user.canManageCampaigns),
