@@ -152,7 +152,6 @@ async function listConversations({
   if (assignedUser) {
     if (
       !authorization.isMaster(viewer) &&
-      !viewer.canViewTeamActivity &&
       assignedUser !== viewer.id
     ) {
       throw authorization.forbidden(
@@ -1319,7 +1318,7 @@ async function updateContactCustomName(contactId, customName, viewer) {
 }
 
 async function listUsers(viewer) {
-  const where = authorization.isMaster(viewer) || viewer.canViewTeamActivity || viewer.canTransferConversations
+  const where = authorization.isMaster(viewer) || viewer.canTransferConversations
     ? { active: true } : { id: viewer.id, active: true };
   return prisma.user.findMany({
     where,

@@ -162,9 +162,11 @@ test("entrega o painel e as APIs básicas da caixa de entrada", async () => {
     assert.equal((await fetch(`${base}/api/team/users`, { headers: { Cookie: agentCookie } })).status, 403);
     const allowTeamActivity = await fetch(`${base}/api/admin/users/${createdAgent.id}`, { method: "PATCH", headers: { Cookie: cookie, "Content-Type": "application/json" }, body: JSON.stringify({ canViewTeamActivity: true, canViewConversationHistory: true }) });
     assert.equal(allowTeamActivity.status, 200);
-    const teamActivity = await fetch(`${base}/api/team/users`, { headers: { Cookie: agentCookie } });
-    assert.equal(teamActivity.status, 200);
-    assert.equal((await teamActivity.json()).find(({ id }) => id === createdAgent.id)._count.assignedConversations, 1);
+    // Visão de equipe é só do Master: o flag antigo não libera mais nada.
+    assert.equal((await fetch(`${base}/api/team/users`, { headers: { Cookie: agentCookie } })).status, 403);
+    const masterTeam = await fetch(`${base}/api/team/users`, { headers: { Cookie: cookie } });
+    assert.equal(masterTeam.status, 200);
+    assert.equal((await masterTeam.json()).find(({ id }) => id === createdAgent.id)._count.assignedConversations, 1);
     const authorizedHistory = await fetch(`${base}/api/conversations/${supportConversation.id}`, { headers: { Cookie: agentCookie } });
     const authorizedConversation = await authorizedHistory.json();
     assert.equal(authorizedConversation.canViewHistory, true);

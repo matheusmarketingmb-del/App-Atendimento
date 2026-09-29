@@ -493,7 +493,7 @@ async function loadCurrentUser() {
   $("#campaigns-button").hidden = !status.user.canManageCampaigns;
   $("#new-conversation").hidden = !status.user.canStartConversations;
   $("#conversation-settings-button").hidden = !status.user.isMaster && status.user.role !== "SUPERVISOR";
-  $("#team-button").hidden = !status.user.isMaster && !status.user.canViewTeamActivity;
+  $("#team-button").hidden = !status.user.isMaster;
   $("#open-audit").hidden = !status.user.isMaster;
   $("#manage-categories").hidden = !status.user.canManageCategories;
   $("#assignee-select").disabled = !status.user.canTransferConversations;
@@ -1306,7 +1306,6 @@ function editTeamUser(userId) {
   $("#team-active-field").hidden = false;
   $("#permission-categories").checked = user.canManageCategories;
   $("#permission-transfer").checked = user.canTransferConversations;
-  $("#permission-team").checked = user.canViewTeamActivity;
   $("#permission-history").checked = user.canViewConversationHistory;
   $("#permission-previous-messages").checked = user.canViewPreviousMessages;
   $("#permission-priority").checked = user.canSetConversationPriority;
@@ -1358,8 +1357,8 @@ async function loadAuditLogs() {
 }
 
 async function loadAdminUsers() {
-  if (!state.currentUser?.isMaster && !state.currentUser?.canViewTeamActivity) return;
-  state.adminUsers = await api(state.currentUser.isMaster ? "/api/admin/users" : "/api/team/users");
+  if (!state.currentUser?.isMaster) return;
+  state.adminUsers = await api("/api/admin/users");
   renderAdminUsers();
 }
 
@@ -1731,7 +1730,6 @@ $("#team-form").addEventListener("submit", async (event) => {
     canViewUncategorized: $("#permission-uncategorized").checked,
     canManageCategories: $("#permission-categories").checked,
     canTransferConversations: $("#permission-transfer").checked,
-    canViewTeamActivity: $("#permission-team").checked,
     canViewConversationHistory: $("#permission-history").checked,
     canViewPreviousMessages: $("#permission-previous-messages").checked,
     canSetConversationPriority: $("#permission-priority").checked,
