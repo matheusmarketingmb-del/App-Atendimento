@@ -6,7 +6,7 @@ const os = require("node:os");
 const path = require("node:path");
 const prisma = require("../src/database/prisma");
 const { encryptSecrets } = require("../src/services/channels/integration-secret-service");
-const { fetchGmailInbox, syncGmailAccount } = require("../src/services/channels/gmail-sync-service");
+const { fetchGmailInbox, syncGmailAccount, syncLabel } = require("../src/services/channels/gmail-sync-service");
 
 const accountName = "Gmail Sync Test";
 let account;
@@ -64,6 +64,38 @@ test("fetch Gmail pagina INBOX e SPAM e devolve mensagens sem duplicar em ordem 
   assert.equal(calls[0].options.params.labelIds, "INBOX");
   assert.ok(calls.some((call) => call.url.endsWith("/messages") && call.options.params.labelIds === "SPAM"));
   assert.match(calls[0].options.params.q, /^after:\d+$/);
+});
+
+test("fetch Gmail com marcador busca só label:\"Shopify\" em vez de INBOX/SPAM", async () => {
+  const calls = [];
+  const now = Date.now();
+  const http = { get: async (url, options) => {
+    calls.push({ url, options });
+    if (url.endsWith("/messages")) return { data: { messages: [{ id: "shop" }] } };
+    return { data: gmailMessage("shop", now, "Pedido Shopify") };
+  } };
+  const result = await fetchGmailInbox({ accessToken: "token", since: new Date(now - 5000), label: "Shopify", http });
+  assert.deepEqual(result.map((item) => item.id), ["shop"]);
+  const listCalls = calls.filter((call) => call.url.endsWith("/messages"));
+  assert.equal(listCalls.length, 1);
+  assert.equal(listCalls[0].options.params.labelIds, undefined);
+  assert.match(listCalls[0].options.params.q, /^label:"Shopify" after:\d+$/);
+});
+
+test("marcador de sincronização: conta > GMAIL_SYNC_LABEL > Shopify; vazio desliga", () => {
+  const previous = process.env.GMAIL_SYNC_LABEL;
+  try {
+    delete process.env.GMAIL_SYNC_LABEL;
+    assert.equal(syncLabel({ config: {} }), "Shopify");
+    process.env.GMAIL_SYNC_LABEL = "Pedidos";
+    assert.equal(syncLabel({ config: {} }), "Pedidos");
+    assert.equal(syncLabel({ config: { gmailSyncLabel: " Loja " } }), "Loja");
+    process.env.GMAIL_SYNC_LABEL = "";
+    assert.equal(syncLabel({ config: {} }), null);
+  } finally {
+    if (previous === undefined) delete process.env.GMAIL_SYNC_LABEL;
+    else process.env.GMAIL_SYNC_LABEL = previous;
+  }
 });
 
 test("sincronização importa e-mail recebido uma única vez e avança o cursor", async () => {

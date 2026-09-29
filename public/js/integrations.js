@@ -55,6 +55,7 @@ const CHANNEL_FIELDS = {
   ],
   EMAIL: [
     { key: "config.provider", label: "Provedor (GMAIL ou MICROSOFT_365)", secret: false },
+    { key: "config.gmailSyncLabel", label: "Marcador do Gmail a importar (padrão: Shopify)", secret: false, optional: true },
     { key: "secrets.accessToken", label: "Access token (OAuth)", secret: true },
     { key: "secrets.refreshToken", label: "Refresh token (OAuth)", secret: true, optional: true },
   ],
