@@ -105,7 +105,15 @@ async function listConversations({
   // `AND` implícito do objeto `where`, então combinam livremente.
   if (status) {
     const statuses = String(status).split(",").map((value) => value.trim()).filter(Boolean);
-    where.status = statuses.length > 1 ? { in: statuses } : statuses[0];
+    if (statuses.includes("EM_ATENDIMENTO")) {
+      const regularStatuses = statuses.filter((value) => value !== "EM_ATENDIMENTO");
+      where.AND = [...(where.AND || []), { OR: [
+        ...(regularStatuses.length ? [{ status: { in: regularStatuses } }] : []),
+        { assignedUserId: { not: null }, status: { notIn: ["NOVO", "FINALIZADO"] } },
+      ] }];
+    } else {
+      where.status = statuses.length > 1 ? { in: statuses } : statuses[0];
+    }
   } else if (activeOnly === "true") {
     where.status = { not: "FINALIZADO" };
   }
@@ -646,9 +654,11 @@ async function getConversationSummary(viewer) {
     { OR: [{ firstResponseSlaBreached: true }, { responseSlaBreached: true }] }] };
   const urgentScope = { AND: [summaryScope, { status: { in: activeManagedStatuses } }, { priority: "URGENTE" }] };
   const unassignedScope = { AND: [summaryScope, { status: { in: activeManagedStatuses } }, { assignedUserId: null }] };
-  const [total, statuses, categories, waitingConversations, overdue, urgent, unassignedCount] = await Promise.all([
+  const inProgressScope = { AND: [summaryScope, { assignedUserId: { not: null } }, { status: { notIn: ["NOVO", "FINALIZADO"] } }] };
+  const [total, statuses, inProgressCount, categories, waitingConversations, overdue, urgent, unassignedCount] = await Promise.all([
     prisma.conversation.count({ where: summaryScope }),
     prisma.conversation.groupBy({ by: ["status"], where: summaryScope, _count: { _all: true } }),
+    prisma.conversation.count({ where: inProgressScope }),
     prisma.conversation.groupBy({
       by: ["categoryId"],
       where: summaryScope,
@@ -686,7 +696,7 @@ async function getConversationSummary(viewer) {
     overdue,
     urgent,
     unassigned: unassignedCount,
-    statuses: Object.fromEntries(statuses.map((item) => [item.status, item._count._all])),
+    statuses: { ...Object.fromEntries(statuses.map((item) => [item.status, item._count._all])), EM_ATENDIMENTO: inProgressCount },
     categories: Object.fromEntries(categories.map((item) => [item.categoryId, item._count._all])),
   };
 }
@@ -926,10 +936,8 @@ async function updateConversation(id, {
     data.status = status;
     data.finalizedAt = status === "FINALIZADO" ? new Date() : null;
   }
-  if (assignedUserId && !status) {
-    const current = await prisma.conversation.findUnique({ where: { id }, select: { status: true } });
-    if (!current) throw Object.assign(new Error("Conversa não encontrada."), { statusCode: 404 });
-    if (["NOVO", "AGUARDANDO_EQUIPE", "HANDOFF_BOT", "BOT"].includes(current.status)) data.status = "EM_ATENDIMENTO";
+  if (assignedUserId && !status && !currentSnapshot.assignedUserId && currentSnapshot.status !== "FINALIZADO") {
+    data.status = "NOVO";
   }
   try {
     const result = await prisma.$transaction(async (transaction) => {

@@ -979,6 +979,10 @@ async function loadConversations() {
     if (conversation.status === "AGUARDANDO_EQUIPE" && Number(conversation.unreadCount) > 0) result.attentionWaiting += 1;
     return result;
   }, { total: 0, statuses: {}, categories: {}, overdue: 0, urgent: 0, unassigned: 0, attentionWaiting: 0 });
+  if (!MARKETPLACE_UI_ENABLED) {
+    displaySummary.statuses.EM_ATENDIMENTO = summaryConversations.filter((conversation) =>
+      conversation.assignedUserId && !["NOVO", "FINALIZADO"].includes(conversation.status)).length;
+  }
   const filteredUser = state.adminUsers.find((user) => user.id === state.assignedUser);
   $("#list-summary").textContent = `${state.conversations.length} atendimento${state.conversations.length === 1 ? "" : "s"}${filteredUser ? ` ativo${state.conversations.length === 1 ? "" : "s"} • ${filteredUser.name}` : ""}`;
   $("#clear-team-filter").hidden = !state.assignedUser;

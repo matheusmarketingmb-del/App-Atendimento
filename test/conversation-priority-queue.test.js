@@ -150,6 +150,28 @@ test("filtros combináveis: status múltiplo + prioridade ao mesmo tempo", async
   }
 });
 
+test("Em atendimento reúne conversas atribuídas, iniciadas e não finalizadas", async () => {
+  const before = (await inbox.getConversationSummary(masterViewer)).statuses.EM_ATENDIMENTO || 0;
+  const waitingTeam = await createConversation("queue-active-team-test", "5511900003020", { status: "AGUARDANDO_EQUIPE", assignedUserId: supervisor.id });
+  const waitingCustomer = await createConversation("queue-active-customer-test", "5511900003021", { status: "AGUARDANDO_CLIENTE", assignedUserId: supervisor.id });
+  const newAssigned = await createConversation("queue-active-new-test", "5511900003022", { status: "NOVO", assignedUserId: supervisor.id });
+  const waitingUnassigned = await createConversation("queue-active-unassigned-test", "5511900003023", { status: "AGUARDANDO_EQUIPE", assignedUserId: null });
+  const finalized = await createConversation("queue-active-finalized-test", "5511900003024", { status: "FINALIZADO", assignedUserId: supervisor.id });
+  try {
+    const ids = (await inbox.listConversations({ status: "EM_ATENDIMENTO" }, masterViewer)).map((item) => item.id);
+    assert.ok(ids.includes(waitingTeam.id));
+    assert.ok(ids.includes(waitingCustomer.id));
+    assert.ok(!ids.includes(newAssigned.id));
+    assert.ok(!ids.includes(waitingUnassigned.id));
+    assert.ok(!ids.includes(finalized.id));
+    assert.equal((await inbox.getConversationSummary(masterViewer)).statuses.EM_ATENDIMENTO, before + 2);
+  } finally {
+    await prisma.contact.deleteMany({ where: { externalId: { in: [
+      "queue-active-team-test", "queue-active-customer-test", "queue-active-new-test", "queue-active-unassigned-test", "queue-active-finalized-test",
+    ] } } });
+  }
+});
+
 test("filtro slaBreached=true retorna só conversas com algum SLA estourado", async () => {
   const overdueFirst = await createConversation("queue-filter-sla-1-test", "5511900003004", { status: "NOVO", firstResponseSlaBreached: true });
   const overdueResponse = await createConversation("queue-filter-sla-2-test", "5511900003005", { status: "AGUARDANDO_EQUIPE", responseSlaBreached: true });

@@ -240,18 +240,17 @@ test("lista, pesquisa, classifica, lê, finaliza e reabre a conversa", async () 
   const user = await prisma.user.findUnique({ where: { email: "teste@mibro.local" } });
   let conversation = await prisma.conversation.findFirst();
   // Garante o estado inicial NOVO independente do que outro teste no mesmo
-  // arquivo tenha deixado na "primeira conversa" — "assumir" só reseta para
-  // EM_ATENDIMENTO quando parte de NOVO/AGUARDANDO_EQUIPE/HANDOFF_BOT/BOT
-  // (nunca de AGUARDANDO_CLIENTE, onde a empresa já respondeu).
+  // arquivo tenha deixado na "primeira conversa". Assumir mantém NOVO até
+  // que o atendente envie a primeira resposta.
   await prisma.conversation.update({ where: { id: conversation.id }, data: { status: "NOVO", assignedUserId: null } });
   conversation = await inbox.updateConversation(conversation.id, {
     categoryId: category.id, assignedUserId: user.id,
   }, masterViewer);
   assert.equal(conversation.category.code, "SUPORTE");
-  assert.equal(conversation.status, "EM_ATENDIMENTO");
+  assert.equal(conversation.status, "NOVO");
   assert.equal(conversation.assignedUser.id, user.id);
 
-  const result = await inbox.listConversations({ search: "Cliente", category: "SUPORTE", status: "EM_ATENDIMENTO" }, masterViewer);
+  const result = await inbox.listConversations({ search: "Cliente", category: "SUPORTE", status: "NOVO" }, masterViewer);
   assert.equal(result.length, 1);
   assert.equal(result[0].messages[0].text, "Qual é o modelo?");
 
@@ -260,7 +259,7 @@ test("lista, pesquisa, classifica, lê, finaliza e reabre a conversa", async () 
     phone: "5511999999999", contactName: "Cliente Teste", type: "text", text: "É o modelo X1",
     occurredAt: new Date(Date.now() + 1000), rawPayload: { id: "wamid.test.customer.reply" },
   });
-  assert.equal((await inbox.getConversation(conversation.id, masterViewer)).status, "AGUARDANDO_EQUIPE");
+  assert.equal((await inbox.getConversation(conversation.id, masterViewer)).status, "NOVO");
 
   let readMessageId;
   const readResult = await inbox.markAsRead(conversation.id, { channel: { markAsRead: async (messageId) => { readMessageId = messageId; } } });
