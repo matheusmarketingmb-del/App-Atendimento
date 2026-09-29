@@ -14,9 +14,9 @@ const { getGlobalSettings } = require("./integration-global-settings-service");
 const DEFAULT_INTERVAL_MS = 30 * 1000;
 const OVERLAP_MS = 2 * 60 * 1000;
 const MAX_PAGES = 20;
-// Forma de busca do marcador "Shopify (Site Mibro)" — é o que o Gmail mostra
-// na barra de pesquisa ao clicar no marcador (espaços/parênteses viram hífen).
-const DEFAULT_SYNC_LABEL = "shopify--site-mibro-";
+// Nome confirmado pela API do Gmail da conta conectada. A resolução abaixo
+// também aceita a forma transformada exibida na barra de busca.
+const DEFAULT_SYNC_LABEL = "Shopify (site Mibro)";
 
 function cursorDate(account) {
   const configured = account.config?.gmailAttachmentSyncVersion === 1 ? account.config?.gmailSyncCursorAt : null;
@@ -54,6 +54,27 @@ function labelQuery(label) {
   return /\s/.test(clean) ? `label:"${clean}"` : `label:${clean}`;
 }
 
+function labelKey(value) {
+  return String(value || "")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+}
+
+async function resolveGmailLabel({ accessToken, label, http }) {
+  const headers = { Authorization: `Bearer ${accessToken}` };
+  const response = await http.get("https://gmail.googleapis.com/gmail/v1/users/me/labels", {
+    headers, timeout: 10000,
+  });
+  const wanted = labelKey(label);
+  return (response.data?.labels || []).find((item) => (
+    item.id === label
+    || String(item.name || "").toLowerCase() === String(label).toLowerCase()
+    || (wanted && labelKey(item.name) === wanted)
+  )) || null;
+}
+
 function syncLabel(account) {
   const configured = account.config?.gmailSyncLabel ?? process.env.GMAIL_SYNC_LABEL ?? DEFAULT_SYNC_LABEL;
   return String(configured).trim() || null;
@@ -63,11 +84,14 @@ async function fetchGmailInbox({ accessToken, since, label = null, http = axios 
   const headers = { Authorization: `Bearer ${accessToken}` };
   const after = Math.max(0, Math.floor((since.getTime() - OVERLAP_MS) / 1000));
   const ids = new Map();
-  // Com marcador, a busca do Gmail (label:...) resolve o nome direto, sem
-  // precisar descobrir o ID do marcador. Sem marcador, mantém INBOX + SPAM.
-  const queries = label
-    ? [{ sourceLabel: "INBOX", params: { q: `${labelQuery(label)} after:${after}` } }]
-    : ["INBOX", "SPAM"].map((labelId) => ({ sourceLabel: labelId, params: { labelIds: labelId, q: `after:${after}` } }));
+  // Prefere o ID imutável retornado pela API. A comparação normalizada aceita
+  // tanto o nome visível quanto a forma copiada da busca do Gmail.
+  const resolvedLabel = label ? await resolveGmailLabel({ accessToken, label, http }) : null;
+  const queries = resolvedLabel
+    ? [{ sourceLabel: resolvedLabel.id, params: { labelIds: resolvedLabel.id, includeSpamTrash: true, q: `after:${after}` } }]
+    : label
+      ? [{ sourceLabel: "INBOX", params: { q: `${labelQuery(label)} after:${after}` } }]
+      : ["INBOX", "SPAM"].map((labelId) => ({ sourceLabel: labelId, params: { labelIds: labelId, q: `after:${after}` } }));
   for (const { sourceLabel, params } of queries) {
     let pageToken;
     for (let page = 0; page < MAX_PAGES; page += 1) {

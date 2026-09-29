@@ -66,11 +66,12 @@ test("fetch Gmail pagina INBOX e SPAM e devolve mensagens sem duplicar em ordem 
   assert.match(calls[0].options.params.q, /^after:\d+$/);
 });
 
-test("fetch Gmail com marcador busca só o label informado em vez de INBOX/SPAM", async () => {
+test("fetch Gmail resolve o marcador real pelo ID, aceitando a forma exibida na busca", async () => {
   const calls = [];
   const now = Date.now();
   const http = { get: async (url, options) => {
     calls.push({ url, options });
+    if (url.endsWith("/labels")) return { data: { labels: [{ id: "Label_863", name: "Shopify (site Mibro)" }] } };
     if (url.endsWith("/messages")) return { data: { messages: [{ id: "shop" }] } };
     return { data: gmailMessage("shop", now, "Pedido Shopify") };
   } };
@@ -78,17 +79,33 @@ test("fetch Gmail com marcador busca só o label informado em vez de INBOX/SPAM"
   assert.deepEqual(result.map((item) => item.id), ["shop"]);
   const listCalls = calls.filter((call) => call.url.endsWith("/messages"));
   assert.equal(listCalls.length, 1);
-  assert.equal(listCalls[0].options.params.labelIds, undefined);
-  assert.match(listCalls[0].options.params.q, /^label:shopify--site-mibro- after:\d+$/);
+  assert.equal(listCalls[0].options.params.labelIds, "Label_863");
+  assert.equal(listCalls[0].options.params.includeSpamTrash, true);
+  assert.match(listCalls[0].options.params.q, /^after:\d+$/);
   await fetchGmailInbox({ accessToken: "token", since: new Date(now - 5000), label: "Shopify (Site Mibro)", http });
-  assert.match(calls.filter((call) => call.url.endsWith("/messages")).at(-1).options.params.q, /^label:"Shopify \(Site Mibro\)" after:\d+$/);
+  assert.equal(calls.filter((call) => call.url.endsWith("/messages")).at(-1).options.params.labelIds, "Label_863");
+});
+
+test("fetch Gmail mantém busca textual como fallback quando o marcador não é encontrado", async () => {
+  const calls = [];
+  const now = Date.now();
+  const http = { get: async (url, options) => {
+    calls.push({ url, options });
+    if (url.endsWith("/labels")) return { data: { labels: [] } };
+    if (url.endsWith("/messages")) return { data: { messages: [] } };
+    return { data: gmailMessage("unused", now, "") };
+  } };
+  await fetchGmailInbox({ accessToken: "token", since: new Date(now - 5000), label: "Outro marcador", http });
+  const listCall = calls.find((call) => call.url.endsWith("/messages"));
+  assert.equal(listCall.options.params.labelIds, undefined);
+  assert.match(listCall.options.params.q, /^label:"Outro marcador" after:\d+$/);
 });
 
 test("marcador de sincronização: conta > GMAIL_SYNC_LABEL > padrão; vazio desliga", () => {
   const previous = process.env.GMAIL_SYNC_LABEL;
   try {
     delete process.env.GMAIL_SYNC_LABEL;
-    assert.equal(syncLabel({ config: {} }), "shopify--site-mibro-");
+    assert.equal(syncLabel({ config: {} }), "Shopify (site Mibro)");
     process.env.GMAIL_SYNC_LABEL = "Pedidos";
     assert.equal(syncLabel({ config: {} }), "Pedidos");
     assert.equal(syncLabel({ config: { gmailSyncLabel: " Loja " } }), "Loja");
