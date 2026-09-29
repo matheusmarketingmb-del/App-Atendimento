@@ -18,7 +18,8 @@ function publicUser(user) {
     canViewUncategorized: user.role === "ADMIN" || user.canViewUncategorized,
     canManageCategories: user.role === "ADMIN" || user.canManageCategories,
     canTransferConversations: user.role === "ADMIN" || user.canTransferConversations,
-    canViewTeamActivity: user.role === "ADMIN" || user.canViewTeamActivity,
+    // Visão de equipe (cargos, permissões e carga de cada um) é só do Master.
+    canViewTeamActivity: user.role === "ADMIN",
     canViewConversationHistory: user.role === "ADMIN" || user.canViewConversationHistory,
     canViewPreviousMessages: user.role === "ADMIN" || user.canViewPreviousMessages,
     canSetConversationPriority: user.role === "ADMIN" || user.role === "SUPERVISOR" || Boolean(user.canSetConversationPriority),

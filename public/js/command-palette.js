@@ -35,7 +35,7 @@
       { id: "nav-integrations", label: "Abrir Integrações", icon: "🔌", enabled: user.isMaster, run: () => { location.href = "/integrations"; } },
       { id: "nav-campaigns", label: "Abrir Campanhas", icon: "📣", enabled: user.canManageCampaigns, run: () => { location.href = "/campaigns"; } },
       { id: "nav-settings", label: "Abrir Configurações", icon: "⚙", enabled: user.isMaster || user.role === "SUPERVISOR", run: () => { location.href = "/configuracoes"; } },
-      { id: "nav-team", label: "Abrir Equipe", icon: "👥", enabled: user.isMaster || user.canViewTeamActivity, run: () => document.getElementById("team-button")?.click() },
+      { id: "nav-team", label: "Abrir Equipe", icon: "👥", enabled: user.isMaster, run: () => document.getElementById("team-button")?.click() },
     ];
     return all.filter((item) => item.enabled);
   }

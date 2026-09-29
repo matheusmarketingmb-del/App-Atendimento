@@ -54,9 +54,13 @@ async function queueCategoryFilters(user) {
 // Privacidade de conversa assumida: enquanto a conversa não tem responsável
 // ela fica na fila do setor (categorias liberadas / Sem categoria); depois
 // que alguém assume, só o responsável atual (e o Master) enxerga. Este é o
-// escopo único usado para entregar conteúdo.
+// escopo único usado por listagem, detalhe, mensagens, anexos, envio, busca,
+// alertas e contadores — a regra nunca é só visual.
+// Exceção: o Supervisor acompanha as áreas que gerencia (categorias
+// liberadas), então vê também as conversas já assumidas por outros nelas.
 async function conversationScope(user) {
   if (isMaster(user)) return {};
+  if (user?.role === "SUPERVISOR") return sectorScope(user);
   const queue = await queueCategoryFilters(user);
   const visible = [{ assignedUserId: user.id }];
   if (queue.length) visible.push({ AND: [{ assignedUserId: null }, { OR: queue }] });

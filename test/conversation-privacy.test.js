@@ -7,6 +7,7 @@ const authorization = require("../src/services/authorization-service");
 const inboxEvents = require("../src/realtime/inbox-events");
 const { finalizeInactiveConversations } = require("../src/services/conversation-inactivity-service");
 const { saveIncoming } = require("../src/services/message-service");
+const users = require("../src/services/user-management-service");
 
 // Privacidade de conversa assumida + transferência com/sem histórico.
 // Cenários numerados conforme a especificação (itens 1–13 da Parte 1).
@@ -352,6 +353,34 @@ test("14: auto-finalização mantém categoria e acesso só do último atendente
     assert.equal(reopened.categoryId, null);
     assert.equal(reopened.assignedUserId, null);
   }
+});
+
+test("Supervisor vê conversas assumidas só nas áreas que gerencia e não acessa a Visão de equipe", async () => {
+  const [agent, supervisor, master] = await Promise.all([
+    createUser("Atendente da área", { categories: [support] }),
+    createUser("Supervisor da área", { role: "SUPERVISOR", categories: [support], canViewTeamActivity: true }),
+    createUser("Master equipe", { role: "ADMIN" }),
+  ]);
+  const inArea = await createConversation("supervisor-area", support.id);
+  const outArea = await createConversation("supervisor-fora", commercial.id);
+  const message = await customerMessage(inArea.id, "Preciso de ajuda com o relógio");
+  await prisma.conversation.updateMany({ where: { id: { in: [inArea.id, outArea.id] } }, data: { assignedUserId: agent.id, status: "EM_ATENDIMENTO" } });
+
+  const list = await inbox.listConversations({}, supervisor);
+  assert.ok(list.some(({ id }) => id === inArea.id), "Supervisor deveria ver a conversa assumida na área dele");
+  assert.equal(list.some(({ id }) => id === outArea.id), false);
+  const detail = await inbox.getConversation(inArea.id, supervisor);
+  assert.ok(ids(detail.messages).includes(message.id));
+  await assert.rejects(() => authorization.assertCanViewConversation(supervisor, outArea.id), { statusCode: 404 });
+
+  // Atendente comum da mesma área continua sem ver a conversa do colega.
+  const otherAgent = await createUser("Outro atendente da área", { categories: [support] });
+  assert.equal((await inbox.listConversations({}, otherAgent)).some(({ id }) => id === inArea.id), false);
+
+  // Visão de equipe: só Master, mesmo com o flag antigo ligado.
+  await assert.rejects(() => users.listTeamActivity(supervisor), { statusCode: 403 });
+  await assert.rejects(() => inbox.listConversations({ assignedUser: agent.id }, supervisor), { statusCode: 403 });
+  assert.ok(Array.isArray(await users.listTeamActivity(master)));
 });
 
 test("regra de início do histórico: o mais antigo ponto de acesso vence (unitário)", () => {
