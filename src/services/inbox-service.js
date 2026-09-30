@@ -311,14 +311,8 @@ async function listConversations({
     })).map(({ id }) => id));
     const team = await authorization.supervisedUserIds(viewer);
     const onlySupervised = conversations.filter(({ id }) => !operational.has(id));
-    const teamPeriods = onlySupervised.length ? await prisma.conversationAssignmentPeriod.findMany({
-      where: { conversationId: { in: onlySupervised.map(({ id }) => id) }, userId: { in: team } },
-      select: { conversationId: true, startedAt: true, endedAt: true },
-    }) : [];
     for (const conversation of onlySupervised) {
-      const windows = team.includes(conversation.assignedUserId)
-        ? null // responsável atual é da equipe: o trecho atual está em aberto
-        : periods.mergeWindows(teamPeriods.filter((period) => period.conversationId === conversation.id).map((period) => ({ from: period.startedAt, to: period.endedAt })));
+      const windows = await periods.supervisionWindows(conversation, team);
       let preview = conversation.messages?.[0] || null;
       if (windows && preview && !periods.withinWindows(preview.occurredAt, windows)) {
         preview = await prisma.message.findFirst({

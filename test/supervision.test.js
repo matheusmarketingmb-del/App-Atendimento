@@ -105,6 +105,8 @@ test("1/2. Ana (equipe do João) assume: Ana, João e Master veem; outro atenden
   X = await conversation("x", support.id);
   M.c1 = await customer(X.id, "Oi, preciso de ajuda");
   await inbox.updateConversation(X.id, { assignedUserId: U.ana.id }, U.ana);
+  const beforeReply = (await inbox.listConversations({}, U.joao)).find(({ id }) => id === X.id);
+  assert.deepEqual(beforeReply.messages, [], "prévia não revela mensagem anterior ao trecho da equipe");
   M.a1 = await agentSays(X.id, "ana", "Olá! Sou a Ana.");
   M.c2 = await customer(X.id, "Meu relógio não liga");
   M.a2 = await agentSays(X.id, "ana", "Vou verificar.");
