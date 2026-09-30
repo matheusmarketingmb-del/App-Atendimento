@@ -31,7 +31,7 @@ async function findOrCreateCampaignConversation({ phone, name, channelAccountId 
   const channelScope = channelAccountId || "LEGACY";
   for (const externalId of whatsappIdVariants(phone)) {
     const conversation = await client.conversation.findFirst({
-      where: { channel: "META", ...(channelAccountId ? { channelScope } : {}), contact: { is: { channel: "META", externalId } } },
+      where: { channel: "META", channelScope, contact: { is: { channel: "META", externalId } } },
       select: { id: true, contactId: true },
     });
     if (conversation) return conversation;

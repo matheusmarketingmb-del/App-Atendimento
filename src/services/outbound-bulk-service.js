@@ -404,7 +404,10 @@ async function createBulkSend(user, payload, defaultChannel) {
     // Corrida entre dois cliques simultâneos: o índice único resolve.
     if (error?.code === "P2002") {
       const raced = await prisma.campaign.findUnique({ where: { idempotencyKey } });
-      if (raced) return { campaignId: raced.id, duplicateRequest: true, ...(await batchCounts(raced.id)) };
+      if (raced) {
+        if (raced.createdByUserId !== user.id) throw fail("Identificador de envio já utilizado.", 409);
+        return { campaignId: raced.id, duplicateRequest: true, ...(await batchCounts(raced.id)) };
+      }
     }
     throw error;
   }
@@ -436,7 +439,7 @@ async function batchCounts(campaignId) {
 
 async function assertCanSeeBatch(user, campaign) {
   if (!campaign) throw fail("Envio não encontrado.", 404);
-  if (campaign.createdByUserId === user.id || authorization.isMaster(user) || authorization.canManageCampaigns(user)) return;
+  if (campaign.createdByUserId === user.id || authorization.isMaster(user)) return;
   throw fail("Envio não encontrado.", 404);
 }
 
