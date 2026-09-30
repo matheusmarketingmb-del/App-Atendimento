@@ -291,9 +291,10 @@ async function buildPreview(user, payload, defaultChannel) {
   for (const recipient of recipients) {
     const phone = rules.normalizeRecipientPhone(recipient.phone).phone;
     const found = phone && rules.phoneVariants(phone).map((variant) => existingByVariant.get(variant)).find(Boolean);
+    // O vínculo vem do telefone resolvido no servidor, nunca de um ID enviado pela tela.
+    recipient.contactId = found?.id || null;
     if (!found) continue;
     recipient.existingContact = true;
-    recipient.contactId = recipient.contactId || found.id;
     if (!recipient.name) recipient.name = found.customName || found.name || "";
   }
 
