@@ -214,13 +214,18 @@
     }
   }
 
-  async function open() {
+  async function open({ memberId = null, tab = "current" } = {}) {
     ensureDialog();
     S = { teams: [], supervisorId: null, overview: null, memberId: null, memberFilter: "", userSearch: "", userResults: [], tab: "current", page: 1, filters: {}, conversations: null, loadingOverview: false };
     render();
     el("supervision-dialog").showModal();
     try { await loadTeams(); } catch (error) { toast(error.message, true); }
     await loadOverview();
+    if (memberId && S.overview?.members.some((member) => member.id === memberId)) {
+      S.memberId = memberId;
+      S.tab = tab === "history" ? "history" : "current";
+      loadConversations();
+    }
   }
 
   window.WaSupervision = { open, openTimeline };

@@ -527,12 +527,13 @@ function renderFaq() {
       ["Como uso uma resposta rápida?", "Clique no ícone de raio, escolha a resposta, revise o texto e envie. A seleção nunca envia automaticamente."],
     ],
     SUPERVISOR: [
-      ["Como vejo conversas dos Atendentes?", user.canViewTeamActivity ? "Use o filtro de responsável. Você verá os membros dentro das categorias e canais liberados para sua conta." : "Sua conta precisa da permissão Acompanhar equipe, além dos acessos às categorias e canais supervisionados."],
-      ["Posso alterar prioridades?", "Sim. Supervisores podem definir prioridade Normal, Alta ou Urgente."],
+      ["Como vejo conversas dos Atendentes?", "Abra Minha equipe e selecione um atendente vinculado pelo Master. Atuais mostra as conversas atribuídas; Histórico inclui transferidas e finalizadas. Você lê somente os trechos atendidos pela sua equipe, sem responder ou alterar por esse acesso."],
+      ["Posso alterar prioridades?", "Sim, nas conversas em que você pode atuar. Conversas abertas somente por supervisão permanecem em leitura."],
       ["Posso alterar configurações?", "Configurações de Conversas ficam disponíveis apenas para consulta. Alterações administrativas são feitas pelo Master."],
     ],
     ADMIN: [
       ["Como libero um novo usuário?", "Em Equipe, defina o perfil, as permissões, cada categoria/subcategoria e depois libere também os números ou contas de canal necessários."],
+      ["Como vejo todo o histórico de um atendente?", "Em Equipes, escolha Todos os atendentes, selecione a pessoa e abra Histórico. O botão Ver atendimentos no cadastro também abre essa consulta, incluindo conversas transferidas e finalizadas."],
       ["Quando usar Somente Master?", "Use apenas para categorias realmente restritas. Elas não aparecem nem aceitam transferências feitas por Atendentes ou Supervisores."],
       ["Onde verifico alterações importantes?", "Use a Auditoria geral para consultar mudanças em usuários, conversas, categorias, Bots e configurações."],
     ],
@@ -1923,7 +1924,10 @@ $("#team-user-list").addEventListener("click", (event) => {
   const edit = event.target.closest("[data-edit-user]");
   if (edit) return editTeamUser(edit.dataset.editUser);
   const view = event.target.closest("[data-view-user]");
-  if (view) { state.assignedUser = view.dataset.viewUser; state.assignedUserActiveOnly = true; state.status = ""; state.category = ""; $("#team-dialog").close(); loadConversations(); }
+  if (view) {
+    $("#team-dialog").close();
+    window.WaSupervision.open({ memberId: view.dataset.viewUser, tab: "history" }).catch((error) => toast(error.message, true));
+  }
 });
 $("#team-form").addEventListener("submit", async (event) => {
   event.preventDefault();

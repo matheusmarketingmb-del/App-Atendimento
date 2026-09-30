@@ -45,13 +45,13 @@ Libere apenas:
 
 Além do escopo operacional, considere:
 
-- **Acompanhar equipe**;
+- vincule os atendentes ao Supervisor na área **Equipes**;
 - **Visualizar histórico**;
 - **Ver mensagens anteriores**;
 - **Alterar responsável**;
 - acesso a todas as categorias e canais da equipe supervisionada.
 
-O Supervisor já pode definir prioridade e visualizar Configurações de Conversas em modo somente leitura.
+O Supervisor já pode definir prioridade nas conversas em que pode atuar e visualizar Configurações de Conversas em modo somente leitura. A supervisão da equipe permite apenas ler os trechos atendidos pelos membros vinculados; não permite responder, transferir ou finalizar por esse acesso.
 
 ### Master
 
@@ -69,7 +69,7 @@ Permite transferir a conversa para outro atendente. A mudança de categoria púb
 
 ### Acompanhar equipe
 
-Permite filtrar atendimentos de outros usuários dentro das categorias e canais liberados.
+A visão administrativa geral de equipe é exclusiva do Master. O campo antigo não libera supervisão: defina os vínculos em **Equipes**. Para ver todos os atendimentos de uma pessoa, escolha **Todos os atendentes**, selecione a pessoa e abra **Histórico**; inclui conversas transferidas e finalizadas. **Ver atendimentos** no cadastro também abre esse histórico.
 
 ### Visualizar histórico
 

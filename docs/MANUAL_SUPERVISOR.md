@@ -10,7 +10,7 @@ O perfil Supervisor não concede acesso irrestrito. Categorias, números/canais 
 
 Para exercer a supervisão, a conta normalmente deve receber:
 
-- **Acompanhar equipe**;
+- vínculo com seus atendentes, definido pelo Master em **Equipes**;
 - acesso às categorias supervisionadas;
 - acesso aos números/contas dos canais supervisionados;
 - **Visualizar histórico**, quando precisar auditar ações da conversa;
@@ -19,17 +19,17 @@ Para exercer a supervisão, a conta normalmente deve receber:
 
 ## 3. Visualizar conversas dos Atendentes
 
-1. Abra a caixa de atendimento.
-2. Use o filtro de responsável.
+1. Abra **Minha equipe** na barra lateral.
+2. Confira os membros vinculados pelo Master.
 3. Selecione o Atendente.
-4. Combine com filtros de categoria, situação, prioridade e canal.
+4. Escolha **Atuais** para os responsáveis atuais ou **Histórico** para todas as conversas em que o atendente participou, inclusive transferidas e finalizadas. Remova filtros para uma consulta abrangente.
 5. Abra a conversa para consultar o atendimento.
 
-A permissão **Acompanhar equipe** permite filtrar outros usuários, mas não ignora os demais controles. O Supervisor continuará vendo apenas conversas das categorias e contas de canal liberadas para ele.
+Você lê apenas os trechos em que alguém da sua equipe foi responsável. Categorias Somente Master continuam excluídas. A supervisão é somente leitura: não permite responder, transferir, finalizar ou marcar como lida pelo atendente. O campo antigo **Acompanhar equipe** não define esses vínculos.
 
 ## 4. Acompanhar a equipe
 
-Na área **Equipe**, o Supervisor autorizado visualiza a atividade dentro de seu próprio escopo. Ele não cria contas nem altera permissões; essas ações são exclusivas do Master.
+Na área **Minha equipe**, o Supervisor visualiza contagens e atendimentos dos membros vinculados. Não cria contas, altera permissões nem escolhe quem pertence à equipe; essas ações são exclusivas do Master.
 
 Use a visão da equipe para:
 
@@ -41,7 +41,7 @@ Use a visão da equipe para:
 
 ## 5. Prioridades
 
-O Supervisor pode classificar conversas como **Normal**, **Alta** ou **Urgente** sem uma permissão adicional.
+O Supervisor pode classificar conversas em que possui acesso operacional como **Normal**, **Alta** ou **Urgente** sem uma permissão adicional. Uma conversa aberta apenas por supervisão permanece somente leitura.
 
 Critérios recomendados:
 
@@ -53,7 +53,7 @@ Evite marcar todos os casos como urgentes; isso elimina a utilidade da fila de p
 
 ## 6. Transferência e redistribuição
 
-Todo Supervisor pode mover a conversa para uma categoria pública permitida pelo canal. Com **Alterar responsável**, também pode:
+Nas conversas em que possui acesso operacional (próprio atendimento ou fila liberada), o Supervisor pode mover a conversa para uma categoria pública permitida pelo canal. Com **Alterar responsável**, também pode:
 
 - trocar o atendente responsável;
 - trocar o atendente mesmo quando ele próprio não é o destino;
@@ -66,9 +66,9 @@ A opção **Sinalizar encaminhamento** apenas publica um aviso no chat interno. 
 
 ## 7. Histórico e qualidade
 
-Com **Visualizar histórico**, o Supervisor consulta as ações registradas na conversa, como mudança de responsável, categoria, prioridade e situação.
+Em **Histórico de atendimento**, o Supervisor consulta a linha do tempo dos trechos da equipe. O Master vê a linha do tempo completa.
 
-Com **Ver mensagens anteriores**, consegue analisar conteúdo anterior ao limite criado por um encaminhamento.
+**Visualizar histórico** e **Ver mensagens anteriores** continuam aplicáveis ao acesso operacional. Não ampliam a supervisão para trechos atendidos por pessoas fora da equipe.
 
 Ao revisar um atendimento:
 
