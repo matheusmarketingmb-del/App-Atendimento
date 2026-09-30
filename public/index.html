@@ -192,6 +192,12 @@
           </div>
           <div id="attachment-preview" class="attachment-preview" hidden><img id="attachment-thumb" alt="Prévia da imagem"><span id="attachment-type" class="attachment-type" hidden>DOC</span><span id="attachment-name"></span><button id="remove-attachment" type="button" aria-label="Remover anexo">×</button></div>
           <div class="composer-input-wrap">
+            <div class="composer-format-tools" role="toolbar" aria-label="Formatação da mensagem">
+              <button type="button" data-message-format="*" title="Negrito (*texto*)" aria-label="Negrito"><b>B</b></button>
+              <button type="button" data-message-format="_" title="Itálico (_texto_)" aria-label="Itálico"><i>I</i></button>
+              <button type="button" data-message-format="~" title="Riscado (~texto~)" aria-label="Riscado"><s>S</s></button>
+              <button type="button" data-message-format="```" title="Monoespaçado (```texto```)" aria-label="Monoespaçado">&lt;/&gt;</button>
+            </div>
             <textarea id="message-input" rows="1" maxlength="4096" placeholder="Digite uma mensagem... (use / para respostas rápidas)"></textarea>
             <div id="slash-suggestions" class="slash-suggestions" hidden></div>
           </div>

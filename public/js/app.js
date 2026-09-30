@@ -308,16 +308,31 @@ function renderConversationCards(conversations) {
   existing.forEach((card, id) => { if (!expectedIds.has(id)) card.remove(); });
 }
 
+function renderWhatsAppText(value) {
+  const escaped = escapeHtml(String(value ?? ""));
+  return escaped.split(/(```[\s\S]*?```)/g).map((part) => {
+    if (part.startsWith("```") && part.endsWith("```") && part.length >= 6) {
+      return `<code class="whatsapp-code">${part.slice(3, -3)}</code>`;
+    }
+    return part
+      .replace(/\*([^*\n]+)\*/g, "<strong>$1</strong>")
+      .replace(/_([^_\n]+)_/g, "<em>$1</em>")
+      .replace(/~([^~\n]+)~/g, "<s>$1</s>")
+      .replace(/`([^`\n]+)`/g, '<code class="whatsapp-inline-code">$1</code>')
+      .replace(/\n/g, "<br>");
+  }).join("");
+}
+
 function messageContent(message) {
   const mediaUrl = `/api/messages/${encodeURIComponent(message.id)}/media`;
   if (message.type === "image" && message.mediaStorageKey) {
-    return `<a class="message-image-link" href="${mediaUrl}" target="_blank" rel="noopener"><img class="message-image" src="${mediaUrl}" alt="${escapeHtml(message.text || "Imagem da conversa")}" loading="lazy"></a>${message.text && message.text !== "[image]" ? `<p>${escapeHtml(message.text)}</p>` : ""}`;
+    return `<a class="message-image-link" href="${mediaUrl}" target="_blank" rel="noopener"><img class="message-image" src="${mediaUrl}" alt="${escapeHtml(message.text || "Imagem da conversa")}" loading="lazy"></a>${message.text && message.text !== "[image]" ? `<p>${renderWhatsAppText(message.text)}</p>` : ""}`;
   }
   if (message.type === "audio" && message.mediaStorageKey) {
     return `<audio class="message-audio" controls preload="metadata"><source src="${mediaUrl}" type="${escapeHtml(message.mediaMimeType || "audio/ogg")}">Seu navegador não conseguiu reproduzir este áudio.</audio><a class="audio-download" href="${mediaUrl}" download>Baixar áudio</a>`;
   }
   if (message.type === "video" && message.mediaStorageKey) {
-    return `<video class="message-video" controls preload="metadata" playsinline><source src="${mediaUrl}" type="${escapeHtml(message.mediaMimeType || "video/mp4")}">Seu navegador não conseguiu reproduzir este vídeo.</video>${message.text && message.text !== "[video]" ? `<p>${escapeHtml(message.text)}</p>` : ""}<a class="media-download" href="${mediaUrl}" download>Baixar vídeo</a>`;
+    return `<video class="message-video" controls preload="metadata" playsinline><source src="${mediaUrl}" type="${escapeHtml(message.mediaMimeType || "video/mp4")}">Seu navegador não conseguiu reproduzir este vídeo.</video>${message.text && message.text !== "[video]" ? `<p>${renderWhatsAppText(message.text)}</p>` : ""}<a class="media-download" href="${mediaUrl}" download>Baixar vídeo</a>`;
   }
   if (message.type === "sticker" && message.mediaStorageKey) {
     return `<img class="message-sticker" src="${mediaUrl}" alt="Figurinha recebida" loading="lazy">`;
@@ -325,14 +340,14 @@ function messageContent(message) {
   if (message.type === "document" && message.mediaStorageKey) {
     const fileName = message.mediaFileName || "documento";
     const typeLabel = documentTypeLabel(message.mediaMimeType, fileName);
-    return `<a class="message-document" href="${mediaUrl}" target="_blank" rel="noopener"><span class="document-icon" aria-hidden="true">${escapeHtml(typeLabel)}</span><span class="document-details"><strong>${escapeHtml(fileName)}</strong><small>${escapeHtml(formatFileSize(message.mediaSize, typeLabel))}</small></span><span class="document-action">Abrir</span></a>${message.text && message.text !== "[document]" ? `<p>${escapeHtml(message.text)}</p>` : ""}`;
+    return `<a class="message-document" href="${mediaUrl}" target="_blank" rel="noopener"><span class="document-icon" aria-hidden="true">${escapeHtml(typeLabel)}</span><span class="document-details"><strong>${escapeHtml(fileName)}</strong><small>${escapeHtml(formatFileSize(message.mediaSize, typeLabel))}</small></span><span class="document-action">Abrir</span></a>${message.text && message.text !== "[document]" ? `<p>${renderWhatsAppText(message.text)}</p>` : ""}`;
   }
   if (message.type === "image") return "<p>[Imagem indisponível]</p>";
   if (message.type === "audio") return "<p>[Áudio indisponível]</p>";
   if (message.type === "video") return "<p>[Vídeo indisponível]</p>";
   if (message.type === "sticker") return "<p>[Figurinha indisponível]</p>";
   if (message.type === "document") return "<p>[Documento indisponível]</p>";
-  return `<p>${escapeHtml(message.text || `[${message.type}]`)}</p>`;
+  return `<p>${renderWhatsAppText(message.text || `[${message.type}]`)}</p>`;
 }
 
 // Item 27/42 do plano Social — botões de moderação só aparecem quando a
@@ -2453,6 +2468,23 @@ function resetComposerHeight() {
 }
 $("#message-input").addEventListener("input", autoResizeComposer);
 
+function applyMessageFormat(marker) {
+  const input = $("#message-input");
+  if (input.disabled) return;
+  const start = input.selectionStart ?? input.value.length;
+  const end = input.selectionEnd ?? start;
+  const selected = input.value.slice(start, end);
+  const sample = selected || "texto";
+  input.setRangeText(`${marker}${sample}${marker}`, start, end, "end");
+  input.focus();
+  if (!selected) input.setSelectionRange(start + marker.length, start + marker.length + sample.length);
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+document.querySelectorAll("[data-message-format]").forEach((button) => {
+  button.addEventListener("click", () => applyMessageFormat(button.dataset.messageFormat));
+});
+
 $("#message-input").addEventListener("input", () => {
   const slash = currentSlashToken($("#message-input"));
   if (!slash) return hideSlashSuggestions();
@@ -2525,6 +2557,10 @@ $("#template-form").addEventListener("submit", async (event) => {
   finally { $("#send-template").disabled = false; }
 });
 $("#message-input").addEventListener("keydown", (event) => {
+  if ((event.ctrlKey || event.metaKey) && !event.altKey) {
+    const marker = ({ b:"*", i:"_" })[event.key.toLowerCase()];
+    if (marker) { event.preventDefault(); return applyMessageFormat(marker); }
+  }
   if (quickReplySlashActive && quickReplySlashActive.matches.length) {
     if (event.key === "ArrowDown") { event.preventDefault(); quickReplySlashActive.activeIndex = (quickReplySlashActive.activeIndex + 1) % quickReplySlashActive.matches.length; return renderSlashSuggestions(); }
     if (event.key === "ArrowUp") { event.preventDefault(); quickReplySlashActive.activeIndex = (quickReplySlashActive.activeIndex - 1 + quickReplySlashActive.matches.length) % quickReplySlashActive.matches.length; return renderSlashSuggestions(); }

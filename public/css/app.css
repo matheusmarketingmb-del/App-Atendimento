@@ -1430,6 +1430,12 @@ html[data-theme="dark"] .composer .template-shortcut { background: #252a31; colo
 /* Respostas rápidas */
 .composer-input-wrap{position:relative;flex:1;min-width:0}
 .composer-input-wrap textarea{width:100%}
+.composer-format-tools{display:flex;align-items:center;gap:4px;margin:0 8px 5px}
+.composer-format-tools button{display:grid;place-items:center;width:26px;height:24px;padding:0;border:1px solid var(--line);border-radius:7px;color:var(--muted);background:transparent;font-size:12px}
+.composer-format-tools button:hover{color:#fff;border-color:var(--orange);background:var(--orange)}
+.whatsapp-code{display:block;margin:3px 0;padding:7px 9px;border-radius:6px;background:rgba(0,0,0,.12);font-family:ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap}
+.whatsapp-inline-code{padding:1px 4px;border-radius:4px;background:rgba(0,0,0,.1);font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
+html[data-theme="dark"] .composer-format-tools button{border-color:#363b43;color:#c8ccd2}
 .quick-reply-shortcut{width:44px;height:44px;flex:none;align-self:flex-end;border:1px solid var(--line);border-radius:50%;color:#555;background:#fff;font-size:16px;cursor:pointer}
 .quick-reply-shortcut:hover{border-color:var(--orange);color:var(--orange)}
 html[data-theme="dark"] .quick-reply-shortcut{border-color:#383d45;color:#cbd0d6;background:#22262c}
