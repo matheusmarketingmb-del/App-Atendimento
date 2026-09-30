@@ -17,6 +17,7 @@
   <link rel="stylesheet" href="/css/app.css?v=0.34.9">
   <script src="/js/feature-flags.js"></script>
   <link rel="stylesheet" href="/css/responsive.css">
+  <link rel="stylesheet" href="/css/whatsapp-send.css?v=1">
 </head>
 <body>
   <header class="topbar">
@@ -396,9 +397,9 @@
           <label class="team-check"><input id="permission-history" type="checkbox"><span><b>Visualizar histórico</b><small>Consultar as ações registradas nas conversas permitidas.</small></span></label>
           <label class="team-check"><input id="permission-previous-messages" type="checkbox"><span><b>Ver mensagens anteriores</b><small>Ao receber um encaminhamento, visualizar também as mensagens anteriores.</small></span></label>
           <label class="team-check"><input id="permission-priority" type="checkbox"><span><b>Definir prioridade da conversa</b><small>Marcar atendimentos como Alta ou Urgente.</small></span></label>
-          <label class="team-check"><input id="permission-start-conversations" type="checkbox"><span><b>Iniciar conversas</b><small>Exibe o botão Nova e permite iniciar e-mails pelas contas liberadas.</small></span></label>
+          <label class="team-check"><input id="permission-start-conversations" type="checkbox"><span><b>Iniciar conversas</b><small>Exibe o botão Nova e permite iniciar conversa individual (WhatsApp com template aprovado ou e-mail) pelos números/contas liberados.</small></span></label>
           <label class="team-check"><input id="permission-merge-contacts" type="checkbox"><span><b>Fundir contatos</b><small>Permite vincular telefone, e-mail e outros canais da mesma pessoa.</small></span></label>
-          <label class="team-check"><input id="permission-manage-campaigns" type="checkbox"><span><b>Campanhas e templates</b><small>Permite acessar Campanhas e usar templates nas conversas.</small></span></label>
+          <label class="team-check"><input id="permission-manage-campaigns" type="checkbox"><span><b>Campanhas e templates</b><small>Permite envio em massa pelo painel Nova conversa, acessar Campanhas e usar templates nas conversas.</small></span></label>
         </fieldset>
         <fieldset class="team-categories"><legend>Categorias liberadas</legend><p>“Sem categoria”, cada categoria e cada subcategoria devem ser liberadas separadamente.</p><div id="team-category-access"></div></fieldset>
         <div class="team-form-actions"><button id="cancel-team-edit" type="button">Limpar</button><button type="submit">Salvar conta</button></div>
@@ -567,6 +568,7 @@
   <aside id="update-banner" class="update-banner" hidden><span><b>Nova versão disponível</b><small>Atualize para receber as melhorias do atendimento.</small></span><button id="update-later" type="button">Depois</button><button id="apply-update" type="button">Atualizar agora</button></aside>
   <div id="toast" class="toast" role="status"></div>
   <script src="/js/app.js?v=0.34.9-3"></script>
+  <script src="/js/whatsapp-send-wizard.js?v=1"></script>
   <script src="/js/changelog.js?v=0.34.2"></script>
   <script src="/js/internal-chat.js"></script>
   <script src="/js/pwa.js"></script>

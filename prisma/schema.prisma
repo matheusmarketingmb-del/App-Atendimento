@@ -1895,6 +1895,13 @@ model Campaign {
 
   segmentFilters Json? // critérios de segmentação combináveis (item 10)
 
+  // Envio pelo painel "Nova conversa" (envio em massa): PANEL; campanhas
+  // criadas na tela /campaigns ficam null. Mesmo motor/fila/histórico.
+  origin         String?
+  // Idempotência do envio pelo painel: o mesmo pedido (clique duplo/retry)
+  // nunca cria dois lotes.
+  idempotencyKey String? @unique
+
   createdByUserId String?
   updatedByUserId String?
   createdAt       DateTime @default(now())
@@ -1911,6 +1918,7 @@ model Campaign {
 
   @@index([status, scheduledAt])
   @@index([createdByUserId])
+  @@index([origin, createdAt])
 }
 
 // Participante de uma campanha (item 5) — dados PRÓPRIOS da campanha, nunca
@@ -1951,6 +1959,15 @@ model CampaignContact {
   retryCount        Int                   @default(0)
 
   prospectStatus ProspectStatus @default(NEW)
+
+  // Template por destinatário (envio pelo painel com templates diferentes
+  // por contato/grupo). Null = usa o template da campanha.
+  templateName     String?
+  templateLanguage String?
+  templateCategory String?
+  // Valores das variáveis já resolvidos para este destinatário
+  // ({ "BODY:1": "Ana", ... }). Null = resolve pelo variableMapping da campanha.
+  variableValues   Json?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

@@ -112,7 +112,8 @@ test("UI expõe permissão da Equipe, oculta Nova e mantém Meta indisponível",
   assert.match(html, /id="permission-start-conversations"/);
   assert.match(html, /id="outbound-channel-dialog"/);
   assert.match(html, /id="outbound-documents"/);
-  assert.match(js, /new-conversation"\)\.hidden = !status\.user\.canStartConversations/);
+  // Botão "Nova": individual (canStartConversations) OU envio em massa (canManageCampaigns).
+  assert.match(js, /new-conversation"\)\.hidden = !\(status\.user\.canStartConversations \|\| status\.user\.canManageCampaigns\)/);
   assert.match(js, /\/api\/conversations\/outbound\/email/);
   assert.match(js, /body\.append\("documents", file, file\.name\)/);
 });

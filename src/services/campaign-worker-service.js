@@ -17,6 +17,7 @@ const { whatsappIdVariants } = require("./conversation-service");
 const { getCampaignSettings } = require("./campaign-settings-service");
 const { sendApprovedTemplate } = require("./meta-template-service");
 const { isOptedOut } = require("./campaign-optout-service");
+const channelMessageService = require("./channels/channel-message-service");
 const { DEFAULT_BATCH_SIZE, DEFAULT_DELAY_BETWEEN_BATCHES_SECONDS, DEFAULT_MAX_RETRIES, STUCK_SENDING_MINUTES } = require("./campaign-constants");
 
 // Mesma primitiva de "achar ou criar Contact+Conversation por telefone" que
@@ -24,34 +25,47 @@ const { DEFAULT_BATCH_SIZE, DEFAULT_DELAY_BETWEEN_BATCHES_SECONDS, DEFAULT_MAX_R
 // painel — aqui sem `user` (é o sistema enviando, não um atendente
 // interativo): a conversa nasce sem responsável, pronta para um atendente
 // assumir quando o cliente responder (item 15/16).
-async function findOrCreateCampaignConversation({ phone, name }, client = prisma) {
+async function findOrCreateCampaignConversation({ phone, name, channelAccountId = null }, client = prisma) {
+  // Cada número de atendimento tem a própria conversa (channelScope = id da
+  // conta; LEGACY = número principal) — mesma regra do envio individual.
+  const channelScope = channelAccountId || "LEGACY";
   for (const externalId of whatsappIdVariants(phone)) {
     const conversation = await client.conversation.findFirst({
-      where: { channel: "META", contact: { is: { channel: "META", externalId } } },
+      where: { channel: "META", ...(channelAccountId ? { channelScope } : {}), contact: { is: { channel: "META", externalId } } },
       select: { id: true, contactId: true },
     });
     if (conversation) return conversation;
   }
+  // Contato já existe com a outra grafia (com/sem 9º dígito): reaproveita.
+  let knownContact = null;
+  for (const externalId of whatsappIdVariants(phone)) {
+    knownContact = await client.contact.findUnique({ where: { channel_externalId: { channel: "META", externalId } }, select: { id: true } });
+    if (knownContact) break;
+  }
 
   return client.$transaction(async (transaction) => {
-    const contact = await transaction.contact.upsert({
+    const contact = knownContact || await transaction.contact.upsert({
       where: { channel_externalId: { channel: "META", externalId: phone } },
       update: {},
       create: { channel: "META", externalId: phone, phone, name: name || phone },
     });
     const existing = await transaction.conversation.findUnique({
-      where: { contactId_channel_channelScope: { contactId: contact.id, channel: "META", channelScope: "LEGACY" } },
+      where: { contactId_channel_channelScope: { contactId: contact.id, channel: "META", channelScope } },
       select: { id: true, contactId: true },
     });
     if (existing) return existing;
     return transaction.conversation.create({
-      data: { contactId: contact.id, channel: "META", channelScope: "LEGACY", status: "NOVO" },
+      data: { contactId: contact.id, channel: "META", channelScope, channelAccountId, status: "NOVO" },
       select: { id: true, contactId: true },
     });
   });
 }
 
 function resolveTemplateValues(campaign, contact, template) {
+  // Envio pelo painel: valores já resolvidos e validados por destinatário.
+  if (contact.variableValues && typeof contact.variableValues === "object" && !Array.isArray(contact.variableValues)) {
+    return Object.fromEntries(template.variables.map((variable) => [variable.key, String(contact.variableValues[variable.key] ?? "")]));
+  }
   const mapping = campaign.variableMapping || {};
   const values = {};
   for (const variable of template.variables) {
@@ -130,16 +144,34 @@ async function processCampaign(campaign, channel, now) {
   const candidates = available.filter((contact) => retryIsReady(contact, now, delaySeconds)).slice(0, batchSize);
   if (!candidates.length) { await maybeCompleteCampaign(campaign.id, now); return; }
 
+  // Número remetente do lote (multi-número). Antes o worker sempre usava o
+  // número principal, mesmo com a campanha apontando para outra conta.
+  let senderChannel = channel;
+  if (campaign.channelAccountId) {
+    try {
+      senderChannel = (await channelMessageService.adapterFor("META", campaign.channelAccountId)).channel;
+    } catch (error) {
+      console.error(`[CAMPAIGN_WORKER] número remetente indisponível para a campanha ${campaign.id} (tenta no próximo tick)`, error.message);
+      return;
+    }
+  }
+
+  let templates = [];
   let template = null;
   try {
     const { listApprovedTemplates } = require("./meta-template-service");
-    const templates = await listApprovedTemplates(channel);
+    templates = await listApprovedTemplates(senderChannel);
     template = templates.find((item) => item.name === campaign.templateName && item.language === campaign.templateLanguage);
   } catch (error) {
     console.error("[CAMPAIGN_WORKER] falha ao consultar templates da Meta (nenhum contato reivindicado)", error.message);
     return;
   }
-  if (!template || template.status !== "APPROVED") {
+  const perContactTemplates = campaign.origin === "PANEL";
+  const approvedTemplate = (name, language) => {
+    const found = templates.find((item) => item.name === name && item.language === language);
+    return found && found.status === "APPROVED" && found.supported !== false ? found : null;
+  };
+  if (!perContactTemplates && (!template || template.status !== "APPROVED")) {
     await prisma.campaignContact.updateMany({
       where: { campaignId: campaign.id, status: { in: ["PENDING", "QUEUED"] } },
       data: { status: "FAILED", failedAt: now, failureReason: "Template não está mais aprovado na Meta." },
@@ -174,11 +206,25 @@ async function processCampaign(campaign, channel, now) {
         break;
       }
 
-      const conversation = await findOrCreateCampaignConversation({ phone: contact.phone, name: contact.fullName || contact.firstName });
-      const values = resolveTemplateValues(campaign, contact, template);
+      // Template por destinatário (envio pelo painel); senão, o da campanha.
+      const templateName = contact.templateName || campaign.templateName;
+      const templateLanguage = contact.templateLanguage || campaign.templateLanguage;
+      const contactTemplate = perContactTemplates ? approvedTemplate(templateName, templateLanguage) : template;
+      if (!contactTemplate) {
+        // Só este destinatário falha — o restante do lote continua.
+        await prisma.campaignContact.updateMany({
+          where: { id: contact.id, status: "SENDING" },
+          data: { status: "FAILED", failedAt: now, failureReason: `Template "${templateName}" não está mais aprovado na Meta.` },
+        });
+        continue;
+      }
+      const conversation = await findOrCreateCampaignConversation({
+        phone: contact.phone, name: contact.fullName || contact.firstName, channelAccountId: campaign.channelAccountId || null,
+      });
+      const values = resolveTemplateValues(campaign, contact, contactTemplate);
       const result = await sendApprovedTemplate({
-        conversationId: conversation.id, name: campaign.templateName, language: campaign.templateLanguage,
-        values, sentByUserId: null, channel,
+        conversationId: conversation.id, name: templateName, language: templateLanguage,
+        values, sentByUserId: campaign.origin === "PANEL" ? campaign.createdByUserId : null, channel: senderChannel,
       });
       await prisma.campaignContact.updateMany({
         where: { id: contact.id, status: "SENDING" },

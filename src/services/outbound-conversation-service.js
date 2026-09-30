@@ -60,8 +60,9 @@ async function findExistingConversation(phone, channelScope = "LEGACY") {
 }
 
 async function createOutboundConversation({ phone, customName, template, accountId = "legacy", user, channel }) {
+  // Envio individual: basta a permissão "Iniciar conversas" (liberável por
+  // atendente). Envio em massa exige "Campanhas e templates" (outbound-bulk-service.js).
   authorization.assertCanStartConversations(user);
-  authorization.assertCanManageCampaigns(user);
   const selectedAccountId = accountId && accountId !== "legacy" ? String(accountId) : null;
   let providerChannel = channel;
   if (selectedAccountId) {
@@ -167,11 +168,13 @@ async function availableMetaAccounts(user) {
 }
 
 async function listOutboundChannels(user) {
-  if (!authorization.canStartConversations(user)) return [];
+  const canIndividual = authorization.canStartConversations(user);
+  const canBulk = authorization.canManageCampaigns(user);
+  if (!canIndividual && !canBulk) return [];
   const [accounts, metaAccounts] = await Promise.all([availableEmailAccounts(user), availableMetaAccounts(user)]);
   return ALL_MANAGED_CHANNELS.map((channelName) => {
     if (channelName === "EMAIL") return {
-      channel: channelName, label: CHANNEL_LABELS[channelName], enabled: accounts.length > 0,
+      channel: channelName, label: CHANNEL_LABELS[channelName], enabled: canIndividual && accounts.length > 0,
       reason: accounts.length ? null : "Nenhuma conta de e-mail conectada e liberada para você.",
       accounts: accounts.map((account) => ({
         id: account.id, name: account.name,
@@ -179,12 +182,13 @@ async function listOutboundChannels(user) {
       })),
     };
     if (channelName === "META") {
-      const permitted = authorization.canManageCampaigns(user);
-      const enabled = permitted && metaAccounts.length > 0;
+      const enabled = metaAccounts.length > 0;
       return {
         channel: channelName, label: CHANNEL_LABELS[channelName], enabled,
         accounts: enabled ? metaAccounts : [],
-        reason: !permitted ? "Você não tem permissão para usar templates do WhatsApp." : (enabled ? null : "Nenhum número WhatsApp conectado e liberado para você."),
+        // Modos liberados para este usuário no painel "Nova conversa".
+        modes: { individual: canIndividual, bulk: canBulk },
+        reason: enabled ? null : "Nenhum número WhatsApp conectado e liberado para você.",
       };
     }
     return {

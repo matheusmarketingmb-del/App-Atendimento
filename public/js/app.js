@@ -561,7 +561,7 @@ async function loadCurrentUser() {
   $("#knowledge-base-button").hidden = !status.user.isMaster;
   $("#integrations-button").hidden = !status.user.isMaster;
   $("#campaigns-button").hidden = !status.user.canManageCampaigns;
-  $("#new-conversation").hidden = !status.user.canStartConversations;
+  $("#new-conversation").hidden = !(status.user.canStartConversations || status.user.canManageCampaigns);
   $("#conversation-settings-button").hidden = !status.user.isMaster && status.user.role !== "SUPERVISOR";
   $("#team-button").hidden = !status.user.isMaster;
   $("#open-audit").hidden = !status.user.isMaster;
@@ -773,6 +773,9 @@ async function loadOutboundMetaTemplates() {
 
 async function openOutboundMeta() {
   $("#outbound-channel-dialog").close();
+  // Painel novo (individual + envio em massa). O diálogo antigo continua
+  // como reserva caso o script do painel não tenha carregado.
+  if (window.WaSendWizard) return window.WaSendWizard.open(state.outboundChannels.find((item) => item.channel === "META"));
   $("#outbound-meta-form").reset();
   const metaChannel = state.outboundChannels.find((item) => item.channel === "META");
   $("#outbound-meta-account").innerHTML = (metaChannel?.accounts || []).map((account) => `<option value="${escapeHtml(account.id)}">${escapeHtml(account.name)}${account.address ? ` — ${escapeHtml(account.address)}` : ""}</option>`).join("");
@@ -803,7 +806,7 @@ function renderOutboundChannels() {
 
 async function loadOutboundChannels() {
   const button = $("#new-conversation");
-  if (!state.currentUser?.canStartConversations) {
+  if (!state.currentUser?.canStartConversations && !state.currentUser?.canManageCampaigns) {
     state.outboundChannels = [];
     button.hidden = true;
     return;
@@ -1328,7 +1331,9 @@ function renderContextDetails(c) {
       ${c.priority && c.priority !== "NORMAL" ? `<div class="context-info-row"><span>Prioridade</span><strong>${escapeHtml(priorityLabel(c.priority))}</strong></div>` : ""}
       <div class="context-info-row"><span>Fixada</span><strong>${c.isPinned ? "Sim" : "Não"}</strong></div>
     </div>
-    ${postContextMarkup(c.postContext)}`;
+    ${postContextMarkup(c.postContext)}
+    <div id="context-template-history"></div>`;
+  if (c.channel === "META" && c.contact?.id) window.WaSendWizard?.renderContactHistory($("#context-template-history"), c.contact.id);
 }
 
 // Item 10 do plano Social — comentário nunca chega "pelado": quando existe

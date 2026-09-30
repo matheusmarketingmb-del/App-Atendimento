@@ -2,7 +2,14 @@
 // nenhuma lib de CSV/XLSX instalada — ver relatório final sobre o corte de
 // escopo do XLSX). Suporta campos entre aspas com vírgula/quebra de linha/
 // aspas escapadas ("") — RFC 4180 o suficiente para import/export de contatos.
-function parseCsv(text) {
+// Excel em pt-BR exporta CSV com ";" — detecta pelo cabeçalho (fora de aspas).
+function detectCsvDelimiter(text) {
+  const firstLine = String(text || "").split(/\r?\n/, 1)[0].replace(/"[^"]*"/g, "");
+  const count = (char) => firstLine.split(char).length - 1;
+  return count(";") > count(",") ? ";" : count("\t") > count(",") ? "\t" : ",";
+}
+
+function parseCsv(text, delimiter = ",") {
   const rows = [];
   let row = [];
   let field = "";
@@ -20,7 +27,7 @@ function parseCsv(text) {
       continue;
     }
     if (char === '"') { inQuotes = true; continue; }
-    if (char === ",") { row.push(field); field = ""; continue; }
+    if (char === delimiter) { row.push(field); field = ""; continue; }
     if (char === "\n") { row.push(field); rows.push(row); row = []; field = ""; continue; }
     field += char;
   }
@@ -46,4 +53,4 @@ function toCsv(headers, rows) {
   return lines.join("\r\n");
 }
 
-module.exports = { parseCsv, sanitizeCsvCell, toCsv };
+module.exports = { detectCsvDelimiter, parseCsv, sanitizeCsvCell, toCsv };

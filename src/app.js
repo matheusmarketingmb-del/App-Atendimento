@@ -37,6 +37,7 @@ const pushController = require("./controllers/push-controller");
 const pushService = require("./services/push-service");
 const campaignReplyService = require("./services/campaign-reply-service");
 const { createCampaignController } = require("./controllers/campaign-controller");
+const { createOutboundBulkController } = require("./controllers/outbound-bulk-controller");
 const { NEW_CHANNELS, SOCIAL_META_CHANNELS } = require("./services/channels/channel-constants");
 const { createAdapter } = require("./services/channels/channel-adapter-registry");
 const { decryptSecrets } = require("./services/channels/integration-secret-service");
@@ -115,6 +116,7 @@ function createApp({ channel = new MetaCloudChannel() } = {}) {
   if (process.env.NODE_ENV === "production") app.set("trust proxy", 1);
   const inbox = createInboxController(channel);
   const campaignController = createCampaignController(channel);
+  const outboundBulkController = createOutboundBulkController(channel);
   app.use(helmet({ contentSecurityPolicy: false }));
   app.use(express.json({
     limit: "1mb",
@@ -683,6 +685,19 @@ app.post(
   app.post("/api/campaigns/:id/cancel", campaignController.cancel);
   app.post("/api/campaigns/:id/send-test", campaignController.sendTest);
   app.post("/api/campaigns/:id/import/parse", campaignImportUpload, campaignController.parseImport);
+  // Painel "Nova conversa" — envio individual e em massa (fila de Campanhas).
+  app.get("/api/outbound/meta/numbers", outboundBulkController.numbers);
+  app.get("/api/outbound/meta/templates", outboundBulkController.templates);
+  app.get("/api/outbound/contacts", outboundBulkController.searchContacts);
+  app.get("/api/outbound/contacts/filters", outboundBulkController.contactFilters);
+  app.post("/api/outbound/contacts/select-all", outboundBulkController.selectAllContacts);
+  app.post("/api/outbound/phones/parse", outboundBulkController.parsePhones);
+  app.post("/api/outbound/import/csv", campaignImportUpload, outboundBulkController.parseCsvFile);
+  app.post("/api/outbound/bulk/preview", outboundBulkController.preview);
+  app.get("/api/outbound/bulk", outboundBulkController.listBatches);
+  app.post("/api/outbound/bulk", outboundBulkController.create);
+  app.get("/api/outbound/bulk/:id", outboundBulkController.batch);
+  app.get("/api/contacts/:id/template-history", outboundBulkController.contactHistory);
   app.post("/api/campaigns/:id/import/validate", campaignController.validateImport);
   app.post("/api/campaigns/:id/import/commit", campaignController.commitImport);
   app.get("/api/campaigns/:id/export", campaignController.exportContacts);
