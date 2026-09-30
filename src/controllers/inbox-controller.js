@@ -61,7 +61,8 @@ function createInboxController(channel) {
         const postContext = SOCIAL_COMMENT_CHANNELS.has(conversation.channel) && conversation.externalConversationId
           ? await resolveForPost(conversation.channel, conversation.externalConversationId)
           : null;
-        const transferCategories = await inbox.listTransferCategories(conversation.id, req.user);
+        const transferCategories = conversation.accessMode === "SUPERVISION"
+          ? [] : await inbox.listTransferCategories(conversation.id, req.user);
         return res.json({ ...conversation, customerServiceWindow, mergedDestinations, channelCapabilities: channelCaps, postContext, transferCategories });
       } catch (error) { return next(error); }
     },

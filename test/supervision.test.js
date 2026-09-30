@@ -104,6 +104,7 @@ test("equipes: somente o Master vincula atendentes (com auditoria); Supervisor n
 test("1/2. Ana (equipe do João) assume: Ana, João e Master veem; outro atendente não", async () => {
   X = await conversation("x", support.id);
   M.c1 = await customer(X.id, "Oi, preciso de ajuda");
+  await prisma.contactNote.create({ data: { contactId: X.contactId, content: "Nota anterior ao trecho", createdAt: M.c1.occurredAt } });
   await inbox.updateConversation(X.id, { assignedUserId: U.ana.id }, U.ana);
   const beforeReply = (await inbox.listConversations({}, U.joao)).find(({ id }) => id === X.id);
   assert.deepEqual(beforeReply.messages, [], "prévia não revela mensagem anterior ao trecho da equipe");
@@ -119,6 +120,14 @@ test("1/2. Ana (equipe do João) assume: Ana, João e Master veem; outro atenden
   assert.equal(open[0].userId, U.ana.id);
   assert.equal(open[0].startReason, "CLAIMED");
   assert.equal(open[0].endedAt, null);
+  const controller = require("../src/controllers/inbox-controller").createInboxController({});
+  let detail;
+  await controller.detail({ params: { id: X.id }, user: U.joao }, {
+    json: (value) => { detail = value; }, status: () => { throw new Error("Detalhe indisponível"); },
+  }, (error) => { throw error; });
+  assert.equal(detail.accessMode, "SUPERVISION");
+  assert.deepEqual(detail.transferCategories, []);
+  assert.deepEqual(detail.contact.notes, [], "notas fora do trecho ficam ocultas");
   // Supervisão é somente leitura: não responde, não assume, não altera.
   await assert.rejects(() => authorization.assertCanActOnConversation(U.joao, X.id), { statusCode: 403, code: "SUPERVISION_READ_ONLY" });
   await assert.rejects(() => inbox.updateConversation(X.id, { assignedUserId: U.joao.id }, U.joao), { statusCode: 403 });

@@ -669,6 +669,8 @@ async function getConversation(id, viewer) {
       contact: {
         include: {
           notes: {
+            where: visibility.mode === "SUPERVISION"
+              ? periods.windowsWhere(visibility.windows, "createdAt") : undefined,
             include: { author: { select: { id: true, name: true } } },
             orderBy: [{ pinned: "desc" }, { createdAt: "desc" }],
           },
