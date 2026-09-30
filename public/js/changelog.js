@@ -1,9 +1,10 @@
 (() => {
-  const APP_VERSION = "0.34.9";
+  const APP_VERSION = "0.34.10";
 
 
 
   const CHANGELOG = [
+    { version: "0.34.10", date: "30/09/2026", title: "Envio de WhatsApp individual e em massa", changes: ["Novo assistente para selecionar destinatários manualmente, por CSV ou pelos contatos da Central, com templates e variáveis por grupo.", "Revisão antes do envio identifica duplicados, dados ausentes, opt-out e templates não aprovados, com estimativa de custo.", "Envios em massa entram na fila com controle de permissões, número remetente, idempotência e acompanhamento por destinatário.", "Corrigidos o isolamento entre números, a privacidade dos lotes e a validação do contato pelo telefone no servidor.", "A atualização não inicia campanhas automaticamente e preserva conversas, mensagens e backups."] },
     { version: "0.34.9", date: "29/09/2026", title: "Controle completo de e-mails", changes: ["A sincronizacao do Gmail importa somente mensagens com o marcador Shopify (site Mibro).", "O marcador e confirmado pelo ID real da API do Gmail, evitando falhas por maiusculas, espacos ou parenteses.", "Qualquer atendente com acesso a conversa pode marcar ou remover spam; o item sai das caixas normais e permanece na pasta Spam.", "O envio de um novo e-mail aceita ate 10 documentos PDF, TXT, Word, Excel ou PowerPoint, limitados a 20 MB no total.", "Nenhuma configuracao do WhatsApp ou dos Bots foi alterada."] },
     { version: "0.34.8", date: "29/09/2026", title: "Editor Visual de fluxos para Bots", changes: ["Novo editor em blocos para montar mensagens, perguntas, menus, condicoes, IA, consulta ao conhecimento, intervalos e encaminhamentos.", "Rascunhos podem ser validados e simulados sem enviar mensagens aos clientes.", "Publicacoes criam versoes imutaveis, com historico e opcao de rollback.", "Bots existentes continuam no motor atual; o Editor Visual so entra em uso quando um Master publica um fluxo e ativa explicitamente o novo modo.", "Execucoes respeitam automacao global, auto-resposta, atendimento humano, multiplos numeros e entrega segura para a equipe em caso de falha."] },
     { version: "0.34.7", date: "25/09/2026", title: "Privacidade no atendimento e grupos internos", changes: ["Conversas assumidas ficam visiveis somente para o atendente responsavel e para contas Master.", "A transferencia para outra pessoa permite compartilhar ou limitar o historico, com motivo e resumo de passagem opcionais.", "Ao devolver uma conversa, cada atendente recupera o historico ao qual ja teve acesso e transferir para um setor devolve a conversa a fila.", "O chat interno agora permite grupos com participantes, administradores, renomeacao e encerramento sem apagar mensagens.", "Auditoria, anexos, alertas, busca e atualizacoes em tempo real seguem as mesmas regras de privacidade.", "Respostas Rapidas agora aceitam varias categorias; ao selecionar uma categoria principal, a resposta tambem fica disponivel automaticamente em suas subcategorias."] },
@@ -17,11 +18,11 @@
     {
       version: "0.33.0",
       date: "18/09/2026",
-      title: "IA local em modo de observa��o",
+      title: "IA local em modo de observa‡Æo",
       changes: [
-        "Adicionada integra��o global com Qwen via Ollama para an�lise local.",
+        "Adicionada integra‡Æo global com Qwen via Ollama para an lise local.",
         "O Assistente Mibro pode avaliar mensagens em modo shadow sem responder ao cliente.",
-        "Status, fila, valida��o estruturada e bloqueios seguros evitam respostas sem conhecimento ou com a IA offline."
+        "Status, fila, valida‡Æo estruturada e bloqueios seguros evitam respostas sem conhecimento ou com a IA offline."
       ]
     },
     {
