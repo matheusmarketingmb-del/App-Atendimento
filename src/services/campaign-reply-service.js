@@ -3,6 +3,7 @@
 // evento que já alimenta a Central. Nunca pode derrubar o processamento
 // real do webhook (todo erro aqui é engolido e logado).
 const prisma = require("../database/prisma");
+const { recordAssignmentChange } = require("./assignment-period-service");
 const { detectOptOutKeyword, registerOptOut } = require("./campaign-optout-service");
 
 const STATUS_RANK = { SENT: 1, DELIVERED: 2, READ: 3, REPLIED: 4 };
@@ -77,6 +78,11 @@ async function handleInboundMessage({ phone, text, conversationId, contactId }) 
         ...(conversation.assignedUserId ? {} : { assignedUserId: campaign?.responsibleUserId || undefined }),
       },
     });
+    // Resposta de campanha atribuída ao responsável da campanha: registra o
+    // período (antes essa atribuição não deixava rastro).
+    if (!conversation.assignedUserId && campaign?.responsibleUserId) {
+      await recordAssignmentChange(prisma, { conversationId, toUserId: campaign.responsibleUserId, reason: "CAMPAIGN_REPLY" });
+    }
     if (campaign?.replyBotId) {
       await prisma.conversationBotState.upsert({
         where: { conversationId }, create: { conversationId, activeBotId: campaign.replyBotId }, update: {},

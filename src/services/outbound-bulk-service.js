@@ -138,7 +138,7 @@ function periodRange(filters) {
  * atendente só vê as próprias/da fila; supervisor as áreas que gerencia).
  */
 async function conversationFilter(user, filters) {
-  const AND = [await authorization.conversationScope(user), { channel: "META" }];
+  const AND = [await authorization.operationalScope(user), { channel: "META" }];
   if (filters.categoryId === "none") AND.push({ categoryId: null });
   else if (filters.categoryId) AND.push({ categoryId: String(filters.categoryId) });
   if (filters.assignedUserId === "none") AND.push({ assignedUserId: null });
@@ -238,7 +238,7 @@ async function selectAllCentralContacts(user, filters = {}) {
 /** Filtros disponíveis (categorias, responsáveis e números visíveis ao usuário). */
 async function centralFilterOptions(user) {
   assertCanBulkSend(user);
-  const scope = await authorization.conversationScope(user);
+  const scope = await authorization.operationalScope(user);
   const [categories, users] = await Promise.all([
     prisma.category.findMany({ where: { active: true, conversations: { some: scope } }, orderBy: [{ displayOrder: "asc" }, { name: "asc" }], select: { id: true, name: true, color: true } }),
     prisma.user.findMany({ where: { active: true, role: { not: "BOT" }, assignedConversations: { some: scope } }, orderBy: { name: "asc" }, select: { id: true, name: true } }),
@@ -305,7 +305,7 @@ async function buildPreview(user, payload, defaultChannel) {
   const allowed = contactIds.length
     ? new Set((await prisma.contact.findMany({
       // Contato sem nenhuma conversa não pertence a ninguém ainda: liberado.
-      where: { id: { in: contactIds }, OR: [{ conversations: { some: await authorization.conversationScope(user) } }, { conversations: { none: {} } }] }, select: { id: true },
+      where: { id: { in: contactIds }, OR: [{ conversations: { some: await authorization.operationalScope(user) } }, { conversations: { none: {} } }] }, select: { id: true },
     })).map((contact) => contact.id))
     : new Set();
   const forbiddenContactIds = new Set(contactIds.filter((id) => !allowed.has(id)));

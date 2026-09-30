@@ -16,7 +16,7 @@ function fail(message, statusCode = 400) {
 // atendente já respondeu ou chegou outra mensagem sem sugestão, a anterior
 // não pode reaparecer como se ainda estivesse pendente.
 async function getLatestSuggestion(conversationId, viewer, client = prisma) {
-  await authorization.assertCanViewConversation(viewer, conversationId);
+  await authorization.assertCanActOnConversation(viewer, conversationId);
   const [latestMessage, suggestion] = await Promise.all([
     client.message.findFirst({
       where: { conversationId }, orderBy: [{ occurredAt: "desc" }, { createdAt: "desc" }], select: { id: true },
@@ -53,7 +53,7 @@ async function recordSuggestionFeedback({ observationId, helpful, action, finalR
   });
   if (!observation) throw fail("Sugestão não encontrada.", 404);
   if (!observation.suggestedResponseText) throw fail("Esta observação não tem uma sugestão de resposta associada.");
-  await authorization.assertCanViewConversation(actor, observation.conversationId);
+  await authorization.assertCanActOnConversation(actor, observation.conversationId);
 
   const hasFinalText = typeof finalResponseText === "string";
   const finalText = hasFinalText ? finalResponseText.trim().slice(0, 4000) || null : null;

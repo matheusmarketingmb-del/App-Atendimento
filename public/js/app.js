@@ -116,6 +116,11 @@ function handoffNoticeMarkup(c) {
     if (handoff.reason) parts.push(`Motivo: ${escapeHtml(handoff.reason)}`);
     if (handoff.handoffSummary) parts.push(`Resumo: ${escapeHtml(handoff.handoffSummary)}`);
   }
+  if (c.accessMode === "SUPERVISION") {
+    const format = (iso) => iso ? new Intl.DateTimeFormat("pt-BR", { timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }).format(new Date(iso)) : "";
+    const windows = (c.visibleWindows || []).map((window) => `${window.from ? format(window.from) : "início"} → ${window.to ? format(window.to) : "agora"}`).join(" • ");
+    return `<div class="supervision-notice"><b>Acompanhamento de supervisão — somente leitura.</b><br>Você vê apenas os trechos atendidos pela sua equipe${windows ? `: ${escapeHtml(windows)}` : "."}</div>`;
+  }
   if (c.messageHistoryLimited) parts.push("As mensagens anteriores ao encaminhamento estão ocultas para esta conta.");
   return parts.length ? `<div class="limited-history-notice">${parts.join("<br>")}</div>` : "";
 }
@@ -564,6 +569,10 @@ async function loadCurrentUser() {
   $("#new-conversation").hidden = !(status.user.canStartConversations || status.user.canManageCampaigns);
   $("#conversation-settings-button").hidden = !status.user.isMaster && status.user.role !== "SUPERVISOR";
   $("#team-button").hidden = !status.user.isMaster;
+  // Supervisão: Master → "Equipes" (todas); Supervisor → "Minha equipe" (só a dele).
+  $("#supervision-button").hidden = !(status.user.isMaster || status.user.role === "SUPERVISOR");
+  $("#supervision-button-label").textContent = status.user.isMaster ? "Equipes" : "Minha equipe";
+  $("#assignment-timeline").hidden = !(status.user.isMaster || status.user.role === "SUPERVISOR");
   $("#open-audit").hidden = !status.user.isMaster;
   $("#manage-categories").hidden = !status.user.canManageCategories;
   $("#category-master-only-field").hidden = !status.user.isMaster;
@@ -1156,6 +1165,7 @@ async function openConversation(id, { refreshList = true, markRead = true } = {}
     canViewHistory: c.canViewHistory,
     contact: [c.contact.id, c.contact.customName, c.contact.name, c.contact.email, c.contact.phone],
     messageHistoryLimited: c.messageHistoryLimited,
+    accessMode: c.accessMode,
     customerServiceWindow: c.customerServiceWindow,
     mergedDestinations: (c.mergedDestinations || []).map((item) => [item.id, item.channel, item.contact?.email, item.contact?.phone, item.channelAccount?.name]),
     transferCategories: (c.transferCategories || []).map((category) => [category.id, category.parentId, category.name, category.active, category.selectable]),
@@ -1165,7 +1175,10 @@ async function openConversation(id, { refreshList = true, markRead = true } = {}
   state.selectedContactName = c.contact.customName || c.contact.name || c.contact.email || c.contact.phone;
   const hasReactionEvents = displayMessages.length !== c.messages.length;
   const messageItems = displayMessages.map((message) => JSON.stringify([message.id, message.externalId, message.direction, message.type, message.text, message.occurredAt, message.mediaStorageKey, message.mediaMimeType, message.mediaFileName, message.mediaSize, message.reactionEmoji, message.sentByUser?.id, message.sentByUser?.name]));
-  const messagesSignature = JSON.stringify([c.messageHistoryLimited, c.currentHandoff, messageItems]);
+  const messagesSignature = JSON.stringify([c.messageHistoryLimited, c.accessMode, c.visibleWindows, c.currentHandoff, messageItems]);
+  // Aberta só por supervisão: esconde resposta/assumir/transferir/finalizar
+  // (o backend também bloqueia — isto é só para não oferecer a ação).
+  $("#chat-content").classList.toggle("supervision-readonly", c.accessMode === "SUPERVISION");
   const notesSignature = JSON.stringify((c.contact.notes || []).map((note) => [note.id, note.content, note.pinned, note.createdAt, note.updatedAt, note.author?.name]));
   const activitiesSignature = JSON.stringify((c.activities || []).map((activity) => [activity.id, activity.action, activity.details, activity.createdAt, activity.actorUser?.name]));
   state.selectedContactId = c.contact.id;
@@ -2622,3 +2635,6 @@ document.addEventListener("click", (event) => {
     }
   });
 });
+
+$("#supervision-button").addEventListener("click", () => window.WaSupervision?.open());
+$("#assignment-timeline").addEventListener("click", () => { if (state.selectedId) window.WaSupervision?.openTimeline(state.selectedId); });

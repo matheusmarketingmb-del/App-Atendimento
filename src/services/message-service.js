@@ -1,4 +1,5 @@
 const prisma = require("../database/prisma");
+const { recordAssignmentChange } = require("./assignment-period-service");
 const { findOrCreateMetaConversation } = require("./conversation-service");
 const { removeImage, storeAudio, storeDocument, storeImage, storeSticker, storeVideo } = require("./media-storage-service");
 const { formatTeamMessage } = require("./team-message-formatter");
@@ -48,6 +49,8 @@ async function saveIncoming(event) {
               data: { categoryId: null, assignedUserId: null, status: "NOVO", finalizedAt: null },
             });
             if (reopened.count) {
+              // Reabertura limpa o responsável: encerra o período em aberto.
+              await recordAssignmentChange(tx, { conversationId: conversation.id, toUserId: null, at: event.occurredAt, reason: "REOPENED" });
               await tx.conversationActivity.create({ data: {
                 conversationId: conversation.id, action: "REOPENED_BY_CUSTOMER_MESSAGE",
                 details: { reopenWindowMinutes: settings.reopenWindowMinutes || null },
@@ -116,6 +119,15 @@ async function updateConversationAfterSending({ conversationId, sentByUserId, oc
 
     if (!sentByUserId) return false;
 
+    // Período de responsabilidade de quem enviou (idempotente: se já está em
+    // aberto, nada muda). Cobre também a conversa criada já atribuída
+    // (Nova conversa por WhatsApp/e-mail) e envios do painel.
+    await recordAssignmentChange(transaction, {
+      conversationId, toUserId: sentByUserId, at: occurredAt || new Date(),
+      reason: current?.assignedUserId && current.assignedUserId !== sentByUserId ? "TRANSFERRED" : current?.assignedUserId ? "ASSIGNED" : "REPLIED",
+      endReason: "TRANSFERRED",
+    });
+
     if (current?.assignedUserId === sentByUserId) {
       return false;
     }
@@ -128,6 +140,8 @@ async function updateConversationAfterSending({ conversationId, sentByUserId, oc
     await transaction.conversationActivity.create({
       data: {
         conversationId,
+        // Mesmo horário do período aberto acima (linha do tempo coerente).
+        ...(occurredAt ? { createdAt: occurredAt } : {}),
         actorUserId: sentByUserId,
         action: current?.assignedUserId
           ? "CONVERSATION_TRANSFERRED"

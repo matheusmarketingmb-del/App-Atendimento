@@ -18,6 +18,7 @@
   <script src="/js/feature-flags.js"></script>
   <link rel="stylesheet" href="/css/responsive.css">
   <link rel="stylesheet" href="/css/whatsapp-send.css?v=1">
+  <link rel="stylesheet" href="/css/supervision.css?v=1">
 </head>
 <body>
   <header class="topbar">
@@ -75,6 +76,7 @@
           <p class="sidebar-group-label">Gestão</p>
           <button id="conversation-settings-button" class="sidebar-item" type="button" hidden><span class="sidebar-item-icon" aria-hidden="true">⚙</span><span class="sidebar-item-label">Configurações</span></button>
           <button id="team-button" class="sidebar-item" type="button" hidden><span class="sidebar-item-icon" aria-hidden="true">👥</span><span class="sidebar-item-label">Equipe</span></button>
+          <button id="supervision-button" class="sidebar-item" type="button" hidden><span class="sidebar-item-icon" aria-hidden="true">🧭</span><span id="supervision-button-label" class="sidebar-item-label">Minha equipe</span></button>
         </div>
       </div>
     </nav>
@@ -155,6 +157,7 @@
             <button id="context-panel-toggle" class="secondary-action" type="button" title="Detalhes da conversa">Detalhes</button>
             <button id="notes-toggle" class="secondary-action" type="button">Notas</button>
             <button id="history-toggle" class="secondary-action" type="button">Histórico</button>
+            <button id="assignment-timeline" class="secondary-action" type="button" title="Quem atendeu e quando (supervisão)" hidden>Atendimento</button>
             <select id="category-select" aria-label="Categoria principal"></select>
             <select id="subcategory-select" aria-label="Subcategoria" hidden></select>
             <button id="confirm-category" class="category-confirm" type="button" disabled>OK</button>
@@ -569,6 +572,7 @@
   <div id="toast" class="toast" role="status"></div>
   <script src="/js/app.js?v=0.34.10"></script>
   <script src="/js/whatsapp-send-wizard.js?v=1"></script>
+  <script src="/js/supervision.js?v=1"></script>
   <script src="/js/changelog.js?v=0.34.2"></script>
   <script src="/js/internal-chat.js"></script>
   <script src="/js/pwa.js"></script>

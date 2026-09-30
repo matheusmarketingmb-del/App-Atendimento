@@ -83,7 +83,7 @@ async function createOutboundConversation({ phone, customName, template, account
   let conversation = await findExistingConversation(normalizedPhone, channelScope);
   let created = false;
   if (conversation) {
-    await authorization.assertCanViewConversation(user, conversation.id);
+    await authorization.assertCanActOnConversation(user, conversation.id);
     await prisma.contact.update({
       where: { id: conversation.contactId },
       data: { phone: normalizedPhone, customName: normalizedName },
@@ -114,7 +114,7 @@ async function createOutboundConversation({ phone, customName, template, account
     });
     conversation = result.conversation;
     created = result.created;
-    if (!created) await authorization.assertCanViewConversation(user, conversation.id);
+    if (!created) await authorization.assertCanActOnConversation(user, conversation.id);
   }
 
   const result = await sendApprovedTemplate({
@@ -222,7 +222,7 @@ async function createOutboundEmail({ accountId, to, customName, subject, text, a
     where: { channel: "EMAIL", channelAccountId: account.id, contact: { is: { externalId: externalContactId } } },
     select: { id: true },
   });
-  if (existing) await authorization.assertCanViewConversation(user, existing.id);
+  if (existing) await authorization.assertCanActOnConversation(user, existing.id);
 
   const storedAttachments = [];
   try {

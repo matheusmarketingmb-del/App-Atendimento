@@ -80,7 +80,7 @@ function createInboxController(channel) {
       try {
         let providerChannel = channel;
         if (req.query.conversationId) {
-          await authorization.assertCanViewConversation(req.user, req.query.conversationId);
+          await authorization.assertCanActOnConversation(req.user, req.query.conversationId);
           const conversation = await prisma.conversation.findUnique({ where: { id: req.query.conversationId }, select: { channelAccountId: true } });
           if (conversation?.channelAccountId) providerChannel = (await channelMessageService.adapterFor("META", conversation.channelAccountId)).channel;
         } else if (req.query.accountId && req.query.accountId !== "legacy") {
@@ -117,7 +117,7 @@ function createInboxController(channel) {
     async replyTemplate(req, res, next) {
       try {
         authorization.assertCanManageCampaigns(req.user);
-        await authorization.assertCanViewConversation(req.user, req.params.id);
+        await authorization.assertCanActOnConversation(req.user, req.params.id);
         const name = String(req.body.name || "").trim();
         const language = String(req.body.language || "").trim();
         if (!name || !language) return res.status(400).json({ error: "Selecione um template e seu idioma." });
@@ -148,7 +148,7 @@ function createInboxController(channel) {
     },
 async signalTransfer(req, res, next) {
   try {
-    const conversation = await authorization.assertCanViewConversation(
+    const conversation = await authorization.assertCanActOnConversation(
       req.user,
       req.params.id
     );
@@ -237,7 +237,7 @@ async signalTransfer(req, res, next) {
       const text = req.body.text?.trim();
       if (!text) return res.status(400).json({ error: "Mensagem é obrigatória." });
       try {
-        await authorization.assertCanViewConversation(req.user, req.params.id);
+        await authorization.assertCanActOnConversation(req.user, req.params.id);
         const result = await sendText({ conversationId: req.params.id, text, sentByUserId: req.user.id, channel });
         inboxEvents.publish();
         return res.status(201).json(result.message);
@@ -246,7 +246,7 @@ async signalTransfer(req, res, next) {
     async replyImage(req, res, next) {
       if (!req.file) return res.status(400).json({ error: "Selecione uma imagem JPG ou PNG." });
       try {
-        await authorization.assertCanViewConversation(req.user, req.params.id);
+        await authorization.assertCanActOnConversation(req.user, req.params.id);
         const result = await sendImage({
           conversationId: req.params.id, buffer: req.file.buffer,
           mimeType: req.file.mimetype, fileName: req.file.originalname,
@@ -259,7 +259,7 @@ async signalTransfer(req, res, next) {
     async replyVideo(req, res, next) {
       if (!req.file) return res.status(400).json({ error: "Selecione um vídeo MP4 ou 3GP." });
       try {
-        await authorization.assertCanViewConversation(req.user, req.params.id);
+        await authorization.assertCanActOnConversation(req.user, req.params.id);
         const result = await sendVideo({
           conversationId: req.params.id, buffer: req.file.buffer,
           mimeType: req.file.mimetype, fileName: req.file.originalname,
@@ -272,7 +272,7 @@ async signalTransfer(req, res, next) {
     async replyDocument(req, res, next) {
       if (!req.file) return res.status(400).json({ error: "Selecione um documento." });
       try {
-        await authorization.assertCanViewConversation(req.user, req.params.id);
+        await authorization.assertCanActOnConversation(req.user, req.params.id);
         const result = await sendDocument({
           conversationId: req.params.id, buffer: req.file.buffer,
           mimeType: req.file.mimetype, fileName: req.file.originalname,
@@ -284,7 +284,7 @@ async signalTransfer(req, res, next) {
     },
     async finalize(req, res, next) {
       try {
-        await authorization.assertCanViewConversation(req.user, req.params.id);
+        await authorization.assertCanActOnConversation(req.user, req.params.id);
         const result = await finalizeConversation({
           conversationId: req.params.id, sentByUserId: req.user.id, channel,
         });
@@ -306,7 +306,7 @@ async signalTransfer(req, res, next) {
     },
     async botFeedback(req, res, next) {
       try {
-        await authorization.assertCanViewConversation(req.user, req.params.id);
+        await authorization.assertCanActOnConversation(req.user, req.params.id);
         return res.status(201).json(await submitAgentFeedback(req.params.id, req.body, req.user));
       } catch (error) { return next(error); }
     },

@@ -1,4 +1,5 @@
 const prisma = require("../database/prisma");
+const periods = require("./assignment-period-service");
 const authorization = require("./authorization-service");
 const { removeImage } = require("./media-storage-service");
 const audit = require("./audit-service");
@@ -161,7 +162,8 @@ async function listConversations({
   if (assignedUser) {
     if (
       !authorization.isMaster(viewer) &&
-      assignedUser !== viewer.id
+      assignedUser !== viewer.id &&
+      !(await authorization.supervisedUserIds(viewer)).includes(assignedUser)
     ) {
       throw authorization.forbidden(
         "Você não pode consultar os atendimentos de outro usuário."
@@ -297,6 +299,37 @@ async function listConversations({
     }
   }
 
+  // Supervisor: conversas que ele só enxerga por supervisão (a equipe já
+  // passou por elas, mas ele não pode agir) mostram apenas o trecho da
+  // equipe — a prévia/horário nunca revelam mensagens de fora desse trecho
+  // e o contador de não lidas do atendente não é exposto.
+  const supervisionOnly = new Map();
+  if (viewer.role === "SUPERVISOR" && conversations.length) {
+    const ids = conversations.map(({ id }) => id);
+    const operational = new Set((await prisma.conversation.findMany({
+      where: { AND: [{ id: { in: ids } }, await authorization.operationalScope(viewer)] }, select: { id: true },
+    })).map(({ id }) => id));
+    const team = await authorization.supervisedUserIds(viewer);
+    const onlySupervised = conversations.filter(({ id }) => !operational.has(id));
+    const teamPeriods = onlySupervised.length ? await prisma.conversationAssignmentPeriod.findMany({
+      where: { conversationId: { in: onlySupervised.map(({ id }) => id) }, userId: { in: team } },
+      select: { conversationId: true, startedAt: true, endedAt: true },
+    }) : [];
+    for (const conversation of onlySupervised) {
+      const windows = team.includes(conversation.assignedUserId)
+        ? null // responsável atual é da equipe: o trecho atual está em aberto
+        : periods.mergeWindows(teamPeriods.filter((period) => period.conversationId === conversation.id).map((period) => ({ from: period.startedAt, to: period.endedAt })));
+      let preview = conversation.messages?.[0] || null;
+      if (windows && preview && !periods.withinWindows(preview.occurredAt, windows)) {
+        preview = await prisma.message.findFirst({
+          where: { conversationId: conversation.id, type: { not: "reaction" }, ...periods.windowsWhere(windows, "occurredAt") },
+          orderBy: { occurredAt: "desc" },
+        });
+      }
+      supervisionOnly.set(conversation.id, { preview, lastMessageAt: windows ? preview?.occurredAt || null : conversation.lastMessageAt });
+    }
+  }
+
   let masterUnreadCounts = new Map();
 
   if (master && conversations.length) {
@@ -344,13 +377,18 @@ async function listConversations({
         ...rest
       } = conversation;
 
+      const supervised = supervisionOnly.get(conversation.id);
       return {
         ...rest,
         ...(hiddenPreviewIds.has(conversation.id) ? { messages: [] } : {}),
+        ...(supervised ? {
+          accessMode: "SUPERVISION", messages: supervised.preview ? [supervised.preview] : [],
+          lastMessageAt: supervised.lastMessageAt, unreadCount: 0,
+        } : {}),
 
         unreadCount: master
           ? masterUnreadCounts.get(conversation.id) || 0
-          : conversation.unreadCount,
+          : supervised ? 0 : conversation.unreadCount,
 
         isPinned: pins.length > 0,
         ...(conversation.channel === "EMAIL" ? { emailMailbox: conversation.emailMailboxOverride || emailMailboxByConversation.get(conversation.id) || "GENERAL" } : {}),
@@ -376,7 +414,7 @@ function alertSince(value) {
 async function getUserAlerts({ since }, viewer) {
   const checkedAt = new Date();
   const occurredAfter = alertSince(since);
-  const scope = await authorization.conversationScope(viewer);
+  const scope = await authorization.operationalScope(viewer);
   const master = authorization.isMaster(viewer);
   const alertScope = { AND: [scope, notManualSpam] };
   const waitingForViewer = {
@@ -541,6 +579,35 @@ async function historyVisibility(conversation, viewer) {
   return { start, limited: Boolean(start) };
 }
 
+// Visibilidade de LEITURA: janelas de tempo que o usuário pode ler.
+//   - Master: tudo.
+//   - Acesso operacional (responsável/fila): regra de histórico do atendente
+//     (historyVisibility — "compartilhar histórico?" continua valendo).
+//   - Supervisão: SOMENTE os trechos em que alguém da equipe dele (ou ele
+//     mesmo) foi responsável — a escolha de compartilhar histórico com o
+//     próximo atendente nunca restringe a supervisão desses trechos.
+// Retorna { windows: null (completo) | [{from,to}], limited, start, mode }.
+async function readVisibility(conversation, viewer) {
+  if (authorization.isMaster(viewer)) return { windows: null, limited: false, start: null, mode: "FULL" };
+  const windows = [];
+  const operational = await authorization.canActOnConversation(viewer, conversation.id);
+  if (operational) {
+    const { start } = await historyVisibility(conversation, viewer);
+    windows.push({ from: start, to: null });
+  }
+  if (viewer.role === "SUPERVISOR") {
+    const team = await authorization.supervisedUserIds(viewer);
+    windows.push(...await periods.supervisionWindows(conversation, team));
+  }
+  const merged = periods.mergeWindows(windows);
+  if (periods.isFullWindow(merged)) return { windows: null, limited: false, start: null, mode: operational ? "OPERATIONAL" : "SUPERVISION" };
+  return {
+    windows: merged, limited: true,
+    start: merged.length === 1 && merged[0].to === null ? merged[0].from : null,
+    mode: operational ? "OPERATIONAL" : "SUPERVISION",
+  };
+}
+
 // Transferência mais recente para o responsável atual: mostra ao novo
 // atendente de quem veio, se o histórico foi compartilhado, motivo e resumo
 // de handoff — inclusive quando o histórico anterior está oculto.
@@ -572,8 +639,8 @@ async function assertCanViewMessage(viewer, messageId) {
   });
   if (!message) throw Object.assign(new Error("Mídia não encontrada."), { statusCode: 404 });
   const conversation = await authorization.assertCanViewConversation(viewer, message.conversationId);
-  const { start } = await historyVisibility(conversation, viewer);
-  if (start && message.occurredAt < start) throw Object.assign(new Error("Mídia não encontrada."), { statusCode: 404 });
+  const { windows } = await readVisibility(conversation, viewer);
+  if (!periods.withinWindows(message.occurredAt, windows)) throw Object.assign(new Error("Mídia não encontrada."), { statusCode: 404 });
   return message;
 }
 
@@ -588,9 +655,9 @@ async function getConversation(id, viewer) {
     if (error.statusCode === 403) throw error;
     return null;
   }
-  const visibility = await historyVisibility(access, viewer);
+  const visibility = await readVisibility(access, viewer);
   const messageVisibility = {
-    where: visibility.start ? { occurredAt: { gte: visibility.start } } : undefined,
+    where: periods.windowsWhere(visibility.windows, "occurredAt"),
     limited: visibility.limited,
   };
   const currentHandoff = await currentHandoffFor(access, viewer);
@@ -618,7 +685,7 @@ async function getConversation(id, viewer) {
       activities: canViewHistory ? {
         // O histórico de eventos segue o mesmo recorte das mensagens: quem
         // recebeu sem histórico não vê notas/eventos da etapa anterior.
-        where: visibility.start ? { createdAt: { gte: visibility.start } } : undefined,
+        where: periods.windowsWhere(visibility.windows, "createdAt"),
         include: { actorUser: { select: { id: true, name: true } } },
         orderBy: { createdAt: "desc" },
         take: 100,
@@ -633,6 +700,8 @@ async function getConversation(id, viewer) {
     return {
       ...result, isPinned: pins.length > 0, canViewHistory, messageHistoryLimited: messageVisibility.limited,
       historyVisibleFrom: visibility.start, currentHandoff,
+      // SUPERVISION = somente leitura dos trechos da equipe (visibleWindows).
+      accessMode: visibility.mode, visibleWindows: visibility.windows,
       botPausedAt: botState?.humanPausedAt || null,
       ...(conversation.channel === "EMAIL" ? { emailMailbox: conversation.emailMailboxOverride || latestInboundEmail?.rawPayload?.gmailMailbox || "GENERAL" } : {}),
     };
@@ -701,7 +770,7 @@ async function getConversationSummary(viewer) {
 }
 
 async function addContactNote(contactId, { content, authorId, conversationId }, viewer) {
-  await authorization.assertCanAccessContact(viewer, contactId);
+  await authorization.assertCanAccessContact(viewer, contactId, { act: true });
   if (conversationId) {
     const conversation = await prisma.conversation.findFirst({ where: { id: conversationId, contactId }, select: { id: true } });
     if (!conversation) throw Object.assign(new Error("Conversa não encontrada."), { statusCode: 404 });
@@ -800,7 +869,7 @@ async function setEmailSpamStatus(id, { spam }, viewer) {
   if (typeof spam !== "boolean") {
     throw Object.assign(new Error("Informe se a conversa deve ser marcada como spam."), { statusCode: 400 });
   }
-  await authorization.assertCanViewConversation(viewer, id);
+  await authorization.assertCanActOnConversation(viewer, id);
   const current = await prisma.conversation.findUnique({
     where: { id },
     select: { id: true, channel: true, emailMailboxOverride: true, contact: { select: { name: true, customName: true, email: true, phone: true } } },
@@ -829,7 +898,7 @@ async function setEmailSpamStatus(id, { spam }, viewer) {
 }
 
 async function setContactNotePinned(contactId, noteId, { pinned, conversationId }, viewer) {
-  await authorization.assertCanAccessContact(viewer, contactId);
+  await authorization.assertCanAccessContact(viewer, contactId, { act: true });
   if (typeof pinned !== "boolean") {
     throw Object.assign(new Error("Informe se a nota deve ser fixada."), { statusCode: 400 });
   }
@@ -876,7 +945,7 @@ async function updateConversation(id, {
   }
   const reason = optionalTransferText(transferReason, "Motivo da transferência", 500);
   const summary = optionalTransferText(handoffSummary, "Resumo de handoff", 2000);
-  const currentAccess = await authorization.assertCanViewConversation(viewer, id);
+  const currentAccess = await authorization.assertCanActOnConversation(viewer, id);
   const currentSnapshot = await prisma.conversation.findUnique({
     where: { id },
     include: {
@@ -986,7 +1055,16 @@ async function updateConversation(id, {
         } else if (reason) {
           details.reason = reason;
         }
-        activities.push(activityRecord(id, viewer.id, action, details));
+        // Evento e período com o MESMO horário: a transferência que encerra
+        // um trecho aparece na linha do tempo de quem supervisiona o trecho.
+        const changedAt = new Date();
+        activities.push({ ...activityRecord(id, viewer.id, action, details), createdAt: changedAt });
+        await periods.recordAssignmentChange(transaction, {
+          conversationId: id, toUserId: updated.assignedUserId, at: changedAt,
+          reason: action === "CONVERSATION_CLAIMED" ? "CLAIMED" : "TRANSFERRED",
+          endReason: action === "ASSIGNEE_REMOVED" ? "REMOVED" : "TRANSFERRED",
+          transferredById: action === "CONVERSATION_TRANSFERRED" ? viewer.id : null,
+        });
       }
       if (status && currentSnapshot.status !== updated.status) {
         activities.push(activityRecord(id, viewer.id, "STATUS_CHANGED", { from: currentSnapshot.status, to: updated.status }));
@@ -1095,6 +1173,13 @@ async function setConversationPinned(id, { pinned }, viewer) {
 }
 
 async function markAsRead(id, { channel, viewer } = {}) {
+  if (viewer && !authorization.isMaster(viewer) && !(await authorization.canActOnConversation(viewer, id))) {
+    // Leitura passiva de supervisão: não zera as não lidas do atendente nem
+    // confirma leitura ao cliente.
+    const conversation = await prisma.conversation.findUnique({ where: { id } });
+    if (!conversation) throw Object.assign(new Error("Conversa não encontrada."), { statusCode: 404 });
+    return { ...conversation, unreadCount: 0, readReceiptSent: false, passive: true };
+  }
   const [latestUnread, latestIncoming] = await Promise.all([
     prisma.message.findFirst({
       where: {
@@ -1247,7 +1332,7 @@ async function listCategories(viewer) {
 }
 
 async function listTransferCategories(conversationId, viewer) {
-  const scope = await authorization.conversationScope(viewer);
+  const scope = await authorization.operationalScope(viewer);
   const conversation = await prisma.conversation.findFirst({
     where: { AND: [{ id: conversationId }, scope] },
     select: { id: true, channelAccountId: true },
@@ -1412,7 +1497,7 @@ async function updateCategory(id, data, viewer) {
 }
 
 async function updateContactCustomName(contactId, customName, viewer) {
-  await authorization.assertCanAccessContact(viewer, contactId);
+  await authorization.assertCanAccessContact(viewer, contactId, { act: true });
 
   const value = String(customName || "").trim();
 
@@ -1444,7 +1529,7 @@ async function listUsers(viewer) {
 }
 
 module.exports = {
-  addContactNote, assertCanViewMessage, conversationPriorities, conversationStatuses, createCategory, deleteContactNote, deleteConversation,
+  addContactNote, assertCanViewMessage, readVisibility, conversationPriorities, conversationStatuses, createCategory, deleteContactNote, deleteConversation,
   getConversation, getConversationSummary, getUserAlerts, listCategories, listTransferCategories,
   resolveHistoryStart,
   listConversations, listUsers, markAsRead, recordConversationActivity, setContactNotePinned, setConversationPinned, setEmailSpamStatus,

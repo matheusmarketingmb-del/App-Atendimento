@@ -82,7 +82,7 @@ function requireConversationId(value) {
 
 async function accessibleConversation(viewer, value) {
   const conversationId = requireConversationId(value);
-  await authorization.assertCanViewConversation(viewer, conversationId);
+  await authorization.assertCanActOnConversation(viewer, conversationId);
   const conversation = await prisma.conversation.findUnique({
     where: { id: conversationId },
     include: { contact: true, category: { select: { id: true, parentId: true } } },

@@ -38,6 +38,7 @@ const pushService = require("./services/push-service");
 const campaignReplyService = require("./services/campaign-reply-service");
 const { createCampaignController } = require("./controllers/campaign-controller");
 const { createOutboundBulkController } = require("./controllers/outbound-bulk-controller");
+const supervisionController = require("./controllers/supervision-controller");
 const { NEW_CHANNELS, SOCIAL_META_CHANNELS } = require("./services/channels/channel-constants");
 const { createAdapter } = require("./services/channels/channel-adapter-registry");
 const { decryptSecrets } = require("./services/channels/integration-secret-service");
@@ -698,6 +699,15 @@ app.post(
   app.post("/api/outbound/bulk", outboundBulkController.create);
   app.get("/api/outbound/bulk/:id", outboundBulkController.batch);
   app.get("/api/contacts/:id/template-history", outboundBulkController.contactHistory);
+  // Supervisão de equipes: vínculo Supervisor → Atendentes (Master), "Minha
+  // equipe"/"Equipes", atendimentos por atendente e histórico de atendimento.
+  app.get("/api/supervision/teams", supervisionController.teams);
+  app.get("/api/supervision/users", supervisionController.searchUsers);
+  app.put("/api/supervision/teams/:supervisorId/members/:memberId", supervisionController.addMember);
+  app.delete("/api/supervision/teams/:supervisorId/members/:memberId", supervisionController.removeMember);
+  app.get("/api/supervision/overview", supervisionController.overview);
+  app.get("/api/supervision/members/:userId/conversations", supervisionController.memberConversations);
+  app.get("/api/conversations/:id/assignment-timeline", supervisionController.timeline);
   app.post("/api/campaigns/:id/import/validate", campaignController.validateImport);
   app.post("/api/campaigns/:id/import/commit", campaignController.commitImport);
   app.get("/api/campaigns/:id/export", campaignController.exportContacts);

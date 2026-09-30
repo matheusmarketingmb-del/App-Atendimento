@@ -53,18 +53,48 @@ async function queueCategoryFilters(user) {
 
 // Privacidade de conversa assumida: enquanto a conversa não tem responsável
 // ela fica na fila do setor (categorias liberadas / Sem categoria); depois
-// que alguém assume, só o responsável atual (e o Master) enxerga. Este é o
-// escopo único usado por listagem, detalhe, mensagens, anexos, envio, busca,
-// alertas e contadores — a regra nunca é só visual.
-// Exceção: o Supervisor acompanha as áreas que gerencia (categorias
-// liberadas), então vê também as conversas já assumidas por outros nelas.
-async function conversationScope(user) {
+// que alguém assume, só o responsável atual (e o Master) enxerga.
+//
+// Escopo OPERACIONAL: onde o usuário pode AGIR (responder, assumir,
+// transferir, finalizar, notas). Vale igual para Atendente e Supervisor.
+async function operationalScope(user) {
   if (isMaster(user)) return {};
-  if (user?.role === "SUPERVISOR") return sectorScope(user);
   const queue = await queueCategoryFilters(user);
   const visible = [{ assignedUserId: user.id }];
   if (queue.length) visible.push({ AND: [{ assignedUserId: null }, { OR: queue }] });
   return { AND: [{ OR: visible }, publicCategoryScope(), channelAccountScope(user)] };
+}
+
+// Equipe de supervisão (definida pelo Master) + o próprio Supervisor — para
+// que ele também consulte os trechos que ele mesmo atendeu.
+async function supervisedUserIds(user) {
+  if (user?.role !== "SUPERVISOR") return [];
+  const members = await prisma.supervisorTeamMember.findMany({ where: { supervisorId: user.id }, select: { memberId: true } });
+  return [user.id, ...members.map(({ memberId }) => memberId)];
+}
+
+// Supervisão: conversas cujo responsável atual é da equipe OU pelas quais
+// alguém da equipe já passou (histórico de períodos). Nunca global, nunca
+// categorias exclusivas do Master. O conteúdo visível é recortado depois
+// aos trechos da equipe (inbox-service#readVisibility).
+function supervisionScopeFor(userIds) {
+  return {
+    AND: [publicCategoryScope(), { OR: [
+      { assignedUserId: { in: userIds } },
+      { assignmentPeriods: { some: { userId: { in: userIds } } } },
+    ] }],
+  };
+}
+
+// Escopo de LEITURA — o único usado por listagem, detalhe, mensagens,
+// anexos, busca e contadores (a regra nunca é só visual). Master vê tudo;
+// Atendente vê o operacional; Supervisor vê o operacional + a supervisão
+// da equipe (somente leitura).
+async function conversationScope(user) {
+  if (isMaster(user)) return {};
+  const operational = await operationalScope(user);
+  if (user?.role !== "SUPERVISOR") return operational;
+  return { OR: [operational, supervisionScopeFor(await supervisedUserIds(user))] };
 }
 
 // Inclui conversas assumidas por outros atendentes somente para métricas
@@ -130,8 +160,35 @@ async function assertCanViewConversation(user, conversationId) {
   return conversation;
 }
 
-async function assertCanAccessContact(user, contactId) {
-  const scope = await conversationScope(user);
+async function canActOnConversation(user, conversationId) {
+  if (isMaster(user)) return true;
+  return Boolean(await prisma.conversation.findFirst({
+    where: { AND: [{ id: conversationId }, await operationalScope(user)] }, select: { id: true },
+  }));
+}
+
+// Ações (responder, assumir, transferir, finalizar, notas…). O acesso de
+// supervisão é somente leitura: nunca torna o Supervisor responsável.
+async function assertCanActOnConversation(user, conversationId) {
+  const scope = await operationalScope(user);
+  const conversation = await prisma.conversation.findFirst({
+    where: { AND: [{ id: conversationId }, scope] },
+    select: { id: true, categoryId: true, assignedUserId: true, contactId: true },
+  });
+  if (conversation) return conversation;
+  const readable = await prisma.conversation.findFirst({
+    where: { AND: [{ id: conversationId }, await conversationScope(user)] }, select: { id: true },
+  });
+  if (readable) {
+    throw Object.assign(new Error("Acesso de supervisão é somente leitura: você pode acompanhar, mas não responder ou alterar esta conversa."), {
+      statusCode: 403, code: "SUPERVISION_READ_ONLY",
+    });
+  }
+  throw await conversationAccessError(user, conversationId);
+}
+
+async function assertCanAccessContact(user, contactId, { act = false } = {}) {
+  const scope = act ? await operationalScope(user) : await conversationScope(user);
   const conversation = await prisma.conversation.findFirst({
     where: { AND: [{ contactId }, scope] }, select: { id: true },
   });
@@ -201,6 +258,7 @@ function assertCanViewConversationSettings(user) {
 }
 
 module.exports = {
+  assertCanActOnConversation, canActOnConversation, operationalScope, supervisedUserIds, supervisionScopeFor,
   allowedCategoryIds, assertCanAccessContact, assertCanManageCampaigns, assertCanManageCategories, assertCanMergeContacts, assertCanStartConversations,
   assertCanSetPriority, assertCanViewConversation, assertCanViewConversationSettings, assertMaster,
   assertChannelAccountAllowsCategory, canAccessCategory, canAccessChannelAccount, canManageCampaigns, canMergeContacts, canSetPriority, canStartConversations, canTransfer, canViewConversationSettings,

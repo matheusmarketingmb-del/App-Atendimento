@@ -349,6 +349,7 @@ model Conversation {
   quickReplyUsages         QuickReplyUsage[]
   suggestionFeedback       BotSuggestionFeedback[]
   botFlowExecutions        BotFlowExecution[]
+  assignmentPeriods        ConversationAssignmentPeriod[]
   channelAccount           ChannelAccount?            @relation(fields: [channelAccountId], references: [id], onDelete: SetNull)
   originCampaign           Campaign?                  @relation(fields: [originCampaignId], references: [id], onDelete: SetNull)
   originCampaignContact    CampaignContact?           @relation(fields: [originCampaignContactId], references: [id], onDelete: SetNull)
@@ -459,6 +460,58 @@ model User {
   aiProviderCredentialsUpdated AiProviderCredential[]   @relation("AiProviderCredentialUpdatedBy")
   localAiProviderSettingsUpdated LocalAiProviderSettings[] @relation("LocalAiProviderSettingsUpdatedBy")
   socialContentMappingsCreated SocialContentMapping[]
+  // Equipes de supervisão (definidas pelo Master): um Supervisor pode ter
+  // vários atendentes e um atendente pode estar em mais de uma equipe
+  // (supervisores de áreas diferentes).
+  supervisedMembers            SupervisorTeamMember[]   @relation("SupervisorTeamSupervisor")
+  supervisors                  SupervisorTeamMember[]   @relation("SupervisorTeamMember")
+  supervisorLinksCreated       SupervisorTeamMember[]   @relation("SupervisorTeamCreatedBy")
+  assignmentPeriods            ConversationAssignmentPeriod[] @relation("AssignmentPeriodUser")
+  assignmentPeriodsTransferred ConversationAssignmentPeriod[] @relation("AssignmentPeriodTransferredBy")
+}
+
+// Vínculo Supervisor → Atendente, gerenciado somente pelo Master. Nunca
+// dá acesso "global": o Supervisor enxerga apenas os trechos de conversa em
+// que os membros da equipe dele foram responsáveis.
+model SupervisorTeamMember {
+  supervisorId String
+  memberId     String
+  createdById  String?
+  createdAt    DateTime @default(now())
+  supervisor   User     @relation("SupervisorTeamSupervisor", fields: [supervisorId], references: [id], onDelete: Cascade)
+  member       User     @relation("SupervisorTeamMember", fields: [memberId], references: [id], onDelete: Cascade)
+  createdBy    User?    @relation("SupervisorTeamCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@id([supervisorId, memberId])
+  @@index([memberId])
+}
+
+// Períodos de responsabilidade de cada usuário numa conversa (quem assumiu,
+// recebeu transferência, respondeu e até quando). Índice derivado para
+// acesso de supervisão e histórico por atendente — a trilha de auditoria
+// continua em ConversationActivity/AuditLog (nada é duplicado nem apagado).
+// endedAt nulo = período em aberto (responsável atual).
+model ConversationAssignmentPeriod {
+  id              String       @id @default(cuid())
+  conversationId  String
+  userId          String
+  startedAt       DateTime
+  endedAt         DateTime?
+  // Como começou/terminou: CLAIMED, TRANSFERRED, REPLIED, CREATED,
+  // CAMPAIGN_REPLY, REMOVED, REOPENED, BACKFILL...
+  startReason     String
+  endReason       String?
+  transferredById String?
+  // LIVE = gravado no momento do evento; BACKFILL = reconstruído do histórico.
+  source          String       @default("LIVE")
+  createdAt       DateTime     @default(now())
+  conversation    Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user            User         @relation("AssignmentPeriodUser", fields: [userId], references: [id], onDelete: Cascade)
+  transferredBy   User?        @relation("AssignmentPeriodTransferredBy", fields: [transferredById], references: [id], onDelete: SetNull)
+
+  @@index([conversationId, startedAt])
+  @@index([userId, startedAt])
+  @@index([conversationId, endedAt])
 }
 
 model PushSubscription {

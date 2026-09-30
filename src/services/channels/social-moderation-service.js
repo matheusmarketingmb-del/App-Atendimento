@@ -41,7 +41,7 @@ async function moderateMessage({ messageId, action, actor }) {
   if (!COMMENT_CHANNELS.has(message.channel)) {
     throw Object.assign(new Error("Moderação só está disponível para comentários públicos do Instagram/Facebook."), { statusCode: 409 });
   }
-  await authorization.assertCanViewConversation(actor, message.conversationId);
+  await authorization.assertCanActOnConversation(actor, message.conversationId);
   // Apagar é irreversível e público — mesma régua de "excluir conversa"
   // (Master-only). Ocultar/curtir são reversíveis, ficam liberados para
   // quem já pode responder a conversa.

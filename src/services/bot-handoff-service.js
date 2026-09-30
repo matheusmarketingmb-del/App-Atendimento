@@ -134,7 +134,7 @@ async function getLatestHandoffContext(conversationId, client = prisma) {
 // humanPausedAt); o Bot volta a poder responder na PRÓXIMA mensagem, nunca
 // reenvia nada retroativamente.
 async function resumeBot(conversationId, actor) {
-  await authorization.assertCanViewConversation(actor, conversationId);
+  await authorization.assertCanActOnConversation(actor, conversationId);
 
   const state = await prisma.conversationBotState.findUnique({ where: { conversationId } });
   if (!state) throw Object.assign(new Error("Conversa sem estado de Bot registrado."), { statusCode: 404 });

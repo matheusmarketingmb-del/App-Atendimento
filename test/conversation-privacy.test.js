@@ -1,4 +1,5 @@
 require("dotenv").config();
+const supervision = require("../src/services/supervision-service");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const prisma = require("../src/database/prisma");
@@ -355,7 +356,7 @@ test("14: auto-finalização mantém categoria e acesso só do último atendente
   }
 });
 
-test("Supervisor vê conversas assumidas só nas áreas que gerencia e não acessa a Visão de equipe", async () => {
+test("Supervisor vê conversas assumidas pela EQUIPE atribuída pelo Master (não mais pela área) e não acessa a Visão de equipe", async () => {
   const [agent, supervisor, master] = await Promise.all([
     createUser("Atendente da área", { categories: [support] }),
     createUser("Supervisor da área", { role: "SUPERVISOR", categories: [support], canViewTeamActivity: true }),
@@ -366,20 +367,30 @@ test("Supervisor vê conversas assumidas só nas áreas que gerencia e não aces
   const message = await customerMessage(inArea.id, "Preciso de ajuda com o relógio");
   await prisma.conversation.updateMany({ where: { id: { in: [inArea.id, outArea.id] } }, data: { assignedUserId: agent.id, status: "EM_ATENDIMENTO" } });
 
+  // Sem equipe: ter a mesma categoria NÃO libera mais a conversa assumida por outro.
+  assert.equal((await inbox.listConversations({}, supervisor)).some(({ id }) => id === inArea.id), false);
+  await assert.rejects(() => authorization.assertCanViewConversation(supervisor, inArea.id), (error) => [403, 404].includes(error.statusCode));
+
+  // Master vincula o atendente à equipe do Supervisor.
+  await supervision.addTeamMember(master, supervisor.id, agent.id);
   const list = await inbox.listConversations({}, supervisor);
-  assert.ok(list.some(({ id }) => id === inArea.id), "Supervisor deveria ver a conversa assumida na área dele");
-  assert.equal(list.some(({ id }) => id === outArea.id), false);
+  assert.ok(list.some(({ id }) => id === inArea.id), "Supervisor deveria ver a conversa atual da equipe");
+  assert.ok(list.some(({ id }) => id === outArea.id), "a regra é por equipe, não por área");
   const detail = await inbox.getConversation(inArea.id, supervisor);
   assert.ok(ids(detail.messages).includes(message.id));
-  await assert.rejects(() => authorization.assertCanViewConversation(supervisor, outArea.id), { statusCode: 404 });
+  assert.equal(detail.accessMode, "SUPERVISION");
+  // Supervisão é somente leitura.
+  await assert.rejects(() => authorization.assertCanActOnConversation(supervisor, inArea.id), { statusCode: 403, code: "SUPERVISION_READ_ONLY" });
 
   // Atendente comum da mesma área continua sem ver a conversa do colega.
   const otherAgent = await createUser("Outro atendente da área", { categories: [support] });
   assert.equal((await inbox.listConversations({}, otherAgent)).some(({ id }) => id === inArea.id), false);
 
-  // Visão de equipe: só Master, mesmo com o flag antigo ligado.
+  // Visão de equipe global: só Master, mesmo com o flag antigo ligado. O
+  // filtro por atendente vale para membros da própria equipe.
   await assert.rejects(() => users.listTeamActivity(supervisor), { statusCode: 403 });
-  await assert.rejects(() => inbox.listConversations({ assignedUser: agent.id }, supervisor), { statusCode: 403 });
+  assert.ok((await inbox.listConversations({ assignedUser: agent.id }, supervisor)).length >= 2);
+  await assert.rejects(() => inbox.listConversations({ assignedUser: otherAgent.id }, supervisor), { statusCode: 403 });
   assert.ok(Array.isArray(await users.listTeamActivity(master)));
 });
 

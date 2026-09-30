@@ -13,7 +13,7 @@ function displayName(contact) {
 
 async function listMergeCandidates(contactId, search, viewer) {
   authorization.assertCanMergeContacts(viewer);
-  await authorization.assertCanAccessContact(viewer, contactId);
+  await authorization.assertCanAccessContact(viewer, contactId, { act: true });
   const scope = await authorization.conversationScope(viewer);
   const current = await prisma.contact.findUnique({ where: { id: contactId }, select: { identityId: true } });
   const term = String(search || "").trim().slice(0, 120);
@@ -31,7 +31,7 @@ async function listMergeCandidates(contactId, search, viewer) {
 async function mergeContacts(sourceContactId, targetContactId, viewer) {
   authorization.assertCanMergeContacts(viewer);
   if (!targetContactId || sourceContactId === targetContactId) throw Object.assign(new Error("Selecione outro contato."), { statusCode: 400 });
-  await Promise.all([authorization.assertCanAccessContact(viewer, sourceContactId), authorization.assertCanAccessContact(viewer, targetContactId)]);
+  await Promise.all([authorization.assertCanAccessContact(viewer, sourceContactId, { act: true }), authorization.assertCanAccessContact(viewer, targetContactId, { act: true })]);
   return prisma.$transaction(async (transaction) => {
     const [source, target] = await Promise.all([
       transaction.contact.findUnique({ where: { id: sourceContactId }, select: contactSelect }),
