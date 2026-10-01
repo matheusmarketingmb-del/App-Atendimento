@@ -31,6 +31,14 @@ const initials = (name = "?") => name.split(/\s+/).slice(0, 2).map((part) => par
 const conversationTimeZone = "America/Sao_Paulo";
 const time = (value) => value ? new Intl.DateTimeFormat("pt-BR", { hour:"2-digit", minute:"2-digit", timeZone:conversationTimeZone }).format(new Date(value)) : "";
 const statusLabel = (value) => ({ NOVO:"Novo", EM_ATENDIMENTO:"Em atendimento", AGUARDANDO_EQUIPE:"Aguardando equipe", AGUARDANDO_CLIENTE:"Aguardando cliente", HANDOFF_BOT:"Bot transferiu", BOT:"Bot", FINALIZADO:"Finalizado" })[value] || value;
+// Alerta visual (não bloqueante) para conversa em atendimento ainda sem categoria.
+// Finalizadas e as que ainda estão com o bot (triagem em andamento) não alertam.
+const needsCategoryAlert = (c) => Boolean(c) && !c.categoryId && !["FINALIZADO", "BOT"].includes(c.status);
+function syncCategoryAlert(c) {
+  const missing = needsCategoryAlert(c);
+  $("#category-select").classList.toggle("category-missing", missing);
+  $("#category-missing-hint").hidden = !missing;
+}
 const categoryLabel = (category) => category?.parent?.name ? `${category.parent.name}: ${category.name}` : (category?.name || "Sem categoria");
 // Indicador discreto de prioridade (item 5): só aparece quando != NORMAL — mesmo padrão de badge pequeno já usado para categoria/status/responsável.
 const priorityLabels = { ALTA:"Alta", URGENTE:"Urgente" };
@@ -151,6 +159,7 @@ function closeConversationView() {
   $("#empty-state").hidden = false;
   $("#chat-panel").classList.remove("open");
   $("#confirm-category").disabled = true;
+  syncCategoryAlert(null);
 }
 function syncWaitingAttention(count) {
   const waitingCount = Number(count) || 0;
@@ -279,7 +288,7 @@ function conversationCardMarkup(c) {
     <span class="card-grip" aria-hidden="true"></span><span class="avatar">${escapeHtml(initials(name))}</span><span class="card-main">
     <span class="card-title"><strong>${c.isPinned ? `<i class="conversation-pin" title="Conversa fixada">★</i>` : ""}${escapeHtml(name)}</strong><small>${escapeHtml(c.contact.email || c.contact.phone || "")}</small></span>
     <span class="preview">${escapeHtml(messagePreview(last))}</span>
-    <span class="card-labels">${channelBadge(c.channel) ? `<span class="channel-label">${escapeHtml(channelBadge(c.channel))}</span>` : ""}${c.channel === "META" && c.channelAccount?.name ? `<span class="channel-label">${escapeHtml(c.channelAccount.name)}</span>` : ""}<span class="category-label" style="color:${c.category?.color || "#666"};border-color:${c.category?.color || "#aaa"}">${escapeHtml(categoryLabel(c.category))}</span><span class="status-label">${escapeHtml(statusLabel(c.status))}</span>${c.assignedUser ? `<span class="assignee-label">${escapeHtml(c.assignedUser.name)}</span>` : ""}${priorityBadge(c.priority)}${slaBadge(c.slaMinutesRemaining)}</span></span>
+    <span class="card-labels">${channelBadge(c.channel) ? `<span class="channel-label">${escapeHtml(channelBadge(c.channel))}</span>` : ""}${c.channel === "META" && c.channelAccount?.name ? `<span class="channel-label">${escapeHtml(c.channelAccount.name)}</span>` : ""}${needsCategoryAlert(c) ? `<span class="category-label category-missing-label" title="Esta conversa ainda não possui categoria definida.">⚠ Sem categoria</span>` : `<span class="category-label" style="color:${c.category?.color || "#666"};border-color:${c.category?.color || "#aaa"}">${escapeHtml(categoryLabel(c.category))}</span>`}<span class="status-label">${escapeHtml(statusLabel(c.status))}</span>${c.assignedUser ? `<span class="assignee-label">${escapeHtml(c.assignedUser.name)}</span>` : ""}${priorityBadge(c.priority)}${slaBadge(c.slaMinutesRemaining)}</span></span>
     <span class="card-side"><span>${time(c.lastMessageAt)}</span><span class="card-elapsed">${escapeHtml(elapsedShort(c.lastMessageAt))}</span>${c.unreadCount ? `<span class="unread">${c.unreadCount}</span>` : ""}</span>
     <span class="note-preview"><b>NOTA</b> ${escapeHtml(note?.content || "Sem notas para este contato")}${c.contact._count?.notes ? `<i>${c.contact._count.notes}</i>` : ""}</span></button>`;
 }
@@ -1268,6 +1277,7 @@ async function openConversation(id, { refreshList = true, markRead = true } = {}
     }
     state.selectedCategoryId = c.categoryId || "";
     syncCategoryConfirmation();
+    syncCategoryAlert(c);
     $("#status-badge").className = "status-badge"; $("#status-badge").textContent = statusLabel(c.status);
     if (c.assignedUserId && ![...$("#assignee-select").options].some((option) => option.value === c.assignedUserId)) {
       $("#assignee-select").add(new Option(c.assignedUser?.name || "Outro atendente", c.assignedUserId));
