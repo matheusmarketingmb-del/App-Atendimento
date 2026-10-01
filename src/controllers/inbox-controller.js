@@ -280,7 +280,7 @@ async signalTransfer(req, res, next) {
     async replyAudio(req, res, next) {
       if (!req.file) return res.status(400).json({ error: "Selecione ou grave um áudio." });
       try {
-        await authorization.assertCanViewConversation(req.user, req.params.id);
+        await authorization.assertCanActOnConversation(req.user, req.params.id);
         const result = await sendAudio({
           conversationId: req.params.id, buffer: req.file.buffer, fileName: req.file.originalname,
           durationMs: req.body.durationMs, sentByUserId: req.user.id, channel,

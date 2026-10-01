@@ -1,4 +1,10 @@
 const test = require("node:test");
+test("WebM malformado não pode amplificar memória por faixas vazias", () => {
+  const payload = Buffer.alloc(2000005);
+  payload.set([0x1a, 0x45, 0xdf, 0xa3, 0x80]);
+  for (let i = 5; i < payload.length; i += 2) { payload[i] = 0xae; payload[i + 1] = 0x80; }
+  assert.throws(() => normalizeOutgoingAudio({ buffer: payload, fileName: "hostile.webm" }), /faixas excessivas/);
+});
 const assert = require("node:assert/strict");
 const {
   MAX_AUDIO_DURATION_MS, detectAudioFormat, inspectOggOpus, normalizeOutgoingAudio, oggCrc,

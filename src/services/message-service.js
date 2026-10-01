@@ -193,7 +193,7 @@ async function sendMetaForConversation(conversation, legacyChannel, method, payl
   if (method === "sendText") {
     return channelMessageService.send({ channel: "META", channelAccountId: conversation.channelAccountId, kind: "text", to: conversation.contact.phone, text: payload });
   }
-  const type = { sendImage: "image", sendVideo: "video", sendDocument: "document" }[method];
+  const type = { sendImage: "image", sendVideo: "video", sendDocument: "document", sendAudio: "audio" }[method];
   return channelMessageService.send({ channel: "META", channelAccountId: conversation.channelAccountId, kind: "media", type, to: conversation.contact.phone, ...payload });
 
 }
@@ -471,12 +471,13 @@ async function sendAudio({ conversationId, buffer, fileName, durationMs, sentByU
   if (conversation.channel !== "META") {
     throw Object.assign(new Error("Este canal ainda não suporta envio de áudio pela Central."), { statusCode: 409 });
   }
-  await require("./meta-template-service").assertFreeFormAllowed(conversationId);
+  await whatsappInbox.applySender(conversation, sentByUserId);
+  await require("./meta-template-service").assertFreeFormAllowed(conversationId, new Date(), conversation.channelAccountId);
   const audio = normalizeOutgoingAudio({ buffer, fileName, declaredDurationMs: durationMs });
   const media = await storeAudio({ buffer: audio.buffer, mimeType: audio.mimeType, fileName: audio.fileName });
   let result;
   try {
-    result = await channel.sendAudio(conversation.contact.phone, {
+    result = await sendMetaForConversation(conversation, channel, "sendAudio", {
       buffer: audio.buffer, mimeType: media.mimeType, fileName: media.fileName,
     });
   } catch (error) {
@@ -485,7 +486,8 @@ async function sendAudio({ conversationId, buffer, fileName, durationMs, sentByU
   }
   const occurredAt = new Date();
   const message = await prisma.message.create({ data: {
-    conversationId, externalId: result.externalId, channel: conversation.channel, direction: "ENVIADA",
+    conversationId, externalId: result.externalId && conversation.channelAccountId ? `${conversation.channelAccountId}:${result.externalId}` : result.externalId,
+    channel: conversation.channel, channelAccountId: conversation.channelAccountId || null, direction: "ENVIADA",
     status: "ENVIADA", type: "audio", text: null,
     mediaStorageKey: media.storageKey, mediaMimeType: media.mimeType,
     mediaFileName: media.fileName, mediaSize: media.size, mediaDurationMs: audio.durationMs,

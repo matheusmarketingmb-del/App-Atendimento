@@ -4,7 +4,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const html = fs.readFileSync(path.join(process.cwd(), "public", "index.html"), "utf8");
-const js = fs.readFileSync(path.join(process.cwd(), "public", "js", "app.js"), "utf8");
+const js = fs.readFileSync(path.join(process.cwd(), "public", "js", "app.js"), "utf8").replace(/\r\n/g, "\n");
 const css = fs.readFileSync(path.join(process.cwd(), "public", "css", "app.css"), "utf8");
 const fnBody = (name) => js.match(new RegExp(`(?:async )?function ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n\\}`))[0];
 

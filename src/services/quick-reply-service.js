@@ -574,7 +574,7 @@ async function createPersonalAudio(data, file, actor) {
   if (!actor?.id) throw authorization.forbidden();
   const name = requiredText(data.name, "Nome", 100);
   const shortcut = validateShortcut(data.shortcut);
-  const categoryId = await validateCategoryId(data.categoryId || null);
+  const categoryId = (await validateCategoryIds(undefined, data.categoryId))[0] || null;
   await assertShortcutAvailable(shortcut, null, { ownerUserId: actor.id });
   const owned = await prisma.quickReply.count({ where: { scope: "PERSONAL", ownerUserId: actor.id, archivedAt: null } });
   if (owned >= MAX_PERSONAL_QUICK_REPLIES) {
@@ -611,7 +611,7 @@ async function updatePersonalAudio(id, data, file, actor) {
     update.shortcut = validateShortcut(data.shortcut);
     await assertShortcutAvailable(update.shortcut, id, { ownerUserId: existing.ownerUserId });
   }
-  if (data.categoryId !== undefined) update.categoryId = await validateCategoryId(data.categoryId || null);
+  if (data.categoryId !== undefined) update.categoryId = (await validateCategoryIds(undefined, data.categoryId))[0] || null;
   const media = file?.buffer?.length ? await storePersonalAudio(file, data.durationMs) : null;
   if (media) {
     Object.assign(update, {

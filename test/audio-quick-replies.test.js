@@ -1,3 +1,4 @@
+if (!process.env.DATABASE_URL?.includes("unified-review-db") || process.env.ALLOW_ISOLATED_UNIFIED_TEST !== "yes") throw new Error("Banco isolado obrigatório para testes de áudio.");
 require("dotenv").config();
 const test = require("node:test");
 const assert = require("node:assert/strict");
@@ -67,6 +68,7 @@ async function conversationFor(email, { channel = "META", suffix }) {
   const conversation = await prisma.conversation.create({ data: { contactId: contact.id, channel, assignedUserId: user.id } });
   await prisma.message.create({ data: {
     conversationId: conversation.id, channel, direction: "RECEBIDA", status: "RECEBIDA", type: "text",
+    externalId: `wamid.${PREFIX}${suffix}`,
     text: "Olá", occurredAt: new Date(),
   } });
   return conversation;
@@ -94,6 +96,11 @@ test("WhatsApp: adapter envia áudio via upload de mídia + mensagem type=audio 
     assert.match(posts[0].url, /phone-test\/media$/);
     assert.equal(posts[1].body.type, "audio");
     assert.deepEqual(posts[1].body.audio, { id: "media.audio.up" });
+    posts.length = 0;
+    const scoped = new MetaCloudChannel({ accountScoped: true, graphVersion: "v-test", phoneNumberId: "commercial-test", accessToken: "fake-commercial" });
+    await scoped.sendAudio("5511999999999", { buffer: Buffer.from("OggS"), mimeType: "audio/ogg", fileName: "a.ogg" });
+    assert.match(posts[0].url, /commercial-test\/media$/);
+    assert.match(posts[1].url, /commercial-test\/messages$/);
   } finally {
     axios.post = previous.post;
     for (const key of ["GRAPH_VERSION", "PHONE_NUMBER_ID", "WHATSAPP_TOKEN"]) {
@@ -203,6 +210,10 @@ test("respostas rápidas pessoais de áudio: criar, usar sem enviar, isolamento 
       method: "POST", headers: { Cookie: cookieA }, body: audioForm({ name: "Outra", shortcut: "/saudacao_audio" }),
     });
     assert.equal(duplicate.status, 400);
+    const otherOwner = await fetch(`${base}/api/quick-replies/personal-audio`, {
+      method: "POST", headers: { Cookie: cookieB }, body: audioForm({ name: "Áudio de B", shortcut: "/saudacao_audio" }),
+    });
+    assert.equal(otherOwner.status, 201, "atalhos pessoais são separados por dono");
 
     // A vê o próprio áudio + o texto global; B não vê o áudio de A.
     const listA = await (await fetch(`${base}/api/quick-replies/composer?conversationId=${conversationA.id}`, { headers: { Cookie: cookieA } })).json();

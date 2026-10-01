@@ -41,7 +41,7 @@ class MetaAdapter extends ChannelAdapter {
   }
 
   async sendMedia({ to, type, buffer, mimeType, fileName, caption }) {
-    const method = { image: "sendImage", video: "sendVideo", document: "sendDocument" }[type];
+    const method = { image: "sendImage", video: "sendVideo", document: "sendDocument", audio: "sendAudio" }[type];
     if (!method) throw new Error(`Tipo de mídia não suportado pelo WhatsApp: ${type}`);
     return this.channel[method](to, { buffer, mimeType, fileName, caption });
   }

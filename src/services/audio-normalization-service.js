@@ -12,6 +12,9 @@
 // em Ogg/Opus e o Safari em MP4/AAC; ambos passam direto.
 const MAX_AUDIO_DURATION_MS = 10 * 60 * 1000;
 const OPUS_SAMPLE_RATE = 48000;
+const MAX_AUDIO_BYTES = 16 * 1024 * 1024;
+const MAX_AUDIO_RECORDS = 60000;
+const MAX_WEBM_ELEMENTS = 200000;
 
 function fail(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -95,6 +98,7 @@ function readOggPages(buffer) {
   const pages = [];
   let offset = 0;
   while (offset + 27 <= buffer.length) {
+    if (pages.length >= MAX_AUDIO_RECORDS) throw fail("Arquivo Ogg com estrutura excessiva.");
     if (!startsWith(buffer, ascii("OggS"), offset)) throw fail("Arquivo Ogg corrompido.");
     const segmentCount = buffer[offset + 26];
     const tableEnd = offset + 27 + segmentCount;
@@ -167,6 +171,7 @@ function readVint(buffer, offset, { keepMarker }) {
 }
 
 function readUnsigned(bytes) {
+  if (bytes.length > 8) throw fail("Campo numérico WebM inválido.");
   return [...bytes].reduce((value, byte) => value * 256 + byte, 0);
 }
 
@@ -189,12 +194,15 @@ function parseWebmOpus(buffer) {
   let currentTrack = null;
   const blocks = [];
   let offset = 0;
+  let elementCount = 0;
   while (offset < buffer.length) {
+    if (++elementCount > MAX_WEBM_ELEMENTS) throw fail("Arquivo WebM com estrutura excessiva.");
     const id = readVint(buffer, offset, { keepMarker: true });
     const size = readVint(buffer, offset + id.length, { keepMarker: false });
     const dataStart = offset + id.length + size.length;
     if (EBML_MASTERS.has(id.value)) {
       if (id.value === EBML_IDS.TRACK_ENTRY) {
+        if (tracks.size >= 16) throw fail("Arquivo WebM com faixas excessivas.");
         currentTrack = { number: null, type: null, codecId: null, codecPrivate: null, channels: 1 };
         tracks.set(currentTrack, currentTrack);
       }
@@ -213,6 +221,7 @@ function parseWebmOpus(buffer) {
     else if (currentTrack && id.value === EBML_IDS.CODEC_PRIVATE) currentTrack.codecPrivate = Buffer.from(data);
     else if (currentTrack && id.value === EBML_IDS.CHANNELS) currentTrack.channels = readUnsigned(data) || 1;
     else if (id.value === EBML_IDS.SIMPLE_BLOCK || id.value === EBML_IDS.BLOCK) {
+      if (blocks.length >= MAX_AUDIO_RECORDS) throw fail("Arquivo WebM com blocos excessivos.");
       const track = readVint(data, 0, { keepMarker: false });
       const flags = data[track.length + 2];
       if ((flags >> 1) & 0x03) throw fail("Arquivo WebM com lacing não suportado.");
@@ -299,6 +308,7 @@ function clampDuration(value) {
 // navegador) só é usado quando o contêiner não permite calcular a duração.
 function normalizeOutgoingAudio({ buffer, fileName, declaredDurationMs }) {
   if (!Buffer.isBuffer(buffer) || !buffer.length) throw fail("O áudio está vazio.");
+  if (buffer.length > MAX_AUDIO_BYTES) throw fail("O áudio deve ter no máximo 16 MB.", 413);
   const detected = detectAudioFormat(buffer);
   if (!detected) {
     throw fail("Formato de áudio não suportado. Use OGG (Opus), MP3, M4A/MP4, AAC ou AMR.");

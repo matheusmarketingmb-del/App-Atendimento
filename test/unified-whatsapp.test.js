@@ -129,6 +129,27 @@ test("template usa e registra o número da categoria, sem rede real", async () =
     assert.equal(result.message.conversationId, root.id);
   } finally { channelMessages.adapterFor = original; }
 });
+test("áudio respeita remetente do setor e janela por número, sem fallback", async () => {
+  const original = channelMessages.send;
+  const used = [];
+  channelMessages.send = async params => { used.push(params); return { externalId: `wamid.audio-${used.length}`, data: {} }; };
+  const { sendAudio } = require("../src/services/message-service");
+  const payload = { conversationId: root.id, buffer: Buffer.concat([Buffer.from("ID3"), Buffer.alloc(64)]), fileName: "test.mp3", sentByUserId: master.id, channel: { sendAudio: async () => { throw new Error("fallback proibido"); } } };
+  try {
+    await inbox.updateConversation(root.id, { categoryId: parent.id }, master);
+    const first = await sendAudio(payload);
+    assert.equal(first.message.channelAccountId, a.id);
+    assert.equal(used[0].type, "audio");
+    await inbox.updateConversation(root.id, { categoryId: child.id }, master);
+    await assert.rejects(sendAudio(payload), e => e.code === "TEMPLATE_REQUIRED");
+    assert.equal(used.length, 1);
+    await prisma.message.create({ data: { conversationId: root.id, channel: "META", channelAccountId: b.id, direction: "RECEBIDA", status: "RECEBIDA", type: "text", text: "resposta B", externalId: "wamid.audio-reply-b", occurredAt: new Date() } });
+    const second = await sendAudio(payload);
+    assert.equal(second.message.channelAccountId, b.id);
+    assert.match(second.message.externalId, new RegExp(`^${b.id}:`));
+    assert.equal(used[1].channelAccountId, b.id);
+  } finally { channelMessages.send = original; await inbox.updateConversation(root.id, { categoryId: parent.id }, master); }
+});
 test("número desconectado mantém rota bloqueada, sem oferecer outro número", async () => {
   await prisma.channelAccount.update({ where: { id: a.id }, data: { status: "ERROR" } });
   const state = await unified.senderState(root, master);
