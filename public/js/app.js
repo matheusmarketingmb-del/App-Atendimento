@@ -1198,14 +1198,9 @@ async function openConversation(id, { refreshList = true, markRead = true } = {}
     state.selectedHeaderSignature = headerSignature;
     const name = c.contact.customName || c.contact.name || c.contact.email || c.contact.phone;
     $("#contact-avatar").textContent = initials(name); $("#contact-name").textContent = name; $("#contact-phone").textContent = c.contact.email || (c.contact.phone ? `+${c.contact.phone}` : "");
-    $("#conversation-sender").hidden = c.channel !== "META";
+    $("#conversation-sender").hidden = c.channel !== "META" || !state.currentUser?.isMaster;
     $("#conversation-sender").textContent = c.channel === "META"
-      ? (c.whatsappSender ? (c.whatsappSender.reason || `Enviando por: ${c.whatsappSender.options.find(o => o.id === c.whatsappSender.selectedId)?.name || "Selecione o número"}`) : `Enviando por: ${c.channelAccount?.name || "WhatsApp principal"}`) : "";
-    $("#whatsapp-sender-label").hidden = !c.whatsappSender || c.accessMode === "SUPERVISION";
-    const senderSelect = $("#whatsapp-sender-select");
-    senderSelect.replaceChildren(new Option("Selecione o número", ""));
-    for (const option of c.whatsappSender?.options || []) senderSelect.add(new Option(`${option.name}${option.address ? ` · ${option.address}` : ""}`, option.id));
-    senderSelect.value = c.whatsappSender?.selectedId || "";
+      ? (c.whatsappSender ? (c.whatsappSender.reason || `Número: ${c.whatsappSender.options.find(o => o.id === c.whatsappSender.selectedId)?.name || "Não configurado"}`) : `Número: ${c.channelAccount?.name || "WhatsApp principal"}`) : "";
     $("#merge-contact").hidden = !state.currentUser?.canMergeContacts;
     renderMergedDestinations(c.mergedDestinations, c.id);
     const primaryCategory = c.category?.parent || (c.category && !c.category.parentId ? c.category : null);
@@ -2652,10 +2647,3 @@ document.addEventListener("click", (event) => {
 
 $("#supervision-button").addEventListener("click", () => window.WaSupervision?.open());
 $("#assignment-timeline").addEventListener("click", () => { if (state.selectedId) window.WaSupervision?.openTimeline(state.selectedId); });
-$("#whatsapp-sender-select").addEventListener("change", async (event) => {
-  if (!state.selectedId || !event.target.value) return;
-  try {
-    await api(`/api/conversations/${state.selectedId}`, { method: "PATCH", body: JSON.stringify({ whatsappSendAccountId: event.target.value }) });
-    await openConversation(state.selectedId, { markRead: false });
-  } catch (error) { alert(error.message); }
-});

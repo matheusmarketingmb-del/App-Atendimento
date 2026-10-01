@@ -222,8 +222,7 @@ function templateComponents(template, values) {
 async function sendApprovedTemplate({ conversationId, name, language, values = {}, sentByUserId, channel, requestedAccountId }) {
   const conversation = await prisma.conversation.findUnique({ where: { id: conversationId }, include: { contact: true } });
   if (!conversation) throw Object.assign(new Error("Conversa não encontrada."), { statusCode: 404 });
-  if (requestedAccountId !== undefined) conversation.whatsappSendAccountId = requestedAccountId || "legacy";
-  await require("./whatsapp-inbox-service").applySender(conversation, sentByUserId);
+  await require("./whatsapp-inbox-service").applySender(conversation, sentByUserId, prisma, requestedAccountId);
   const providerChannel = conversation.channelAccountId ? (await channelMessageService.adapterFor("META", conversation.channelAccountId)).channel : channel;
   const templates = await providerChannel.listMessageTemplates();
   const template = templates.find((item) => item.name === name && item.language === language && item.status === "APPROVED");

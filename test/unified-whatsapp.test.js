@@ -77,7 +77,7 @@ test("configuração ambígua exige escolha, nunca seleciona o primeiro", async 
   const state = await unified.senderState(root, master);
   assert.equal(state.selectedId, null);
   assert.equal(state.options.length, 2);
-  assert.equal((await unified.senderState({ ...root, whatsappSendAccountId: b.id }, master)).selectedId, b.id);
+  assert.equal((await unified.senderState({ ...root, whatsappSendAccountId: b.id }, master)).selectedId, null);
   assert.equal((await unified.senderState({ ...root, whatsappSendAccountId: b.id }, agent)).selectedId, null);
   await prisma.channelAccount.update({ where: { id: b.id }, data: { config: b.config } });
 });
@@ -90,7 +90,8 @@ test("janela de 24h é por número, inclusive no histórico antigo", async () =>
   assert.equal(closed.requiresTemplate, true);
 });
 test("trocar categoria limpa escolha manual e muda conta operacional", async () => {
-  await inbox.updateConversation(root.id, { whatsappSendAccountId: a.id }, master);
+  await assert.rejects(inbox.updateConversation(root.id, { whatsappSendAccountId: a.id }, master), e => e.statusCode === 400);
+  await prisma.conversation.update({ where: { id: root.id }, data: { whatsappSendAccountId: a.id } });
   const changed = await inbox.updateConversation(root.id, { categoryId: child.id }, master);
   assert.equal(changed.whatsappSendAccountId, null);
   assert.equal(changed.channelAccountId, b.id);

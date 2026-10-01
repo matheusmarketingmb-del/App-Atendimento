@@ -27,14 +27,14 @@ async function messageAccountScope(viewer) {
   return { OR: [{ channel: { not: "META" } }, { channelAccountId: null }, { channelAccountId: { in: access.map(a => a.channelAccountId) } }] };
 }
 
-async function senderState(conversation, viewer, db = prisma) {
+async function senderState(conversation, viewer, db = prisma, requestedAccountId) {
   const accounts = await db.channelAccount.findMany({ where: { channel: "META" }, include: { accessUsers: { select: { userId: true } } } });
   const category = conversation.categoryId ? await db.category.findUnique({ where: { id: conversation.categoryId }, select: { id: true, parentId: true } }) : null;
   const configured = routingCandidates(category, accounts);
   const available = accounts.filter((account) => account.enabled && account.status === "CONNECTED" && (!viewer || authorization.isMaster(viewer) || account.accessUsers.some(({ userId }) => userId === viewer.id)));
   const allowed = configured.length ? available.filter((a) => configured.some((b) => a.id === b.id)) : available;
   let selected = null;
-  const choice = conversation.whatsappSendAccountId;
+  const choice = !category ? requestedAccountId : null;
   if (choice) selected = allowed.find((a) => a.id === choice || (choice === "legacy" && a.config?.isLegacyWhatsApp)) || null;
   else if (configured.length === 1) selected = available.find((a) => a.id === configured[0].id) || null;
   else if (!category) {
@@ -45,16 +45,17 @@ async function senderState(conversation, viewer, db = prisma) {
   }
   const options = allowed.map((a) => ({ id: a.config?.isLegacyWhatsApp ? "legacy" : a.id, name: a.name, address: a.providerMetadata?.username || a.config?.displayPhoneNumber || null }));
   return { selectedId: selected ? (selected.config?.isLegacyWhatsApp ? "legacy" : selected.id) : null, account: selected, options,
-    reason: selected ? null : configured.length > 1 ? "Mais de um número configurado. Escolha o remetente." : configured.length === 1 ? "O número configurado está indisponível ou você não tem acesso a ele." : "Escolha o remetente ou configure um número de envio para este setor." };
+    reason: selected ? null : configured.length > 1 ? "Mais de um número configurado para este setor. O Master deve ajustar os Acessos." : configured.length === 1 ? "O número configurado está indisponível ou você não tem acesso a ele." : "O Master deve configurar um número de envio para este setor nos Acessos." };
 }
 
-async function applySender(conversation, userId, db = prisma) {
+async function applySender(conversation, userId, db = prisma, requestedAccountId) {
   if (conversation.channel !== "META") return conversation;
   const contact = await db.contact.findUnique({ where: { id: conversation.contactId }, select: { whatsappInboxId: true } });
   if (!contact?.whatsappInboxId) return conversation;
   const viewer = userId ? await db.user.findUnique({ where: { id: userId } }) : null;
   if (userId && (!viewer || !viewer.active)) throw Object.assign(new Error("Usuário de envio inválido."), { statusCode: 403 });
-  const state = await senderState(conversation, viewer, db);
+  const state = await senderState(conversation, viewer, db, requestedAccountId);
+  if (requestedAccountId !== undefined && state.selectedId && state.selectedId !== requestedAccountId) throw Object.assign(new Error("O número solicitado não corresponde ao número configurado para este setor."), { statusCode: 409 });
   if (!state.account) throw Object.assign(new Error(state.reason), { statusCode: 409, code: "WHATSAPP_SENDER_REQUIRED" });
   const selectedAccountId = state.account.config?.isLegacyWhatsApp ? null : state.account.id;
   conversation.channelAccountId = selectedAccountId;

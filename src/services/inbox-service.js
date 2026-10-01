@@ -969,6 +969,7 @@ async function updateConversation(id, {
     throw Object.assign(new Error("Informe se o histórico deve ser compartilhado."), { statusCode: 400 });
   }
   const reason = optionalTransferText(transferReason, "Motivo da transferência", 500);
+  if (whatsappSendAccountId !== undefined) throw Object.assign(new Error("O número de envio é definido automaticamente pela categoria. Configure os Acessos da integração."), { statusCode: 400 });
   const summary = optionalTransferText(handoffSummary, "Resumo de handoff", 2000);
   const currentAccess = await authorization.assertCanActOnConversation(viewer, id);
   const currentSnapshot = await prisma.conversation.findUnique({
@@ -1027,13 +1028,6 @@ async function updateConversation(id, {
     data.whatsappSendAccountId = null;
     const candidates = whatsappInbox.routingCandidates(targetCategory, await prisma.channelAccount.findMany({ where: { channel: "META", enabled: true, status: "CONNECTED" } }));
     data.channelAccountId = candidates.length === 1 && !candidates[0].config?.isLegacyWhatsApp ? candidates[0].id : null;
-  }
-  if (whatsappSendAccountId !== undefined) {
-    if (currentSnapshot.channel !== "META" || typeof whatsappSendAccountId !== "string") throw Object.assign(new Error("Remetente inválido."), { statusCode: 400 });
-    const state = await whatsappInbox.senderState({ ...currentSnapshot, categoryId: targetCategory?.id || null, whatsappSendAccountId }, viewer);
-    if (!state.account) throw Object.assign(new Error(state.reason), { statusCode: 409 });
-    data.whatsappSendAccountId = whatsappSendAccountId;
-    data.channelAccountId = state.account.config?.isLegacyWhatsApp ? null : state.account.id;
   }
   if (categoryId !== undefined) data.categoryId = categoryId || null;
   if (assignedUserId !== undefined) data.assignedUserId = assignedUserId || null;
@@ -1154,10 +1148,6 @@ async function updateConversation(id, {
           details: { ...contact, from: currentSnapshot.priority, to: updated.priority },
         });
       }
-      if (whatsappSendAccountId !== undefined && currentSnapshot.whatsappSendAccountId !== updated.whatsappSendAccountId) audits.push({
-        action: "CONVERSATION_WHATSAPP_SENDER_CHANGED", summary: `Alterou o número de envio da conversa de ${contactDisplayName(updated.contact)}`,
-        details: { ...contact, from: currentSnapshot.whatsappSendAccountId, to: updated.whatsappSendAccountId },
-      });
       for (const entry of audits) {
         await audit.recordAudit({
           actor: viewer,
