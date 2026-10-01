@@ -3,6 +3,7 @@ const { recordAssignmentChange } = require("./assignment-period-service");
 const { findOrCreateMetaConversation } = require("./conversation-service");
 const { removeImage, storeAudio, storeDocument, storeImage, storeSticker, storeVideo } = require("./media-storage-service");
 const { formatTeamMessage } = require("./team-message-formatter");
+const { normalizeOutgoingAudio } = require("./audio-normalization-service");
 const { getConversationSettings } = require("./conversation-settings-service");
 const channelMessageService = require("./channels/channel-message-service");
 const whatsappInbox = require("./whatsapp-inbox-service");
@@ -461,6 +462,40 @@ async function sendDocument({ conversationId, buffer, mimeType, fileName, captio
   return { message, providerData: result.data };
 }
 
+// Áudio: nesta versão só WhatsApp (META). O conteúdo é normalizado antes
+// (WebM do Chrome vira Ogg/Opus; tipo real decidido pela assinatura binária)
+// e salvo no storage de mídia existente — no banco só referência/metadados.
+async function sendAudio({ conversationId, buffer, fileName, durationMs, sentByUserId, channel }) {
+  const conversation = await prisma.conversation.findUnique({ where: { id: conversationId }, include: { contact: true } });
+  if (!conversation) throw Object.assign(new Error("Conversa não encontrada."), { statusCode: 404 });
+  if (conversation.channel !== "META") {
+    throw Object.assign(new Error("Este canal ainda não suporta envio de áudio pela Central."), { statusCode: 409 });
+  }
+  await require("./meta-template-service").assertFreeFormAllowed(conversationId);
+  const audio = normalizeOutgoingAudio({ buffer, fileName, declaredDurationMs: durationMs });
+  const media = await storeAudio({ buffer: audio.buffer, mimeType: audio.mimeType, fileName: audio.fileName });
+  let result;
+  try {
+    result = await channel.sendAudio(conversation.contact.phone, {
+      buffer: audio.buffer, mimeType: media.mimeType, fileName: media.fileName,
+    });
+  } catch (error) {
+    await removeImage(media.storageKey);
+    throw error;
+  }
+  const occurredAt = new Date();
+  const message = await prisma.message.create({ data: {
+    conversationId, externalId: result.externalId, channel: conversation.channel, direction: "ENVIADA",
+    status: "ENVIADA", type: "audio", text: null,
+    mediaStorageKey: media.storageKey, mediaMimeType: media.mimeType,
+    mediaFileName: media.fileName, mediaSize: media.size, mediaDurationMs: audio.durationMs,
+    occurredAt, sentByUserId: sentByUserId || null,
+    rawPayload: { message: result.data, mediaId: result.mediaId },
+  } });
+  await updateConversationAfterSending({ conversationId, sentByUserId, occurredAt });
+  return { message, providerData: result.data };
+}
+
 async function finalizeConversation({ conversationId, sentByUserId, channel }) {
   const current = await prisma.conversation.findUnique({ where: { id: conversationId } });
   if (!current) throw Object.assign(new Error("Conversa não encontrada."), { statusCode: 404 });
@@ -482,4 +517,4 @@ async function sendTextToPhone({ phone, text, channel }) {
   return sendText({ conversationId: conversation.id, text, channel });
 }
 
-module.exports = { closingMessage, finalizeConversation, saveIncoming, sendDocument, sendImage, sendVideo, updateConversationAfterSending, updateStatus, sendText, sendTextToPhone };
+module.exports = { closingMessage, finalizeConversation, saveIncoming, sendAudio, sendDocument, sendImage, sendVideo, updateConversationAfterSending, updateStatus, sendText, sendTextToPhone };

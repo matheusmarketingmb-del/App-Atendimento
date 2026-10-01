@@ -192,11 +192,31 @@
         </div>
         <form id="composer" class="composer">
           <div class="composer-tools">
-            <label class="attach-image" title="Anexar imagem, vídeo ou documento" aria-label="Anexar imagem, vídeo ou documento"><input id="attachment-input" type="file" accept="image/jpeg,image/png,video/mp4,video/3gpp,video/3gp,application/pdf,text/plain,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation"><span aria-hidden="true">+</span></label>
+            <label class="attach-image" title="Anexar imagem, vídeo ou documento" aria-label="Anexar imagem, vídeo ou documento"><input id="attachment-input" type="file" accept="image/jpeg,image/png,video/mp4,video/3gpp,video/3gp,application/pdf,text/plain,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,audio/*,.ogg,.opus,.mp3,.m4a,.aac,.amr"><span aria-hidden="true">+</span></label>
+            <button id="record-audio" class="audio-record-button" type="button" title="Gravar áudio" aria-label="Gravar áudio"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2Z"/></svg></button>
+            <input id="audio-capture-input" type="file" accept="audio/*" capture hidden>
             <button id="open-templates" class="template-shortcut" type="button" title="Enviar template aprovado pela Meta" hidden>Templates</button>
             <button id="open-quick-replies" class="quick-reply-shortcut" type="button" title="Respostas rápidas" aria-label="Respostas rápidas"><svg viewBox="0 0 32 32" aria-hidden="true" focusable="false"><defs><linearGradient id="quick-bolt-gradient" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset=".5" stop-color="#c9c9c9"/><stop offset="1" stop-color="#555b63"/></linearGradient></defs><path d="M18.5 2.5 7 17h8l-1.5 12.5L25 14h-8.2l1.7-11.5Z"/></svg></button>
           </div>
           <div id="attachment-preview" class="attachment-preview" hidden><img id="attachment-thumb" alt="Prévia da imagem"><span id="attachment-type" class="attachment-type" hidden>DOC</span><span id="attachment-name"></span><button id="remove-attachment" type="button" aria-label="Remover anexo">×</button></div>
+          <div id="audio-composer" class="audio-composer" hidden aria-live="polite">
+            <div class="audio-recording" data-audio-recording>
+              <span class="audio-rec-dot" aria-hidden="true"></span>
+              <span id="audio-timer" class="audio-timer">00:00</span>
+              <span id="audio-rec-label" class="audio-rec-label">Gravando…</span>
+              <button id="audio-pause" type="button" class="audio-action">Pausar</button>
+              <button id="audio-stop" type="button" class="audio-action primary">Concluir</button>
+              <button id="audio-cancel" type="button" class="audio-action danger">Cancelar</button>
+            </div>
+            <div class="audio-preview" data-audio-preview hidden>
+              <span id="audio-source-label" class="audio-source-label">🎤</span>
+              <audio id="audio-preview-player" class="audio-preview-player" controls preload="metadata"></audio>
+              <span id="audio-preview-duration" class="audio-timer">00:00</span>
+              <button id="audio-save-quick-reply" type="button" class="audio-action">Salvar como resposta rápida</button>
+              <button id="audio-rerecord" type="button" class="audio-action">Regravar</button>
+              <button id="audio-discard" type="button" class="audio-action danger" title="Excluir áudio" aria-label="Excluir áudio">Excluir</button>
+            </div>
+          </div>
           <div class="composer-input-wrap">
             <div class="composer-format-tools" role="toolbar" aria-label="Formatação da mensagem">
               <button type="button" data-message-format="*" title="Negrito (*texto*)" aria-label="Negrito"><b>B</b></button>
@@ -275,9 +295,24 @@
   </main>
   <dialog id="quick-reply-dialog" class="quick-reply-dialog">
     <div class="dialog-header"><div><span>RESPOSTAS RÁPIDAS</span><h2>Selecionar resposta</h2><p>O texto é inserido no campo de mensagem — você revisa e envia manualmente.</p></div><button id="close-quick-replies" type="button" aria-label="Fechar">×</button></div>
-    <label class="quick-reply-search"><span>⌕</span><input id="quick-reply-search" type="search" placeholder="Buscar por nome, atalho, texto ou categoria"></label>
+    <label class="quick-reply-search"><span>⌕</span><input id="quick-reply-search" type="search" placeholder="Buscar por nome, atalho, texto, categoria ou tipo"></label>
+    <div class="quick-reply-type-row"><div id="quick-reply-types" class="quick-reply-types" role="tablist" aria-label="Tipo de resposta"><button type="button" data-quick-reply-type="" class="active">Todas</button><button type="button" data-quick-reply-type="TEXT">Texto</button><button type="button" data-quick-reply-type="AUDIO">🎤 Áudio</button></div><button id="new-audio-quick-reply" class="quick-reply-new-audio" type="button">+ Meu áudio</button></div>
     <div id="quick-reply-categories" class="quick-reply-categories"></div>
     <div id="quick-reply-list" class="quick-reply-list"></div>
+  </dialog>
+  <dialog id="audio-quick-reply-dialog" class="category-dialog audio-quick-reply-dialog">
+    <div class="dialog-header"><div><span>RESPOSTA RÁPIDA PESSOAL</span><h2 id="aqr-title">Salvar áudio</h2><p>Só você vê e usa esta resposta. Ao selecionar, o áudio vai para o composer — nada é enviado sem você clicar em Enviar.</p></div><button id="close-audio-quick-reply" type="button" aria-label="Fechar">×</button></div>
+    <form id="audio-quick-reply-form" class="audio-quick-reply-form">
+      <label><span>Nome</span><input id="aqr-name" maxlength="100" placeholder="Ex.: Saudação" required></label>
+      <label><span>Comando</span><input id="aqr-shortcut" maxlength="31" placeholder="/saudacao_audio" pattern="/[a-z0-9_]{1,30}" title="/ seguido de letras minúsculas, números ou _" required autocomplete="off"></label>
+      <label><span>Categoria</span><select id="aqr-category"><option value="">Sem categoria</option></select></label>
+      <div class="aqr-audio"><span>Áudio</span>
+        <div class="aqr-player-row"><audio id="aqr-player" controls preload="metadata"></audio><small id="aqr-duration"></small></div>
+        <div class="aqr-audio-actions"><label class="aqr-file"><input id="aqr-file" type="file" accept="audio/*,.ogg,.opus,.mp3,.m4a,.aac,.amr"><span id="aqr-file-label">Escolher arquivo de áudio</span></label><button id="aqr-use-composer" type="button" hidden>Usar áudio do composer</button></div>
+        <small class="aqr-hint">OGG (Opus), MP3, M4A, AAC ou AMR — até 16 MB e 10 minutos.</small>
+      </div>
+      <div class="transfer-actions"><button id="aqr-delete" type="button" class="danger" hidden>Excluir</button><button id="aqr-cancel" type="button">Cancelar</button><button id="aqr-submit" type="submit">Salvar</button></div>
+    </form>
   </dialog>
   <dialog id="outbound-channel-dialog" class="template-dialog outbound-channel-dialog">
     <div class="dialog-header"><div><span>NOVA CONVERSA</span><h2>Escolher canal</h2><p>Somente integrações conectadas e liberadas podem iniciar conversas.</p></div><button id="close-outbound-channels" type="button" aria-label="Fechar">×</button></div>

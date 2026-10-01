@@ -17,7 +17,7 @@ const state = {
   assignedUserActiveOnly: false, alertCursor: null, checkingAlerts: false,
   customerServiceWindow: null, templates: [], selectedTemplate: null,
   outboundChannels: [], outboundTemplates: [], selectedOutboundTemplate: null, categoryVisibility: { hideUncategorized:false, hiddenCategoryIds:[] }, visibilityMode:false,
-  quickReplies: [], quickReplyCategoryFilter: "", quickReplySearch: "",
+  quickReplies: [], quickReplyCategoryFilter: "", quickReplyTypeFilter: "", quickReplySearch: "",
   botSuggestion: null, pendingBotSuggestion: null,
   mergedDestinations: [],
 };
@@ -26,6 +26,12 @@ const defaultDocumentTitle = document.title;
 let waitingTitleTimer = null;
 let waitingAlertCount = 0;
 let conversationLoadSequence = 0;
+// Áudio no composer: gravação em andamento + áudio pronto para revisar e
+// enviar. Fica no topo porque openConversation/closeConversationView já o
+// consultam (o restante está no bloco "Áudio no composer").
+const audioRecorder = { recorder:null, stream:null, chunks:[], startedAt:0, pausedAt:0, pausedTotal:0, timer:null, discard:false, mimeType:"" };
+let pendingAudio = null;
+let pendingAudioUrl = null;
 const escapeHtml = (value = "") => String(value).replace(/[&<>'"]/g, (char) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", "'":"&#39;", '"':"&quot;" })[char]);
 const initials = (name = "?") => name.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
 const conversationTimeZone = "America/Sao_Paulo";
@@ -135,6 +141,7 @@ function handoffNoticeMarkup(c) {
 
 function closeConversationView() {
   conversationLoadSequence += 1;
+  discardComposerAudio();
   state.selectedId = null;
   state.selectedContactId = null;
   state.selectedCategoryId = "";
@@ -343,7 +350,10 @@ function messageContent(message) {
     return `<a class="message-image-link" href="${mediaUrl}" target="_blank" rel="noopener"><img class="message-image" src="${mediaUrl}" alt="${escapeHtml(message.text || "Imagem da conversa")}" loading="lazy"></a>${message.text && message.text !== "[image]" ? `<p>${renderWhatsAppText(message.text)}</p>` : ""}`;
   }
   if (message.type === "audio" && message.mediaStorageKey) {
-    return `<audio class="message-audio" controls preload="metadata"><source src="${mediaUrl}" type="${escapeHtml(message.mediaMimeType || "audio/ogg")}">Seu navegador não conseguiu reproduzir este áudio.</audio><a class="audio-download" href="${mediaUrl}" download>Baixar áudio</a>`;
+    // Player próprio (play/pause, progresso, duração) — controlado por
+    // delegação em #messages (ver bloco "Player de áudio nas mensagens").
+    const durationMs = Number(message.mediaDurationMs) || 0;
+    return `<div class="audio-player" data-audio-player data-duration-ms="${durationMs}"><button type="button" class="audio-play" data-audio-play aria-label="Reproduzir áudio">▶</button><input type="range" class="audio-progress" data-audio-progress min="0" max="1000" step="1" value="0" aria-label="Progresso do áudio"><span class="audio-time" data-audio-time>${durationMs ? formatAudioDuration(durationMs) : "--:--"}</span><audio preload="metadata" data-audio-element><source src="${mediaUrl}" type="${escapeHtml(message.mediaMimeType || "audio/ogg")}"></audio></div><a class="audio-download" href="${mediaUrl}" download>Baixar áudio</a>`;
   }
   if (message.type === "video" && message.mediaStorageKey) {
     return `<video class="message-video" controls preload="metadata" playsinline><source src="${mediaUrl}" type="${escapeHtml(message.mediaMimeType || "video/mp4")}">Seu navegador não conseguiu reproduzir este vídeo.</video>${message.text && message.text !== "[video]" ? `<p>${renderWhatsAppText(message.text)}</p>` : ""}<a class="media-download" href="${mediaUrl}" download>Baixar vídeo</a>`;
@@ -1204,6 +1214,7 @@ async function openConversation(id, { refreshList = true, markRead = true } = {}
     state.selectedMessages = [];
     state.pendingBotSuggestion = null;
     hideBotSuggestion();
+    discardComposerAudio();
     loadQuickRepliesCache(id).catch(() => {});
     $("#empty-state").hidden = true;
     $("#chat-content").hidden = false;
@@ -1250,6 +1261,7 @@ async function openConversation(id, { refreshList = true, markRead = true } = {}
   state.selectedChannelCapabilities = c.channelCapabilities || null;
   state.transferCategories = c.transferCategories || [];
   syncCustomerServiceWindow();
+  syncAudioAvailability();
   syncSocialReplyMode(c.channel, c.channelCapabilities);
   renderContextDetails(c);
   renderSlaTab(c);
@@ -1596,6 +1608,8 @@ async function loadAdminUsers() {
 
 $("#conversation-list").addEventListener("click", (event) => {
   const card = event.target.closest(".conversation-card");
+  // Trocar de conversa com áudio gravando/não enviado pede confirmação.
+  if (card && card.dataset.id !== state.selectedId && !confirmDiscardComposerAudio()) return;
   if (card) openConversation(card.dataset.id).catch((error) => {
     if ($("#messages").querySelector(".skeleton-list")) $("#messages").innerHTML = `<div class="shared-empty">Não foi possível abrir esta conversa.</div>`;
     toast(error.message, true);
@@ -2243,6 +2257,13 @@ function clearSelectedAttachment() {
 function selectAttachmentFile(file) {
   if (!file) return clearSelectedAttachment();
 
+  // Áudio vai para o painel de áudio (preview + Enviar), não para o anexo comum.
+  if (isAudioFile(file)) {
+    clearSelectedAttachment();
+    selectAudioFile(file).catch((error) => toast(error.message, true));
+    return;
+  }
+
   const isImage = ["image/jpeg", "image/png"].includes(file.type);
   const isDocument = isDocumentMime(file.type);
   const isVideo = ["video/mp4", "video/3gpp", "video/3gp"].includes(file.type);
@@ -2251,7 +2272,7 @@ function selectAttachmentFile(file) {
     clearSelectedAttachment();
 
     return toast(
-      "Envie uma imagem JPG/PNG, vídeo MP4/3GP ou documento PDF/TXT/Word/Excel/PowerPoint.",
+      "Envie uma imagem JPG/PNG, vídeo MP4/3GP, áudio OGG/MP3/M4A/AAC/AMR ou documento PDF/TXT/Word/Excel/PowerPoint.",
       true
     );
   }
@@ -2366,6 +2387,437 @@ $("#message-input").addEventListener("paste", (event) => {
 });
 
 $("#remove-attachment").addEventListener("click", clearSelectedAttachment);
+// ===== Áudio no composer =====
+// Gravação pelo microfone (MediaRecorder) ou arquivo escolhido. Nada é
+// enviado sozinho: concluir a gravação, escolher arquivo ou selecionar uma
+// resposta rápida de áudio só carrega o player — o envio é o clique em
+// "Enviar". O servidor normaliza o formato (WebM do Chrome vira OGG/Opus).
+const AUDIO_CHANNELS = new Set(["META"]);
+const AUDIO_MAX_RECORDING_MS = 5 * 60 * 1000;
+const AUDIO_MAX_FILE_SIZE = 16 * 1024 * 1024;
+const AUDIO_FILE_EXTENSIONS = /\.(ogg|oga|opus|mp3|m4a|mp4|aac|amr|webm)$/i;
+
+function isAudioRecording() { return Boolean(audioRecorder.recorder && audioRecorder.recorder.state !== "inactive"); }
+function hasUnsentComposerAudio() { return isAudioRecording() || Boolean(pendingAudio); }
+function canSendAudioHere() { return Boolean(state.selectedId) && AUDIO_CHANNELS.has(state.selectedChannel); }
+function supportsAudioRecording() { return Boolean(window.MediaRecorder && navigator.mediaDevices?.getUserMedia); }
+function isAudioFile(file) { return Boolean(file) && (String(file.type).startsWith("audio/") || (!file.type && AUDIO_FILE_EXTENSIONS.test(file.name || ""))); }
+function formatAudioDuration(ms) {
+  const total = Math.max(0, Math.round((Number(ms) || 0) / 1000));
+  return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
+}
+function shortAudioDuration(ms) {
+  const total = Math.round((Number(ms) || 0) / 1000);
+  if (!total) return "—";
+  return total >= 60 ? `${Math.floor(total / 60)}min ${String(total % 60).padStart(2, "0")}s` : `${total}s`;
+}
+// Ordem de preferência: OGG/Opus (Firefox) e WebM/Opus (Chrome/Edge, o
+// servidor converte para OGG sem recodificar) antes de MP4/AAC (Safari/iOS).
+function pickRecorderMimeType() {
+  const candidates = ["audio/ogg;codecs=opus", "audio/webm;codecs=opus", "audio/mp4;codecs=mp4a.40.2", "audio/mp4", "audio/webm"];
+  return candidates.find((type) => { try { return MediaRecorder.isTypeSupported(type); } catch { return false; } }) || "";
+}
+function audioExtensionFor(type) {
+  return ({ "audio/ogg":"ogg", "audio/webm":"webm", "audio/mp4":"m4a", "audio/mpeg":"mp3", "audio/aac":"aac" })[String(type).split(";", 1)[0]] || "webm";
+}
+function recordingElapsedMs() {
+  if (!audioRecorder.startedAt) return 0;
+  return (audioRecorder.pausedAt || Date.now()) - audioRecorder.startedAt - audioRecorder.pausedTotal;
+}
+// Duração de um arquivo pelo próprio navegador (WebM gravado no Chrome não
+// traz duração — nesse caso vale o cronômetro da gravação).
+function measureAudioDuration(blob) {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(blob);
+    const probe = new Audio();
+    const done = (value) => { clearTimeout(timer); URL.revokeObjectURL(url); probe.removeAttribute("src"); resolve(value); };
+    const timer = setTimeout(() => done(null), 4000);
+    probe.preload = "metadata";
+    probe.addEventListener("loadedmetadata", () => done(Number.isFinite(probe.duration) && probe.duration > 0 ? Math.round(probe.duration * 1000) : null));
+    probe.addEventListener("error", () => done(null));
+    probe.src = url;
+  });
+}
+
+function syncAudioAvailability() {
+  const button = $("#record-audio");
+  if (!button) return;
+  const windowClosed = $("#composer").classList.contains("window-closed");
+  const allowed = canSendAudioHere() && !windowClosed;
+  button.disabled = !allowed || isAudioRecording();
+  button.title = !canSendAudioHere() ? "Este canal ainda não suporta envio de áudio"
+    : (windowClosed ? "Janela de 24 horas encerrada — use um template" : (supportsAudioRecording() ? "Gravar áudio" : "Gravar áudio (abre o gravador do aparelho)"));
+  button.setAttribute("aria-label", button.title);
+}
+
+function syncAudioComposer() {
+  const recording = isAudioRecording();
+  const paused = audioRecorder.recorder?.state === "paused";
+  const panel = $("#audio-composer");
+  panel.hidden = !recording && !pendingAudio;
+  panel.classList.toggle("paused", paused);
+  $("#composer").classList.toggle("audio-mode", !panel.hidden);
+  panel.querySelector("[data-audio-recording]").hidden = !recording;
+  panel.querySelector("[data-audio-preview]").hidden = recording || !pendingAudio;
+  $("#audio-pause").hidden = !recording || typeof audioRecorder.recorder?.pause !== "function";
+  $("#audio-pause").textContent = paused ? "Continuar" : "Pausar";
+  $("#audio-rec-label").textContent = paused ? "Pausado" : "Gravando…";
+  $("#audio-timer").textContent = formatAudioDuration(recordingElapsedMs());
+  if (pendingAudio) {
+    $("#audio-preview-duration").textContent = pendingAudio.durationMs ? formatAudioDuration(pendingAudio.durationMs) : "--:--";
+    $("#audio-source-label").textContent = pendingAudio.quickReplyName ? `🎤 ${pendingAudio.quickReplyName}` : "🎤";
+    $("#audio-source-label").title = pendingAudio.quickReplyName ? "Resposta rápida de áudio" : "";
+    $("#audio-save-quick-reply").hidden = Boolean(pendingAudio.quickReplyId);
+    $("#audio-rerecord").hidden = !supportsAudioRecording();
+  }
+  syncAudioAvailability();
+}
+
+function setPendingAudio(audio) {
+  if (pendingAudioUrl) URL.revokeObjectURL(pendingAudioUrl);
+  pendingAudioUrl = null;
+  pendingAudio = audio;
+  const player = $("#audio-preview-player");
+  player.pause();
+  if (audio) {
+    pendingAudioUrl = URL.createObjectURL(audio.blob);
+    player.src = pendingAudioUrl;
+  } else {
+    player.removeAttribute("src");
+    player.load();
+  }
+  syncAudioComposer();
+}
+
+function releaseMicrophone() {
+  audioRecorder.stream?.getTracks().forEach((track) => track.stop());
+  audioRecorder.stream = null;
+}
+function resetRecorderState() {
+  clearInterval(audioRecorder.timer);
+  releaseMicrophone();
+  Object.assign(audioRecorder, { recorder:null, chunks:[], startedAt:0, pausedAt:0, pausedTotal:0, timer:null, discard:false, mimeType:"" });
+}
+
+async function startAudioRecording() {
+  if (!state.selectedId || isAudioRecording()) return;
+  if (!canSendAudioHere()) return toast("Este canal ainda não suporta envio de áudio.", true);
+  if (pendingAudio && !confirm("Descartar o áudio atual e gravar outro?")) return;
+  // Sem MediaRecorder (navegadores antigos/WebViews): gravador nativo do aparelho.
+  if (!supportsAudioRecording()) return $("#audio-capture-input").click();
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation:true, noiseSuppression:true } });
+  } catch (error) {
+    const denied = ["NotAllowedError", "SecurityError", "PermissionDeniedError"].includes(error?.name);
+    return toast(denied
+      ? "Permissão de microfone necessária para gravar áudio. Você ainda pode enviar um arquivo de áudio pelo +."
+      : "Não foi possível acessar o microfone. Você ainda pode enviar um arquivo de áudio pelo +.", true);
+  }
+  setPendingAudio(null);
+  const mimeType = pickRecorderMimeType();
+  let recorder;
+  try { recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined); }
+  catch {
+    stream.getTracks().forEach((track) => track.stop());
+    return toast("Este navegador não conseguiu iniciar a gravação. Envie um arquivo de áudio pelo +.", true);
+  }
+  Object.assign(audioRecorder, { recorder, stream, chunks:[], startedAt:Date.now(), pausedAt:0, pausedTotal:0, discard:false, mimeType: recorder.mimeType || mimeType });
+  recorder.addEventListener("dataavailable", (event) => { if (event.data?.size) audioRecorder.chunks.push(event.data); });
+  recorder.addEventListener("stop", () => {
+    const durationMs = recordingElapsedMs();
+    const { discard, chunks } = audioRecorder;
+    const type = audioRecorder.mimeType || chunks[0]?.type || "audio/webm";
+    resetRecorderState();
+    const blob = new Blob(chunks, { type });
+    if (discard || !blob.size) return syncAudioComposer();
+    if (blob.size > AUDIO_MAX_FILE_SIZE) { toast("A gravação passou de 16 MB e foi descartada.", true); return syncAudioComposer(); }
+    setPendingAudio({ blob, durationMs, fileName:`gravacao.${audioExtensionFor(type)}`, source:"recording" });
+  });
+  recorder.start(1000);
+  audioRecorder.timer = setInterval(() => {
+    $("#audio-timer").textContent = formatAudioDuration(recordingElapsedMs());
+    if (isAudioRecording() && recordingElapsedMs() >= AUDIO_MAX_RECORDING_MS) {
+      stopAudioRecording();
+      toast("Limite de 5 minutos atingido. Revise o áudio antes de enviar.");
+    }
+  }, 250);
+  syncAudioComposer();
+}
+
+function stopAudioRecording() {
+  if (!isAudioRecording()) return;
+  if (audioRecorder.pausedAt) {
+    audioRecorder.pausedTotal += Date.now() - audioRecorder.pausedAt;
+    audioRecorder.pausedAt = 0;
+  }
+  audioRecorder.recorder.stop();
+}
+
+function toggleAudioPause() {
+  const recorder = audioRecorder.recorder;
+  if (!recorder) return;
+  if (recorder.state === "recording" && typeof recorder.pause === "function") {
+    recorder.pause();
+    audioRecorder.pausedAt = Date.now();
+  } else if (recorder.state === "paused") {
+    recorder.resume();
+    audioRecorder.pausedTotal += Date.now() - audioRecorder.pausedAt;
+    audioRecorder.pausedAt = 0;
+  }
+  syncAudioComposer();
+}
+
+// Cancelar/descartar: blob temporário descartado, nada persistido nem
+// enviado, microfone liberado.
+function discardComposerAudio() {
+  if (isAudioRecording()) {
+    audioRecorder.discard = true;
+    audioRecorder.recorder.stop();
+  } else {
+    resetRecorderState();
+  }
+  setPendingAudio(null);
+}
+
+function confirmDiscardComposerAudio() {
+  if (!hasUnsentComposerAudio()) return true;
+  const message = isAudioRecording()
+    ? "Há uma gravação de áudio em andamento. Descartar a gravação?"
+    : "Há um áudio no composer que ainda não foi enviado. Descartar o áudio?";
+  if (!confirm(message)) return false;
+  discardComposerAudio();
+  return true;
+}
+
+async function selectAudioFile(file) {
+  if (!file) return;
+  if (!canSendAudioHere()) throw new Error("Este canal ainda não suporta envio de áudio.");
+  if (!isAudioFile(file)) throw new Error("Formato de áudio não suportado. Use OGG (Opus), MP3, M4A, AAC ou AMR.");
+  if (file.size > AUDIO_MAX_FILE_SIZE) throw new Error("O áudio deve ter no máximo 16 MB.");
+  if (isAudioRecording()) throw new Error("Conclua ou cancele a gravação antes de escolher um arquivo.");
+  if (pendingAudio && !confirm("Substituir o áudio atual do composer?")) return;
+  const durationMs = await measureAudioDuration(file);
+  if (durationMs && durationMs > 10 * 60 * 1000) throw new Error("O áudio deve ter no máximo 10 minutos.");
+  setPendingAudio({ blob:file, durationMs, fileName:file.name || "audio", source:"file" });
+}
+
+async function loadQuickReplyAudioIntoComposer(result) {
+  if (isAudioRecording()) return toast("Conclua ou cancele a gravação antes de escolher outro áudio.", true);
+  if (pendingAudio && !confirm("Substituir o áudio atual do composer?")) return;
+  const response = await fetch(result.audio.url, { credentials:"same-origin" });
+  if (!response.ok) return toast("Não foi possível carregar o áudio da resposta rápida.", true);
+  const blob = await response.blob();
+  setPendingAudio({
+    blob, durationMs: result.audio.durationMs, fileName: result.audio.fileName || "resposta-rapida.ogg",
+    source:"quick-reply", quickReplyId: result.quickReply.id, quickReplyName: result.quickReply.name,
+  });
+  toast("Áudio carregado. Ouça e clique em Enviar para mandar.");
+}
+
+async function sendPendingAudio() {
+  if (!pendingAudio || !state.selectedId) return;
+  const audio = pendingAudio;
+  const conversationId = state.selectedId;
+  const form = new FormData();
+  form.append("audio", audio.blob, audio.fileName);
+  if (audio.durationMs) form.append("durationMs", String(Math.round(audio.durationMs)));
+  $("#send-button").disabled = true;
+  try {
+    await api(`/api/conversations/${conversationId}/audios`, { method:"POST", body:form });
+    if (pendingAudio === audio) setPendingAudio(null);
+    if (state.selectedId === conversationId) await openConversation(conversationId);
+  } catch (e) {
+    // Em erro o áudio continua no composer para tentar de novo.
+    if (e.customerServiceWindow) state.customerServiceWindow = e.customerServiceWindow;
+    toast(e.message, true);
+  } finally {
+    syncCustomerServiceWindow();
+    syncAudioAvailability();
+  }
+}
+
+$("#record-audio").addEventListener("click", () => startAudioRecording().catch((error) => toast(error.message, true)));
+$("#audio-stop").addEventListener("click", stopAudioRecording);
+$("#audio-pause").addEventListener("click", toggleAudioPause);
+$("#audio-cancel").addEventListener("click", discardComposerAudio);
+$("#audio-discard").addEventListener("click", discardComposerAudio);
+$("#audio-rerecord").addEventListener("click", () => { setPendingAudio(null); startAudioRecording().catch((error) => toast(error.message, true)); });
+$("#audio-save-quick-reply").addEventListener("click", () => { if (pendingAudio) openAudioQuickReplyDialog({ audio: pendingAudio }); });
+$("#audio-capture-input").addEventListener("change", (event) => {
+  const file = event.target.files?.[0];
+  event.target.value = "";
+  selectAudioFile(file).catch((error) => toast(error.message, true));
+});
+// Fechar/recarregar a página com áudio não enviado pede confirmação do navegador.
+window.addEventListener("beforeunload", (event) => {
+  if (!hasUnsentComposerAudio()) return;
+  event.preventDefault();
+  event.returnValue = "";
+});
+
+// ===== Resposta rápida pessoal de áudio (criar/editar/excluir) =====
+const audioQuickReplyEditor = { item:null, audio:null, url:null };
+
+function setAudioQuickReplyPlayer(src, durationMs) {
+  if (audioQuickReplyEditor.url) URL.revokeObjectURL(audioQuickReplyEditor.url);
+  audioQuickReplyEditor.url = null;
+  const player = $("#aqr-player");
+  player.pause();
+  if (src instanceof Blob) {
+    audioQuickReplyEditor.url = URL.createObjectURL(src);
+    player.src = audioQuickReplyEditor.url;
+  } else if (src) player.src = src;
+  else { player.removeAttribute("src"); player.load(); }
+  player.hidden = !src;
+  $("#aqr-duration").textContent = src ? (durationMs ? formatAudioDuration(durationMs) : "") : "Nenhum áudio selecionado";
+}
+
+function audioQuickReplyCategoryOptions(selectedId) {
+  const active = orderedCategories(state.categories.filter((category) => category.active));
+  return `<option value="">Sem categoria</option>` + active.map((category) => (
+    `<option value="${escapeHtml(category.id)}" ${category.id === selectedId ? "selected" : ""}>${escapeHtml(category.parentId ? `↳ ${category.name}` : category.name)}</option>`
+  )).join("");
+}
+
+function suggestAudioShortcut(name) {
+  const base = normalizeSearchTerm(name).replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 24);
+  return base ? `/${base}_audio` : "/";
+}
+
+function openAudioQuickReplyDialog({ item = null, audio = null } = {}) {
+  audioQuickReplyEditor.item = item;
+  audioQuickReplyEditor.audio = audio ? { blob: audio.blob, durationMs: audio.durationMs, fileName: audio.fileName } : null;
+  $("#aqr-title").textContent = item ? "Editar áudio" : "Salvar áudio";
+  $("#aqr-name").value = item?.name || "";
+  $("#aqr-shortcut").value = item?.shortcut || "";
+  $("#aqr-shortcut").dataset.touched = item ? "true" : "";
+  $("#aqr-category").innerHTML = audioQuickReplyCategoryOptions(item?.categoryId || "");
+  $("#aqr-file").value = "";
+  $("#aqr-file-label").textContent = item || audio ? "Substituir por um arquivo" : "Escolher arquivo de áudio";
+  $("#aqr-use-composer").hidden = !(item && pendingAudio);
+  $("#aqr-delete").hidden = !item;
+  if (audio) setAudioQuickReplyPlayer(audio.blob, audio.durationMs);
+  else setAudioQuickReplyPlayer(item?.audio?.url || null, item?.audio?.durationMs);
+  if ($("#quick-reply-dialog").open) $("#quick-reply-dialog").close();
+  $("#audio-quick-reply-dialog").showModal();
+  $("#aqr-name").focus();
+}
+
+function closeAudioQuickReplyDialog() {
+  $("#audio-quick-reply-dialog").close();
+  setAudioQuickReplyPlayer(null);
+  audioQuickReplyEditor.item = null;
+  audioQuickReplyEditor.audio = null;
+}
+
+async function refreshQuickRepliesAfterAudioChange() {
+  await loadQuickRepliesCache(state.selectedId);
+  if ($("#quick-reply-dialog").open) { renderQuickReplyCategories(); renderQuickReplyList(); }
+}
+
+async function deletePersonalAudioQuickReply(id) {
+  const item = state.quickReplies.find((row) => row.id === id) || audioQuickReplyEditor.item;
+  if (!item || !confirm(`Excluir a resposta rápida de áudio "${item.name}" (${item.shortcut})? Esta ação não pode ser desfeita.`)) return false;
+  try {
+    await api(`/api/quick-replies/personal-audio/${encodeURIComponent(id)}`, { method:"DELETE" });
+    toast("Resposta rápida de áudio excluída.");
+    await refreshQuickRepliesAfterAudioChange();
+    return true;
+  } catch (e) { toast(e.message, true); return false; }
+}
+
+$("#aqr-name").addEventListener("input", () => {
+  if (!$("#aqr-shortcut").dataset.touched) $("#aqr-shortcut").value = suggestAudioShortcut($("#aqr-name").value);
+});
+$("#aqr-shortcut").addEventListener("input", (event) => {
+  event.target.dataset.touched = "true";
+  const value = event.target.value.toLowerCase().replace(/\s+/g, "_");
+  event.target.value = value.startsWith("/") || !value ? value : `/${value}`;
+});
+$("#aqr-file").addEventListener("change", async (event) => {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  if (!isAudioFile(file)) { event.target.value = ""; return toast("Formato de áudio não suportado. Use OGG (Opus), MP3, M4A, AAC ou AMR.", true); }
+  if (file.size > AUDIO_MAX_FILE_SIZE) { event.target.value = ""; return toast("O áudio deve ter no máximo 16 MB.", true); }
+  const durationMs = await measureAudioDuration(file);
+  if (durationMs && durationMs > 10 * 60 * 1000) { event.target.value = ""; return toast("O áudio deve ter no máximo 10 minutos.", true); }
+  audioQuickReplyEditor.audio = { blob:file, durationMs, fileName:file.name || "audio" };
+  setAudioQuickReplyPlayer(file, durationMs);
+});
+$("#aqr-use-composer").addEventListener("click", () => {
+  if (!pendingAudio) return;
+  audioQuickReplyEditor.audio = { blob: pendingAudio.blob, durationMs: pendingAudio.durationMs, fileName: pendingAudio.fileName };
+  setAudioQuickReplyPlayer(pendingAudio.blob, pendingAudio.durationMs);
+});
+$("#aqr-delete").addEventListener("click", async () => {
+  const item = audioQuickReplyEditor.item;
+  if (item && await deletePersonalAudioQuickReply(item.id)) closeAudioQuickReplyDialog();
+});
+$("#aqr-cancel").addEventListener("click", closeAudioQuickReplyDialog);
+$("#close-audio-quick-reply").addEventListener("click", closeAudioQuickReplyDialog);
+$("#audio-quick-reply-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const { item, audio } = audioQuickReplyEditor;
+  if (!item && !audio) return toast("Grave ou escolha um áudio para salvar.", true);
+  const form = new FormData();
+  form.append("name", $("#aqr-name").value.trim());
+  form.append("shortcut", $("#aqr-shortcut").value.trim());
+  form.append("categoryId", $("#aqr-category").value);
+  if (audio) {
+    form.append("audio", audio.blob, audio.fileName || "audio");
+    if (audio.durationMs) form.append("durationMs", String(Math.round(audio.durationMs)));
+  }
+  $("#aqr-submit").disabled = true;
+  try {
+    await api(item ? `/api/quick-replies/personal-audio/${encodeURIComponent(item.id)}` : "/api/quick-replies/personal-audio", {
+      method: item ? "PATCH" : "POST", body: form,
+    });
+    toast(item ? "Resposta rápida de áudio atualizada." : `Resposta rápida salva. Digite ${$("#aqr-shortcut").value.trim()} para usar.`);
+    closeAudioQuickReplyDialog();
+    await refreshQuickRepliesAfterAudioChange();
+  } catch (e) { toast(e.message, true); }
+  finally { $("#aqr-submit").disabled = false; }
+});
+
+// ===== Player de áudio nas mensagens =====
+function syncMessageAudioPlayer(player) {
+  const audio = player.querySelector("[data-audio-element]");
+  const fallbackSeconds = (Number(player.dataset.durationMs) || 0) / 1000;
+  const duration = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : fallbackSeconds;
+  const playing = !audio.paused && !audio.ended;
+  const button = player.querySelector("[data-audio-play]");
+  button.textContent = playing ? "❚❚" : "▶";
+  button.setAttribute("aria-label", playing ? "Pausar áudio" : "Reproduzir áudio");
+  player.classList.toggle("playing", playing);
+  const progress = player.querySelector("[data-audio-progress]");
+  if (!progress.matches(":active")) progress.value = duration ? String(Math.round((audio.currentTime / duration) * 1000)) : "0";
+  const shown = playing || audio.currentTime > 0 ? audio.currentTime * 1000 : duration * 1000;
+  player.querySelector("[data-audio-time]").textContent = duration || audio.currentTime ? formatAudioDuration(shown) : "--:--";
+}
+$("#messages").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-audio-play]");
+  if (!button) return;
+  const player = button.closest("[data-audio-player]");
+  const audio = player.querySelector("[data-audio-element]");
+  document.querySelectorAll("#messages [data-audio-element]").forEach((other) => { if (other !== audio && !other.paused) other.pause(); });
+  if (audio.paused || audio.ended) audio.play().catch(() => toast("Não foi possível reproduzir este áudio.", true));
+  else audio.pause();
+});
+$("#messages").addEventListener("input", (event) => {
+  const progress = event.target.closest("[data-audio-progress]");
+  if (!progress) return;
+  const player = progress.closest("[data-audio-player]");
+  const audio = player.querySelector("[data-audio-element]");
+  const duration = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : (Number(player.dataset.durationMs) || 0) / 1000;
+  if (duration) audio.currentTime = (Number(progress.value) / 1000) * duration;
+});
+// Eventos de mídia não borbulham: captura no contêiner.
+["play", "pause", "ended", "timeupdate", "loadedmetadata"].forEach((type) => $("#messages").addEventListener(type, (event) => {
+  const player = event.target.closest?.("[data-audio-player]");
+  if (player) syncMessageAudioPlayer(player);
+}, true));
+
 // ===== Respostas rápidas (quick replies) =====
 // Seleção NUNCA envia mensagem — só preenche o composer (item 8). Toda
 // validação de acesso (ativa, canal, setor) é feita pelo backend em /use.
@@ -2396,17 +2848,35 @@ function renderQuickReplyCategories() {
   ));
 }
 
+const normalizeSearchTerm = (value) => String(value || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+const isAudioQuickReply = (item) => item?.contentType === "AUDIO";
+
 function filteredQuickReplies() {
-  const term = state.quickReplySearch.trim().toLowerCase();
+  const term = normalizeSearchTerm(state.quickReplySearch.trim());
   return state.quickReplies.filter((item) => {
+    if (state.quickReplyTypeFilter && (item.contentType || "TEXT") !== state.quickReplyTypeFilter) return false;
     if (state.quickReplyCategoryFilter && !(item.categoryIds || [item.categoryId]).includes(state.quickReplyCategoryFilter)) return false;
     if (!term) return true;
     const categoryNames = (item.categories || []).map((category) => category.name);
-    return [item.name, item.shortcut, item.text, item.category?.name, ...categoryNames].filter(Boolean).some((field) => field.toLowerCase().includes(term));
+    const typeLabel = isAudioQuickReply(item) ? "audio" : "texto";
+    return [item.name, item.shortcut, item.text, item.category?.name, ...categoryNames, typeLabel].filter(Boolean).some((field) => normalizeSearchTerm(field).includes(term));
   });
 }
 
 function quickReplyCard(item) {
+  if (isAudioQuickReply(item)) {
+    const unavailable = item.availableInConversation === false;
+    const personal = item.scope === "PERSONAL";
+    return `<article class="quick-reply-card audio-quick-reply-card ${unavailable ? "unavailable" : ""}" data-quick-reply-id="${escapeHtml(item.id)}" role="button" tabindex="0" ${unavailable ? 'aria-disabled="true" title="Este canal ainda não suporta envio de áudio"' : ""}>
+    <div class="quick-reply-card-head">
+      <b><span aria-hidden="true">🎤</span> ${escapeHtml(item.name)}</b>
+      <span class="quick-reply-card-shortcut">${escapeHtml(item.shortcut)}</span>
+      <button type="button" class="quick-reply-favorite ${item.isFavorite ? "active" : ""}" data-favorite-id="${escapeHtml(item.id)}" title="Favoritar" aria-label="Favoritar">${item.isFavorite ? "★" : "☆"}</button>
+    </div>
+    <p>Áudio • ${escapeHtml(shortAudioDuration(item.audio?.durationMs))}${item.category ? ` • ${escapeHtml(item.category.name)}` : ""}${personal ? " • Pessoal" : ""}${unavailable ? " • indisponível neste canal" : ""}</p>
+    ${personal ? `<div class="quick-reply-card-actions"><button type="button" data-edit-audio="${escapeHtml(item.id)}">Editar</button><button type="button" class="danger" data-delete-audio="${escapeHtml(item.id)}">Excluir</button></div>` : ""}
+  </article>`;
+  }
   return `<article class="quick-reply-card" data-quick-reply-id="${escapeHtml(item.id)}" role="button" tabindex="0">
     <div class="quick-reply-card-head">
       <b>${escapeHtml(item.name)}</b>
@@ -2431,11 +2901,11 @@ function renderQuickReplyList() {
   }
   document.querySelectorAll("[data-quick-reply-id]").forEach((card) => {
     card.addEventListener("click", (event) => {
-      if (event.target.closest("[data-favorite-id]")) return;
+      if (event.target.closest("[data-favorite-id],[data-edit-audio],[data-delete-audio]")) return;
       selectQuickReply(card.dataset.quickReplyId);
     });
     card.addEventListener("keydown", (event) => {
-      if ((event.key === "Enter" || event.key === " ") && !event.target.closest("[data-favorite-id]")) {
+      if ((event.key === "Enter" || event.key === " ") && !event.target.closest("[data-favorite-id],[data-edit-audio],[data-delete-audio]")) {
         event.preventDefault();
         selectQuickReply(card.dataset.quickReplyId);
       }
@@ -2444,6 +2914,15 @@ function renderQuickReplyList() {
   document.querySelectorAll("[data-favorite-id]").forEach((button) => (
     button.addEventListener("click", (event) => { event.stopPropagation(); toggleQuickReplyFavorite(button.dataset.favoriteId); })
   ));
+  document.querySelectorAll("[data-edit-audio]").forEach((button) => button.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const item = state.quickReplies.find((row) => row.id === button.dataset.editAudio);
+    if (item) openAudioQuickReplyDialog({ item });
+  }));
+  document.querySelectorAll("[data-delete-audio]").forEach((button) => button.addEventListener("click", (event) => {
+    event.stopPropagation();
+    deletePersonalAudioQuickReply(button.dataset.deleteAudio);
+  }));
 }
 
 async function toggleQuickReplyFavorite(id) {
@@ -2457,9 +2936,13 @@ async function toggleQuickReplyFavorite(id) {
 }
 
 async function selectQuickReply(id) {
+  const item = state.quickReplies.find((row) => row.id === id);
+  if (item?.availableInConversation === false) return toast("O canal desta conversa ainda não suporta envio de áudio.", true);
   try {
     const result = await api(`/api/quick-replies/${id}/use`, { method:"POST", body: JSON.stringify({ conversationId: state.selectedId, source: "AGENT" }) });
     $("#quick-reply-dialog").close();
+    // Áudio: só carrega no composer — o envio é sempre um clique em "Enviar".
+    if (result.audio) return await loadQuickReplyAudioIntoComposer(result);
     const input = $("#message-input");
     const start = input.selectionStart ?? input.value.length;
     const end = input.selectionEnd ?? input.value.length;
@@ -2475,8 +2958,10 @@ async function selectQuickReply(id) {
 async function openQuickReplyDialog() {
   if (!state.selectedId) return;
   state.quickReplyCategoryFilter = "";
+  state.quickReplyTypeFilter = "";
   state.quickReplySearch = "";
   $("#quick-reply-search").value = "";
+  syncQuickReplyTypeChips();
   try {
     await loadQuickRepliesCache(state.selectedId);
     renderQuickReplyCategories();
@@ -2489,6 +2974,19 @@ $("#open-quick-replies").addEventListener("click", openQuickReplyDialog);
 $("#close-quick-replies").addEventListener("click", () => $("#quick-reply-dialog").close());
 $("#quick-reply-dialog").addEventListener("click", (event) => { if (event.target === $("#quick-reply-dialog")) $("#quick-reply-dialog").close(); });
 $("#quick-reply-search").addEventListener("input", (event) => { state.quickReplySearch = event.target.value; renderQuickReplyList(); });
+function syncQuickReplyTypeChips() {
+  document.querySelectorAll("[data-quick-reply-type]").forEach((chip) => {
+    const active = chip.dataset.quickReplyType === (state.quickReplyTypeFilter || "");
+    chip.classList.toggle("active", active);
+    chip.setAttribute("aria-selected", String(active));
+  });
+}
+document.querySelectorAll("[data-quick-reply-type]").forEach((chip) => chip.addEventListener("click", () => {
+  state.quickReplyTypeFilter = chip.dataset.quickReplyType;
+  syncQuickReplyTypeChips();
+  renderQuickReplyList();
+}));
+$("#new-audio-quick-reply").addEventListener("click", () => openAudioQuickReplyDialog({ audio: pendingAudio }));
 
 // Atalhos com "/" (item 9) — nunca faz uma chamada de rede por tecla:
 // filtra a lista já carregada da conversa aberta (loadQuickRepliesCache).
@@ -2510,8 +3008,11 @@ function currentSlashToken(input) {
 function renderSlashSuggestions() {
   const box = $("#slash-suggestions");
   if (!quickReplySlashActive || !quickReplySlashActive.matches.length) return hideSlashSuggestions();
-  box.innerHTML = quickReplySlashActive.matches.map((item, index) => (
-    `<div class="slash-suggestion-item ${index === quickReplySlashActive.activeIndex ? "active" : ""}" data-slash-index="${index}">
+  box.innerHTML = quickReplySlashActive.matches.map((item, index) => (isAudioQuickReply(item)
+    ? `<div class="slash-suggestion-item audio-suggestion ${index === quickReplySlashActive.activeIndex ? "active" : ""} ${item.availableInConversation === false ? "unavailable" : ""}" data-slash-index="${index}">
+      <b><span aria-hidden="true">🎤</span> ${escapeHtml(item.name)} <i>${escapeHtml(item.shortcut)}</i></b><small>Áudio • ${escapeHtml(shortAudioDuration(item.audio?.durationMs))}${item.availableInConversation === false ? " • indisponível neste canal" : ""}</small>
+    </div>`
+    : `<div class="slash-suggestion-item ${index === quickReplySlashActive.activeIndex ? "active" : ""}" data-slash-index="${index}">
       <b>${escapeHtml(item.shortcut)}</b><small>${escapeHtml(item.name)} — ${escapeHtml(item.text.slice(0, 60))}</small>
     </div>`
   )).join("");
@@ -2527,9 +3028,16 @@ async function applySlashSuggestion(index) {
   const item = active.matches[index];
   if (!item) return;
   hideSlashSuggestions();
+  if (item.availableInConversation === false) return toast("O canal desta conversa ainda não suporta envio de áudio.", true);
   try {
     const result = await api(`/api/quick-replies/${item.id}/use`, { method:"POST", body: JSON.stringify({ conversationId: state.selectedId, source: "AGENT" }) });
     const input = $("#message-input");
+    if (result.audio) {
+      // Remove o "/comando" digitado e carrega o áudio no composer (sem enviar).
+      input.value = input.value.slice(0, active.start) + input.value.slice(active.end);
+      autoResizeComposer();
+      return await loadQuickReplyAudioIntoComposer(result);
+    }
     input.value = input.value.slice(0, active.start) + result.text + input.value.slice(active.end);
     autoResizeComposer();
     const cursor = active.start + result.text.length;
@@ -2589,6 +3097,12 @@ $("#composer").addEventListener("submit", async (event) => {
   event.preventDefault();
   const input = $("#message-input");
   const text = input.value.trim();
+  // Enviar durante a gravação só conclui a gravação — nunca envia sem revisão.
+  if (isAudioRecording()) {
+    stopAudioRecording();
+    return toast("Gravação concluída. Ouça o áudio e clique em Enviar para mandar.");
+  }
+  if (pendingAudio) return sendPendingAudio();
   if (!text && !selectedAttachment) return;
   const pendingSuggestion = state.pendingBotSuggestion;
   $("#send-button").disabled = true;

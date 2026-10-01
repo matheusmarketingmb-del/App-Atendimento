@@ -75,6 +75,21 @@ const videoUpload = multer({
     return callback(null, true);
   },
 }).single("video");
+// Áudio (gravação do navegador ou arquivo): o tipo declarado varia muito
+// entre navegadores/SO (audio/webm;codecs=opus, audio/x-m4a, octet-stream
+// para .opus/.amr...). O filtro aqui é só grosseiro — o tipo real é decidido
+// pelo conteúdo em audio-normalization-service.js.
+const audioUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 16 * 1024 * 1024, files: 1 },
+  fileFilter(_req, file, callback) {
+    const mimeType = String(file.mimetype || "").toLowerCase();
+    if (!mimeType.startsWith("audio/") && !["video/webm", "video/ogg", "application/ogg", "application/octet-stream"].includes(mimeType)) {
+      return callback(Object.assign(new Error("Envie um arquivo de áudio (OGG, MP3, M4A, AAC ou AMR)."), { statusCode: 400 }));
+    }
+    return callback(null, true);
+  },
+}).single("audio");
 const documentUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 100 * 1024 * 1024, files: 1 },
@@ -490,6 +505,7 @@ app.post(
   app.post("/api/conversations/:id/images", imageUpload, inbox.replyImage);
   app.post("/api/conversations/:id/videos", videoUpload, inbox.replyVideo);
   app.post("/api/conversations/:id/documents", documentUpload, inbox.replyDocument);
+  app.post("/api/conversations/:id/audios", audioUpload, inbox.replyAudio);
   app.post("/api/conversations/:id/finalize", inbox.finalize);
   app.post("/api/conversations/:id/bot-feedback", inbox.botFeedback);
   app.get("/api/messages/:messageId/media", inbox.media);
@@ -730,6 +746,11 @@ app.post(
   app.delete("/api/social-content-mappings/:id", socialContentMappingController.remove);
 
   app.get("/api/quick-replies/composer", quickReplyController.listForComposer);
+  // Biblioteca pessoal de áudios (cada atendente só vê/edita os próprios).
+  app.post("/api/quick-replies/personal-audio", audioUpload, quickReplyController.createPersonalAudio);
+  app.patch("/api/quick-replies/personal-audio/:id", audioUpload, quickReplyController.updatePersonalAudio);
+  app.delete("/api/quick-replies/personal-audio/:id", quickReplyController.deletePersonalAudio);
+  app.get("/api/quick-replies/:id/audio", quickReplyController.audio);
   app.get("/api/quick-replies/suggestions", quickReplyController.suggestions);
   app.post("/api/quick-replies/preview", quickReplyController.preview);
   app.get("/api/quick-replies", quickReplyController.list);

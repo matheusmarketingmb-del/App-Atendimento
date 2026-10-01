@@ -331,6 +331,28 @@ class MetaCloudChannel {
     }
   }
 
+  // Áudio não aceita legenda na Cloud API. Formatos aceitos: AAC, AMR, MP3,
+  // MP4 e OGG (somente Opus) — a normalização acontece antes, em
+  // audio-normalization-service.js.
+  async sendAudio(to, { buffer, mimeType, fileName }) {
+    this.assertConfigured();
+    try {
+      const form = new FormData();
+      form.append("messaging_product", "whatsapp");
+      form.append("file", new Blob([buffer], { type: mimeType }), fileName);
+      const upload = await axios.post(this.apiUrl(`${process.env.PHONE_NUMBER_ID}/media`), form, {
+        headers: this.authHeaders(), maxBodyLength: 17 * 1024 * 1024,
+      });
+      const response = await axios.post(this.apiUrl(`${process.env.PHONE_NUMBER_ID}/messages`), {
+        messaging_product: "whatsapp", recipient_type: "individual", to, type: "audio",
+        audio: { id: upload.data.id },
+      }, { headers: { ...this.authHeaders(), "Content-Type": "application/json" } });
+      return { externalId: response.data?.messages?.[0]?.id, mediaId: upload.data.id, data: response.data };
+    } catch (error) {
+      throw this.providerFailure(error, "A Meta não aceitou o envio do áudio.");
+    }
+  }
+
   async sendDocument(to, { buffer, mimeType, fileName, caption }) {
     this.assertConfigured();
     try {

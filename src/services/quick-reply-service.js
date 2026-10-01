@@ -6,6 +6,16 @@ const prisma = require("../database/prisma");
 const authorization = require("./authorization-service");
 const audit = require("./audit-service");
 const { contextFromConversation, previewContext, renderTemplate } = require("./quick-reply-template-service");
+const { normalizeOutgoingAudio } = require("./audio-normalization-service");
+const { removeImage, storeAudio } = require("./media-storage-service");
+
+// Biblioteca pessoal (respostas rápidas de áudio): PERSONAL só aparece para
+// o dono — nunca para outros atendentes, nem na tela administrativa de
+// globais. Master pode editar/excluir uma pessoal (administração), mas não
+// a vê no composer dele.
+const MAX_PERSONAL_QUICK_REPLIES = 200;
+// Canais em que o envio de áudio pela Central já existe (message-service#sendAudio).
+const AUDIO_CHANNELS = new Set(["META"]);
 
 const ALLOWED_CHANNELS = new Set([
   "META", "INSTAGRAM_DIRECT", "INSTAGRAM_COMMENTS", "FACEBOOK_MESSENGER", "FACEBOOK_COMMENTS",
@@ -108,6 +118,12 @@ function linkedCategoryIds(quickReply) {
   return [...new Set(linked.length ? linked : (quickReply.categoryId ? [quickReply.categoryId] : []))];
 }
 async function assertApplicableToConversation(quickReply, conversation) {
+  if (quickReply.contentType === "AUDIO" && !AUDIO_CHANNELS.has(conversation.channel)) {
+    throw fail("O canal desta conversa ainda não suporta envio de áudio.");
+  }
+  // Pessoal: a categoria é só organização da biblioteca do atendente, não
+  // restringe em qual conversa ele pode usar.
+  if (quickReply.scope === "PERSONAL") return;
   if (quickReply.channels.length && !quickReply.channels.includes(conversation.channel)) {
     throw fail("Esta resposta rápida não está disponível para o canal desta conversa.");
   }
@@ -142,9 +158,15 @@ async function validateIntentIds(intentIds) {
 
 // Item 20: atalho não pode ser ambíguo entre respostas ativas/não
 // arquivadas. Reaproveitar um atalho de uma resposta arquivada é permitido.
-async function assertShortcutAvailable(shortcut, excludeId = null) {
+// Globais não colidem com pessoais de terceiros (o Master nem pode saber que
+// existem); uma pessoal não pode repetir uma global ativa nem outra pessoal
+// do mesmo dono.
+async function assertShortcutAvailable(shortcut, excludeId = null, { ownerUserId = null } = {}) {
+  const scopeFilter = ownerUserId
+    ? { OR: [{ scope: "GLOBAL" }, { scope: "PERSONAL", ownerUserId }] }
+    : { scope: "GLOBAL" };
   const conflict = await prisma.quickReply.findFirst({
-    where: { shortcut, archivedAt: null, ...(excludeId ? { id: { not: excludeId } } : {}) },
+    where: { shortcut, archivedAt: null, ...scopeFilter, ...(excludeId ? { id: { not: excludeId } } : {}) },
     select: { id: true },
   });
   if (conflict) throw fail(`O atalho "${shortcut}" já está em uso por outra resposta ativa.`);
@@ -175,6 +197,15 @@ function serialize(quickReply, { favoritedByUserId } = {}) {
     availableToAgents: quickReply.availableToAgents,
     availableToBots: quickReply.availableToBots,
     type: quickReply.type,
+    scope: quickReply.scope || "GLOBAL",
+    contentType: quickReply.contentType || "TEXT",
+    ownerUserId: quickReply.ownerUserId || null,
+    // Áudio: só metadados + URL autenticada (nunca o storageKey interno).
+    audio: quickReply.contentType === "AUDIO" ? {
+      url: `/api/quick-replies/${encodeURIComponent(quickReply.id)}/audio`,
+      mimeType: quickReply.mediaMimeType, fileName: quickReply.mediaFileName,
+      size: quickReply.mediaSize, durationMs: quickReply.mediaDurationMs,
+    } : null,
     active: quickReply.active,
     archivedAt: quickReply.archivedAt,
     createdBy: quickReply.createdBy || null,
@@ -194,8 +225,29 @@ async function ensureQuickReply(id) {
   return quickReply;
 }
 
+// Tela administrativa (Master) só gerencia as globais — pessoais têm rotas
+// próprias (personal-audio) e não aparecem nela.
+async function ensureGlobalQuickReply(id) {
+  const quickReply = await ensureQuickReply(id);
+  if (quickReply.scope === "PERSONAL") throw fail("Resposta rápida não encontrada.", 404);
+  return quickReply;
+}
+
+// Pessoal: 404 (e não 403) para quem não é o dono — nem confirma que existe.
+function assertCanSeePersonal(quickReply, viewer, { allowMaster = false } = {}) {
+  if (quickReply.scope !== "PERSONAL") return;
+  if (quickReply.ownerUserId === viewer?.id) return;
+  if (allowMaster && authorization.isMaster(viewer)) return;
+  throw fail("Resposta rápida não encontrada.", 404);
+}
+
+// Auditoria nunca guarda conteúdo binário — só metadados do áudio.
 function snapshot(quickReply) {
   return {
+    scope: quickReply.scope, contentType: quickReply.contentType,
+    ...(quickReply.contentType === "AUDIO" ? {
+      audio: { mimeType: quickReply.mediaMimeType, size: quickReply.mediaSize, durationMs: quickReply.mediaDurationMs },
+    } : {}),
     name: quickReply.name, shortcut: quickReply.shortcut, text: quickReply.text,
     categoryId: quickReply.categoryId, categoryIds: linkedCategoryIds(quickReply),
     channels: quickReply.channels, type: quickReply.type,
@@ -207,7 +259,7 @@ function snapshot(quickReply) {
 // N+1 (um único findMany com include).
 async function listQuickReplies(filters, viewer) {
   assertQuickReplyManager(viewer);
-  const where = {};
+  const where = { scope: "GLOBAL" };
   if (filters.active === "true") where.active = true;
   if (filters.active === "false") where.active = false;
   if (filters.includeArchived !== "true") where.archivedAt = null;
@@ -240,7 +292,7 @@ async function listQuickReplies(filters, viewer) {
 
 async function getQuickReply(id, viewer) {
   assertQuickReplyManager(viewer);
-  return serialize(await ensureQuickReply(id));
+  return serialize(await ensureGlobalQuickReply(id));
 }
 
 async function createQuickReply(data, actor) {
@@ -285,7 +337,7 @@ async function createQuickReply(data, actor) {
 
 async function updateQuickReply(id, data, actor) {
   assertQuickReplyManager(actor);
-  const existing = await ensureQuickReply(id);
+  const existing = await ensureGlobalQuickReply(id);
   const update = {};
   if (data.name !== undefined) update.name = requiredText(data.name, "Nome", 100);
   if (data.shortcut !== undefined) {
@@ -339,7 +391,7 @@ async function updateQuickReply(id, data, actor) {
 
 async function archiveQuickReply(id, actor) {
   assertQuickReplyManager(actor);
-  const existing = await ensureQuickReply(id);
+  const existing = await ensureGlobalQuickReply(id);
   const quickReply = await prisma.$transaction(async (transaction) => {
     const archived = await transaction.quickReply.update({
       where: { id }, data: { active: false, archivedAt: new Date() }, include: quickReplyInclude,
@@ -362,26 +414,32 @@ async function listForComposer({ conversationId, search, categoryId }, viewer) {
     throw authorization.forbidden("O filtro informado não pertence à conversa selecionada.");
   }
 
-  const where = { active: true, archivedAt: null, availableToAgents: true };
-  addAnd(where, { OR: [{ channels: { isEmpty: true } }, { channels: { has: conversation.channel } }] });
+  const globalWhere = { scope: "GLOBAL", active: true, archivedAt: null, availableToAgents: true };
+  addAnd(globalWhere, { OR: [{ channels: { isEmpty: true } }, { channels: { has: conversation.channel } }] });
   const categoryIds = await categoryAndAncestorIds(conversation.categoryId);
-  addAnd(where, categoryIds.length ? { OR: [
+  addAnd(globalWhere, categoryIds.length ? { OR: [
     { AND: [{ categories: { none: {} } }, { categoryId: null }] },
     { categories: { some: { categoryId: { in: categoryIds } } } },
     { categoryId: { in: categoryIds } },
   ] } : { AND: [{ categories: { none: {} } }, { categoryId: null }] });
+  // Pessoais: só as do próprio atendente (nunca de outro usuário).
+  const personalWhere = { scope: "PERSONAL", ownerUserId: viewer.id, active: true, archivedAt: null };
+  if (categoryId) personalWhere.categoryId = categoryId;
+  const where = { OR: [globalWhere, personalWhere] };
   if (search?.trim()) {
     const term = search.trim().slice(0, 120);
-    const searchOr = {
-      OR: [
-        { name: { contains: term, mode: "insensitive" } },
-        { shortcut: { contains: term, mode: "insensitive" } },
-        { text: { contains: term, mode: "insensitive" } },
-        { category: { is: { name: { contains: term, mode: "insensitive" } } } },
-        { categories: { some: { category: { name: { contains: term, mode: "insensitive" } } } } },
-      ],
-    };
-    addAnd(where, searchOr);
+    const normalizedTerm = term.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+    const searchOr = [
+      { name: { contains: term, mode: "insensitive" } },
+      { shortcut: { contains: term, mode: "insensitive" } },
+      { text: { contains: term, mode: "insensitive" } },
+      { category: { is: { name: { contains: term, mode: "insensitive" } } } },
+      { categories: { some: { category: { name: { contains: term, mode: "insensitive" } } } } },
+    ];
+    // Busca por tipo: "audio"/"áudio" ou "texto".
+    if (normalizedTerm.length >= 3 && "audio".startsWith(normalizedTerm)) searchOr.push({ contentType: "AUDIO" });
+    if (normalizedTerm.length >= 3 && "texto".startsWith(normalizedTerm)) searchOr.push({ contentType: "TEXT" });
+    where.AND = [{ OR: searchOr }];
   }
 
   const [rows, favorites] = await Promise.all([
@@ -391,7 +449,10 @@ async function listForComposer({ conversationId, search, categoryId }, viewer) {
   const favoriteIds = new Set(favorites.map((row) => row.quickReplyId));
 
   return rows
-    .map((row) => serialize(row, { favoritedByUserId: favoriteIds.has(row.id) }))
+    .map((row) => ({
+      ...serialize(row, { favoritedByUserId: favoriteIds.has(row.id) }),
+      availableInConversation: row.contentType !== "AUDIO" || AUDIO_CHANNELS.has(conversation.channel),
+    }))
     .sort((a, b) => {
       if (a.isFavorite !== b.isFavorite) return a.isFavorite ? -1 : 1;
       if (a.usageCount !== b.usageCount) return b.usageCount - a.usageCount;
@@ -401,6 +462,7 @@ async function listForComposer({ conversationId, search, categoryId }, viewer) {
 
 async function setFavorite(quickReplyId, { conversationId, favorite }, actor) {
   const quickReply = await ensureQuickReply(quickReplyId);
+  assertCanSeePersonal(quickReply, actor);
   const conversation = await accessibleConversation(actor, conversationId);
   if (!quickReply.active || quickReply.archivedAt || !quickReply.availableToAgents) {
     throw fail("Esta resposta rápida não está disponível para atendentes.");
@@ -424,6 +486,7 @@ async function setFavorite(quickReplyId, { conversationId, favorite }, actor) {
 // acontece aqui, nunca só no frontend.
 async function useQuickReply(quickReplyId, { conversationId }, actor, { source = "AGENT", preview = false } = {}) {
   const quickReply = await ensureQuickReply(quickReplyId);
+  assertCanSeePersonal(quickReply, actor);
   if (!preview) {
     if (!quickReply.active || quickReply.archivedAt) throw fail("Esta resposta rápida não está mais ativa.");
     if (!quickReply.availableToAgents) throw fail("Esta resposta rápida não está disponível para atendentes.");
@@ -431,6 +494,18 @@ async function useQuickReply(quickReplyId, { conversationId }, actor, { source =
 
   const conversation = preview && !conversationId ? null : await accessibleConversation(actor, conversationId);
   if (conversation) await assertApplicableToConversation(quickReply, conversation);
+
+  // Áudio: devolve só a referência para o composer carregar o player — o
+  // envio continua sendo um clique explícito do atendente em "Enviar".
+  if (quickReply.contentType === "AUDIO") {
+    if (!preview) {
+      await prisma.quickReplyUsage.create({
+        data: { quickReplyId, userId: actor?.id || null, conversationId: conversationId || null, source },
+      });
+    }
+    const serialized = serialize(quickReply);
+    return { text: "", unresolved: [], audio: serialized.audio, quickReply: serialized };
+  }
 
   const context = conversation
     ? contextFromConversation({ conversation, agent: actor })
@@ -477,7 +552,119 @@ async function listSuggestions({ intentId, conversationId }, viewer) {
   return [suggestion];
 }
 
+// ===== Biblioteca pessoal de áudios =====
+
+async function ensurePersonalAudio(id, actor) {
+  const quickReply = await ensureQuickReply(id);
+  if (quickReply.scope !== "PERSONAL" || quickReply.contentType !== "AUDIO" || quickReply.archivedAt) {
+    throw fail("Resposta rápida não encontrada.", 404);
+  }
+  assertCanSeePersonal(quickReply, actor, { allowMaster: true });
+  return quickReply;
+}
+
+async function storePersonalAudio(file, declaredDurationMs) {
+  if (!file?.buffer?.length) throw fail("Grave ou selecione um áudio.");
+  const audio = normalizeOutgoingAudio({ buffer: file.buffer, fileName: file.originalname, declaredDurationMs });
+  const media = await storeAudio({ buffer: audio.buffer, mimeType: audio.mimeType, fileName: audio.fileName });
+  return { ...media, durationMs: audio.durationMs };
+}
+
+async function createPersonalAudio(data, file, actor) {
+  if (!actor?.id) throw authorization.forbidden();
+  const name = requiredText(data.name, "Nome", 100);
+  const shortcut = validateShortcut(data.shortcut);
+  const categoryId = await validateCategoryId(data.categoryId || null);
+  await assertShortcutAvailable(shortcut, null, { ownerUserId: actor.id });
+  const owned = await prisma.quickReply.count({ where: { scope: "PERSONAL", ownerUserId: actor.id, archivedAt: null } });
+  if (owned >= MAX_PERSONAL_QUICK_REPLIES) {
+    throw fail(`Limite de ${MAX_PERSONAL_QUICK_REPLIES} respostas rápidas pessoais atingido.`);
+  }
+  const media = await storePersonalAudio(file, data.durationMs);
+  try {
+    const quickReply = await prisma.$transaction(async (transaction) => {
+      const created = await transaction.quickReply.create({ data: {
+        name, shortcut, text: "", categoryId, channels: [], availableToAgents: true, availableToBots: false,
+        type: "QUICK_REPLY", scope: "PERSONAL", contentType: "AUDIO", ownerUserId: actor.id, createdByUserId: actor.id,
+        mediaStorageKey: media.storageKey, mediaMimeType: media.mimeType, mediaFileName: media.fileName,
+        mediaSize: media.size, mediaDurationMs: media.durationMs,
+      } });
+      await audit.recordAudit({
+        actor, action: "QUICK_REPLY_CREATED", entityType: "QUICK_REPLY", entityId: created.id,
+        summary: `Criou a resposta rápida pessoal de áudio "${created.name}" (${created.shortcut})`,
+        details: { after: snapshot(created) },
+      }, transaction);
+      return transaction.quickReply.findUnique({ where: { id: created.id }, include: quickReplyInclude });
+    });
+    return serialize(quickReply);
+  } catch (error) {
+    await removeImage(media.storageKey).catch(() => {});
+    throw error;
+  }
+}
+
+async function updatePersonalAudio(id, data, file, actor) {
+  const existing = await ensurePersonalAudio(id, actor);
+  const update = {};
+  if (data.name !== undefined) update.name = requiredText(data.name, "Nome", 100);
+  if (data.shortcut !== undefined) {
+    update.shortcut = validateShortcut(data.shortcut);
+    await assertShortcutAvailable(update.shortcut, id, { ownerUserId: existing.ownerUserId });
+  }
+  if (data.categoryId !== undefined) update.categoryId = await validateCategoryId(data.categoryId || null);
+  const media = file?.buffer?.length ? await storePersonalAudio(file, data.durationMs) : null;
+  if (media) {
+    Object.assign(update, {
+      mediaStorageKey: media.storageKey, mediaMimeType: media.mimeType, mediaFileName: media.fileName,
+      mediaSize: media.size, mediaDurationMs: media.durationMs,
+    });
+  }
+  if (!Object.keys(update).length) throw fail("Informe ao menos um campo para atualizar.");
+  let quickReply;
+  try {
+    quickReply = await prisma.$transaction(async (transaction) => {
+      const after = await transaction.quickReply.update({ where: { id }, data: update, include: quickReplyInclude });
+      await audit.recordAudit({
+        actor, action: "QUICK_REPLY_UPDATED", entityType: "QUICK_REPLY", entityId: id,
+        summary: `Alterou a resposta rápida pessoal de áudio "${after.name}" (${after.shortcut})${media ? " — áudio substituído" : ""}`,
+        details: { before: snapshot(existing), after: snapshot(after) },
+      }, transaction);
+      return after;
+    });
+  } catch (error) {
+    if (media) await removeImage(media.storageKey).catch(() => {});
+    throw error;
+  }
+  if (media && existing.mediaStorageKey) await removeImage(existing.mediaStorageKey).catch(() => {});
+  return serialize(quickReply);
+}
+
+// Exclusão real (não arquiva): é conteúdo pessoal — sai do banco e do
+// storage. Mensagens já enviadas com esse áudio têm cópia própria.
+async function deletePersonalAudio(id, actor) {
+  const existing = await ensurePersonalAudio(id, actor);
+  await prisma.$transaction(async (transaction) => {
+    await transaction.quickReply.delete({ where: { id } });
+    await audit.recordAudit({
+      actor, action: "QUICK_REPLY_DELETED", entityType: "QUICK_REPLY", entityId: id,
+      summary: `Excluiu a resposta rápida pessoal de áudio "${existing.name}" (${existing.shortcut})`,
+      details: { before: snapshot(existing) },
+    }, transaction);
+  });
+  if (existing.mediaStorageKey) await removeImage(existing.mediaStorageKey).catch(() => {});
+  return { deleted: true };
+}
+
+// Arquivo do áudio: só para o dono (ou Master, administrativo).
+async function getQuickReplyAudio(id, viewer) {
+  const quickReply = await ensureQuickReply(id);
+  if (quickReply.contentType !== "AUDIO" || !quickReply.mediaStorageKey) throw fail("Áudio não encontrado.", 404);
+  assertCanSeePersonal(quickReply, viewer, { allowMaster: true });
+  return { storageKey: quickReply.mediaStorageKey, mimeType: quickReply.mediaMimeType, fileName: quickReply.mediaFileName };
+}
+
 module.exports = {
+  AUDIO_CHANNELS, MAX_PERSONAL_QUICK_REPLIES, createPersonalAudio, deletePersonalAudio, getQuickReplyAudio, updatePersonalAudio,
   archiveQuickReply, assertQuickReplyManager, createQuickReply, getQuickReply, listForComposer,
   listQuickReplies, listSuggestions, previewQuickReplyText, setFavorite, suggestQuickReplyForIntent,
   updateQuickReply, useQuickReply,
