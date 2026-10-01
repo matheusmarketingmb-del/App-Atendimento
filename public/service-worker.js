@@ -1,6 +1,6 @@
 // Versão do cache da aplicação.
 // Altere somente APP_VERSION a cada nova publicação.
-const APP_VERSION = "0.34.10";
+const APP_VERSION = "0.34.11";
 const CACHE_REVISION = "3";
 const CACHE_NAME = `mibro-shell-v${APP_VERSION}-r${CACHE_REVISION}`;
 

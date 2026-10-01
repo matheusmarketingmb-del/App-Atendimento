@@ -48,7 +48,7 @@ module.exports = {
     catch (error) { return next(error); }
   },
   async setAccess(req, res, next) {
-    try { return res.json(await accounts.setAccountAccess(req.params.accountId, req.body.userIds, req.body.categoryIds, req.user)); }
+    try { return res.json(await accounts.setAccountAccess(req.params.accountId, req.body.userIds, req.body.categoryIds, req.user, req.body.outboundCategoryIds)); }
     catch (error) { return next(error); }
   },  async remove(req, res, next) {
     try { return res.json(await accounts.deleteAccount(req.params.accountId, req.user)); }

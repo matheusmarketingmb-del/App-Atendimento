@@ -21,12 +21,20 @@ async function allowedCategoryIds(user) {
   return access.map(({ categoryId }) => categoryId);
 }
 
-function channelAccountScope(user) {
+async function channelAccountScope(user) {
+  const [accounts, categories] = await Promise.all([
+    prisma.channelAccount.findMany({ where: { channel: "META" }, select: { id: true, config: true, accessUsers: { select: { userId: true } } } }),
+    prisma.category.findMany({ select: { id: true, parentId: true } }),
+  ]);
+  const routing = require("./whatsapp-inbox-service").routingCandidates;
+  const accessible = new Set(accounts.filter(a => a.accessUsers.some(m => m.userId === user.id)).map(a => a.id));
+  const routedCategories = categories.filter(c => routing(c, accounts).some(a => accessible.has(a.id))).map(c => c.id);
   return {
     OR: [
       { channelAccountId: null },
       { channel: { notIn: ["EMAIL", "META"] } },
       { channelAccount: { is: { accessUsers: { some: { userId: user.id } } } } },
+      ...(routedCategories.length ? [{ channel: "META", unifiedWhatsAppContact: { isNot: null }, categoryId: { in: routedCategories } }] : []),
     ],
   };
 }
@@ -62,7 +70,7 @@ async function operationalScope(user) {
   const queue = await queueCategoryFilters(user);
   const visible = [{ assignedUserId: user.id }];
   if (queue.length) visible.push({ AND: [{ assignedUserId: null }, { OR: queue }] });
-  return { AND: [{ OR: visible }, publicCategoryScope(), channelAccountScope(user)] };
+  return { AND: [{ OR: visible }, publicCategoryScope(), await channelAccountScope(user)] };
 }
 
 // Equipe de supervisão (definida pelo Master) + o próprio Supervisor — para
@@ -103,7 +111,7 @@ async function sectorScope(user) {
   if (isMaster(user)) return {};
   const queue = await queueCategoryFilters(user);
   const visible = [{ assignedUserId: user.id }, ...queue];
-  return { AND: [{ OR: visible }, publicCategoryScope(), channelAccountScope(user)] };
+  return { AND: [{ OR: visible }, publicCategoryScope(), await channelAccountScope(user)] };
 }
 
 async function canAccessChannelAccount(user, channelAccountId) {
@@ -175,7 +183,11 @@ async function assertCanActOnConversation(user, conversationId) {
     where: { AND: [{ id: conversationId }, scope] },
     select: { id: true, categoryId: true, assignedUserId: true, contactId: true },
   });
-  if (conversation) return conversation;
+  if (conversation) {
+    const contact = await prisma.contact.findUnique({ where: { id: conversation.contactId }, select: { whatsappInboxId: true } });
+    if (contact?.whatsappInboxId && contact.whatsappInboxId !== conversation.id) throw Object.assign(new Error("Abra a conversa atual deste contato para responder ou alterar o atendimento."), { statusCode: 409, code: "UNIFIED_INBOX_REQUIRED" });
+    return conversation;
+  }
   const readable = await prisma.conversation.findFirst({
     where: { AND: [{ id: conversationId }, await conversationScope(user)] }, select: { id: true },
   });

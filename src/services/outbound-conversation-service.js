@@ -51,10 +51,10 @@ async function findExistingConversation(phone, channelScope = "LEGACY") {
   // dígito) — evita abrir uma segunda conversa para o mesmo cliente.
   for (const externalId of whatsappIdVariants(phone)) {
     const conversation = await prisma.conversation.findFirst({
-      where: { channel: "META", channelScope, contact: { is: { channel: "META", externalId } } },
+      where: { channel: "META", contact: { is: { channel: "META", externalId } } },
       select: { id: true, contactId: true },
     });
-    if (conversation) return conversation;
+    if (conversation) return await require("./whatsapp-inbox-service").findInbox(conversation.contactId) || conversation;
   }
   return null;
 }
@@ -102,7 +102,8 @@ async function createOutboundConversation({ phone, customName, template, account
         where: { contactId_channel_channelScope: { contactId: contact.id, channel: "META", channelScope } },
         select: { id: true, contactId: true },
       });
-      if (current) return { conversation: current, created: false };
+      const root = await require("./whatsapp-inbox-service").findInbox(contact.id, transaction);
+      if (root || current) return { conversation: root || await require("./whatsapp-inbox-service").attachInbox(contact.id, current.id, transaction), created: false };
       const inserted = await transaction.conversation.create({ data: {
         contactId: contact.id, channel: "META", channelScope, channelAccountId: selectedAccountId, status: "EM_ATENDIMENTO", assignedUserId: user.id,
       }, select: { id: true, contactId: true } });
@@ -110,7 +111,7 @@ async function createOutboundConversation({ phone, customName, template, account
         conversationId: inserted.id, actorUserId: user.id, action: "CONVERSATION_CREATED",
         details: { source: "panel", phone: normalizedPhone, assignedUserId: user.id },
       } });
-      return { conversation: inserted, created: true };
+      return { conversation: await require("./whatsapp-inbox-service").attachInbox(contact.id, inserted.id, transaction), created: true };
     });
     conversation = result.conversation;
     created = result.created;
@@ -119,6 +120,7 @@ async function createOutboundConversation({ phone, customName, template, account
 
   const result = await sendApprovedTemplate({
     conversationId: conversation.id,
+    requestedAccountId: selectedAccountId || "legacy",
     ...selectedTemplate,
     sentByUserId: user.id,
     channel,
@@ -160,10 +162,10 @@ async function availableMetaAccounts(user) {
     select: { id: true, name: true, externalAccountId: true, providerMetadata: true, config: true },
   });
   const rows = stored.map((account) => ({
-    id: account.id, name: account.name,
+    id: account.config?.isLegacyWhatsApp ? "legacy" : account.id, name: account.name,
     address: account.providerMetadata?.username || account.config?.displayPhoneNumber || account.externalAccountId || null,
   }));
-  if (templatesConfigured()) rows.push({ id: "legacy", name: "WhatsApp principal", address: process.env.PHONE_NUMBER_ID || null });
+  if (templatesConfigured() && !(await prisma.channelAccount.findFirst({ where: { channel: "META", config: { path: ["isLegacyWhatsApp"], equals: true } }, select: { id: true } }))) rows.push({ id: "legacy", name: "WhatsApp principal", address: process.env.PHONE_NUMBER_ID || null });
   return rows;
 }
 

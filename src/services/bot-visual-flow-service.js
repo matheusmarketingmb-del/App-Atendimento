@@ -410,7 +410,7 @@ function liveAdapter({ conversation, bot, channel, execution, aiStep }) {
     const occurredAt = new Date();
     await prisma.$transaction([
       prisma.message.create({ data: {
-        conversationId, externalId: result?.externalId || null, channel: conversation.channel,
+        conversationId, externalId: conversation.channelAccountId && result?.externalId ? `${conversation.channelAccountId}:${result.externalId}` : (result?.externalId || null), channel: conversation.channel, channelAccountId: conversation.channelAccountId || null,
         direction: "ENVIADA", status: "ENVIADA", type: "text", text, occurredAt,
         rawPayload: { message: result?.data || null, system, flowId: execution.flowId, executionId: execution.id, ...nodeInfo },
       } }),
@@ -419,6 +419,7 @@ function liveAdapter({ conversation, bot, channel, execution, aiStep }) {
   };
   const send = async (text) => {
     if (!String(text || "").trim()) return;
+    if (conversation.channel === "META") channel = await require("./whatsapp-inbox-service").botChannel(conversation, channel);
     const result = await channel.sendText(conversation.contact.phone, text);
     await saveSent(text, result, "visual_flow");
   };

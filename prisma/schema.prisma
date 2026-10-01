@@ -254,6 +254,8 @@ model Contact {
   name             String?
   customName       String?
   identityId       String?
+  whatsappInboxId  String?           @unique
+  whatsappInbox    Conversation?     @relation("UnifiedWhatsAppInbox", fields: [whatsappInboxId], references: [id], onDelete: SetNull)
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
   conversations    Conversation[]
@@ -291,6 +293,8 @@ model ContactNote {
 }
 
 model Conversation {
+  unifiedWhatsAppContact    Contact? @relation("UnifiedWhatsAppInbox")
+  whatsappSendAccountId     String?
   id                       String                     @id @default(cuid())
   contactId                String
   channel                  Channel                    @default(META)

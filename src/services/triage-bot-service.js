@@ -179,6 +179,7 @@ function logMisconfiguration(botId, reason, details) {
 }
 
 async function saveBotText(conversation, text, system, channel) {
+  channel = await require("./whatsapp-inbox-service").botChannel(conversation, channel);
   const result = await channel.sendText(conversation.contact.phone, text);
   const occurredAt = new Date();
   await prisma.$transaction([
@@ -195,6 +196,7 @@ async function saveBotText(conversation, text, system, channel) {
 }
 
 async function sendCategoryMenu(conversation, channel, bot) {
+  channel = await require("./whatsapp-inbox-service").botChannel(conversation, channel);
   const options = topLevelOptions(bot, conversation);
   if (!options.length) {
     logMisconfiguration(bot.id, "Nenhuma opção de triagem ativa/válida configurada.", {});
@@ -223,6 +225,7 @@ async function sendCategoryMenu(conversation, channel, bot) {
 }
 
 async function sendSubcategoryMenu(conversation, channel, bot, parentCategory) {
+  channel = await require("./whatsapp-inbox-service").botChannel(conversation, channel);
   const options = subcategoryOptions(bot, parentCategory.id, conversation);
   if (!options.length) return false;
   const body = "Perfeito! Para continuarmos, escolha abaixo o tipo de atendimento que voc\u00ea precisa.";
@@ -266,6 +269,7 @@ async function completeTriage(conversation, categoryId, channel, bot) {
       ? ATENDIMENTO_ASK_MESSAGE
       : renderTemplate(bot.handoffMessage, { ...greetingVars(conversation.contact), categoria: category.name });
     const system = isAtendimento ? "atendimento_ask" : "triage_confirmation";
+    channel = await require("./whatsapp-inbox-service").botChannel(conversation, channel);
     const result = await channel.sendText(conversation.contact.phone, text);
     const occurredAt = new Date();
     await prisma.$transaction(async (transaction) => {
@@ -349,6 +353,7 @@ async function tryAtendimentoRerouting(conversation, message, channel) {
   });
   if (!moved.count) return false;
 
+  channel = await require("./whatsapp-inbox-service").botChannel(conversation, channel);
   const result = await channel.sendText(conversation.contact.phone, ATENDIMENTO_REROUTE_MESSAGE);
   const occurredAt = new Date();
   await prisma.$transaction(async (transaction) => {

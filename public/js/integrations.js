@@ -337,6 +337,9 @@ function openAccessDialog(accountId) {
   state.accessAccountId = accountId;
   const selectedUsers = new Set((account.allowedUsers || []).map((item) => item.userId));
   const selectedCategories = new Set(account.allowedCategoryIds || []);
+  const outboundCategories = new Set(account.outboundCategoryIds || []);
+  $("#account-outbound-section").hidden = account.channel !== "META";
+  $("#account-outbound-categories").innerHTML = state.categories.filter((category) => category.active !== false).map((category) => `<label class="access-user-option"><input type="checkbox" value="${escapeHtml(category.id)}" ${outboundCategories.has(category.id) ? "checked" : ""}><span>${escapeHtml(category.parentId ? `↳ ${category.name}` : category.name)}</span></label>`).join("");
   $("#account-access-name").textContent = account.name;
   $("#account-access-users").innerHTML = state.users.map((user) => {
     const master = user.role === "ADMIN";
@@ -356,8 +359,9 @@ async function saveAccountAccess(event) {
   event.preventDefault();
   const userIds = [...document.querySelectorAll("#account-access-users input:checked")].map((input) => input.value);
   const categoryIds = [...document.querySelectorAll("#account-access-categories input:checked")].map((input) => input.value);
+  const outboundCategoryIds = [...document.querySelectorAll("#account-outbound-categories input:checked")].map((input) => input.value);
   try {
-    await api(`/api/integrations/accounts/${state.accessAccountId}/access`, { method: "PATCH", body: JSON.stringify({ userIds, categoryIds }) });
+    await api(`/api/integrations/accounts/${state.accessAccountId}/access`, { method: "PATCH", body: JSON.stringify({ userIds, categoryIds, outboundCategoryIds }) });
     $("#account-access-dialog").close();
     toast("Atendentes e áreas da conta atualizados.");
     await loadOverview();

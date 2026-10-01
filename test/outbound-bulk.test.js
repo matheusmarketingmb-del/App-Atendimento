@@ -14,7 +14,7 @@ const { registerOptOut } = require("../src/services/campaign-optout-service");
 
 const P = "55119660"; // prefixo dos telefones de teste (celular 11 9660xxxxx)
 const EMAILS = ["bulk-admin@teste.local", "bulk-sup@teste.local", "bulk-att@teste.local", "bulk-att2@teste.local", "bulk-att3@teste.local"];
-let admin; let attendant; let attendantNoBulk; let otherAttendant; let supervisor; let category; let otherCategory; let account; let offlineAccount;
+let admin; let attendant; let attendantNoBulk; let otherAttendant; let supervisor; let category; let otherCategory; let account; let offlineAccount; let principalAccount;
 
 const templates = [
   {
@@ -105,6 +105,9 @@ test.before(async () => {
   attendant = await prisma.user.create({ data: { name: "Matheus Atendente", email: EMAILS[2], role: "ATENDENTE", canManageCampaigns: true, canStartConversations: true } });
   attendantNoBulk = await prisma.user.create({ data: { name: "Atendente Individual", email: EMAILS[3], role: "ATENDENTE", canStartConversations: true } });
   otherAttendant = await prisma.user.create({ data: { name: "Outro Atendente", email: EMAILS[4], role: "ATENDENTE" } });
+  // Unified inbox: the principal number is now a managed sender as well.
+  principalAccount = await prisma.channelAccount.create({ data: { channel: "META", name: "Principal Bulk Teste", enabled: true, status: "CONNECTED", config: { isLegacyWhatsApp: true, outboundCategoryIds: [] } } });
+  await prisma.channelAccountUserAccess.createMany({ data: [admin, supervisor, attendant, attendantNoBulk, otherAttendant].map(u => ({ channelAccountId: principalAccount.id, userId: u.id })) });
   category = await prisma.category.upsert({ where: { code: "bulk_teste_comercial" }, update: {}, create: { code: "bulk_teste_comercial", name: "Comercial Bulk" } });
   otherCategory = await prisma.category.upsert({ where: { code: "bulk_teste_suporte" }, update: {}, create: { code: "bulk_teste_suporte", name: "Suporte Bulk" } });
   await prisma.userCategoryAccess.createMany({ data: [{ userId: attendant.id, categoryId: category.id }], skipDuplicates: true });
@@ -120,7 +123,7 @@ test.afterEach(() => { restoreAdapter?.(); restoreAdapter = null; });
 
 test.after(async () => {
   await cleanup();
-  await prisma.channelAccount.deleteMany({ where: { id: { in: [account.id, offlineAccount.id] } } });
+  await prisma.channelAccount.deleteMany({ where: { id: { in: [account.id, offlineAccount.id, principalAccount.id] } } });
   await prisma.userCategoryAccess.deleteMany({ where: { userId: attendant.id } });
   await prisma.category.deleteMany({ where: { code: { in: ["bulk_teste_comercial", "bulk_teste_suporte"] } } });
   await prisma.user.deleteMany({ where: { email: { in: EMAILS } } });

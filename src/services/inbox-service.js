@@ -1,6 +1,7 @@
 const prisma = require("../database/prisma");
 const periods = require("./assignment-period-service");
 const authorization = require("./authorization-service");
+const whatsappInbox = require("./whatsapp-inbox-service");
 const { removeImage } = require("./media-storage-service");
 const audit = require("./audit-service");
 const internalChat = require("./internal-chat-service");
@@ -177,7 +178,7 @@ async function listConversations({
   const master = authorization.isMaster(viewer);
 
   const conversations = await prisma.conversation.findMany({
-    where: { AND: [where, scope] },
+    where: { AND: [where, scope, whatsappInbox.canonicalScope] },
 
     include: {
       contact: {
@@ -216,6 +217,7 @@ async function listConversations({
 
       messages: {
         where: {
+          AND: [await whatsappInbox.messageAccountScope(viewer)],
           type: {
             not: "reaction",
           },
@@ -316,7 +318,7 @@ async function listConversations({
       let preview = conversation.messages?.[0] || null;
       if (windows && preview && !periods.withinWindows(preview.occurredAt, windows)) {
         preview = await prisma.message.findFirst({
-          where: { conversationId: conversation.id, type: { not: "reaction" }, ...periods.windowsWhere(windows, "occurredAt") },
+          where: { conversationId: conversation.id, type: { not: "reaction" }, ...periods.windowsWhere(windows, "occurredAt"), AND: [await whatsappInbox.messageAccountScope(viewer)] },
           orderBy: { occurredAt: "desc" },
         });
       }
@@ -629,16 +631,29 @@ async function currentHandoffFor(conversation, viewer) {
 async function assertCanViewMessage(viewer, messageId) {
   const message = await prisma.message.findUnique({
     where: { id: messageId },
-    select: { id: true, conversationId: true, occurredAt: true, mediaStorageKey: true, mediaMimeType: true, mediaFileName: true },
+    select: { id: true, conversationId: true, channelAccountId: true, occurredAt: true, mediaStorageKey: true, mediaMimeType: true, mediaFileName: true },
   });
   if (!message) throw Object.assign(new Error("Mídia não encontrada."), { statusCode: 404 });
   const conversation = await authorization.assertCanViewConversation(viewer, message.conversationId);
   const { windows } = await readVisibility(conversation, viewer);
+  if (!(await authorization.canAccessChannelAccount(viewer, message.channelAccountId))) throw Object.assign(new Error("Mídia não encontrada."), { statusCode: 404 });
+  const original = await prisma.conversation.findUnique({ where: { id: message.conversationId }, select: { contactId: true, channel: true } });
+  const root = original.channel === "META" ? await whatsappInbox.findInbox(original.contactId) : null;
+  if (root && root.id !== message.conversationId) {
+    await authorization.assertCanViewConversation(viewer, root.id);
+    const currentVisibility = await readVisibility(root, viewer);
+    if (!periods.withinWindows(message.occurredAt, currentVisibility.windows)) throw Object.assign(new Error("Mídia não encontrada."), { statusCode: 404 });
+  }
   if (!periods.withinWindows(message.occurredAt, windows)) throw Object.assign(new Error("Mídia não encontrada."), { statusCode: 404 });
   return message;
 }
 
 async function getConversation(id, viewer) {
+  const requested = await prisma.conversation.findUnique({ where: { id }, select: { channel: true, contactId: true } });
+  if (requested?.channel === "META") {
+    const root = await whatsappInbox.findInbox(requested.contactId);
+    if (root && root.id !== id) return getConversation(root.id, viewer);
+  }
   const scope = await authorization.conversationScope(viewer);
   const canViewHistory = authorization.isMaster(viewer) || Boolean(viewer.canViewConversationHistory);
   const access = await prisma.conversation.findFirst({
@@ -662,7 +677,7 @@ async function getConversation(id, viewer) {
       channelAccount: { select: { id: true, name: true, externalAccountId: true, providerMetadata: true, config: true } },
       assignedUser: { select: { id: true, name: true, email: true } },
       messages: {
-        where: messageVisibility.where,
+        where: { AND: [messageVisibility.where || {}, await whatsappInbox.messageAccountScope(viewer)] },
         include: { sentByUser: { select: { id: true, name: true } } },
         orderBy: { occurredAt: "asc" },
       },
@@ -687,8 +702,22 @@ async function getConversation(id, viewer) {
         take: 100,
       } : false,
     },
-  }).then((conversation) => {
+  }).then(async (conversation) => {
     if (!conversation) return null;
+    if (conversation.channel === "META" && conversation.contact.whatsappInboxId === conversation.id) {
+      const siblings = await prisma.conversation.findMany({ where: { AND: [{ contactId: conversation.contactId, channel: "META", id: { not: id } }, scope] } });
+      for (const sibling of siblings) {
+        const siblingVisibility = await readVisibility(sibling, viewer);
+        // Both the current transfer restriction and the original conversation's
+        // permissions apply. Unification must never reopen hidden history.
+        const messages = await prisma.message.findMany({ where: { AND: [
+          { conversationId: sibling.id }, periods.windowsWhere(visibility.windows, "occurredAt") || {},
+          periods.windowsWhere(siblingVisibility.windows, "occurredAt") || {}, await whatsappInbox.messageAccountScope(viewer),
+        ] }, include: { sentByUser: { select: { id: true, name: true } } } });
+        conversation.messages.push(...messages);
+      }
+      conversation.messages.sort((a, b) => a.occurredAt - b.occurredAt || a.id.localeCompare(b.id));
+    }
     const { pins, botState, ...result } = conversation;
     const latestInboundEmail = conversation.channel === "EMAIL"
       ? [...conversation.messages].reverse().find((message) => message.direction === "RECEBIDA" && message.type !== "reaction")
@@ -706,7 +735,7 @@ async function getConversation(id, viewer) {
 
 async function getConversationSummary(viewer) {
   const scope = await authorization.conversationScope(viewer);
-  const summaryScope = { AND: [scope, notManualSpam] };
+  const summaryScope = { AND: [scope, notManualSpam, whatsappInbox.canonicalScope] };
   const master = authorization.isMaster(viewer);
   const attentionScope = { AND: [summaryScope, { status: "AGUARDANDO_EQUIPE" }, {
     OR: [{ assignedUserId: null }, { assignedUserId: viewer.id }],
@@ -934,7 +963,7 @@ function optionalTransferText(value, label, maxLength) {
 }
 
 async function updateConversation(id, {
-  categoryId, status, assignedUserId, priority, limitHistory, shareHistory, transferReason, handoffSummary,
+  categoryId, status, assignedUserId, priority, limitHistory, shareHistory, transferReason, handoffSummary, whatsappSendAccountId,
 }, viewer) {
   if (shareHistory !== undefined && typeof shareHistory !== "boolean") {
     throw Object.assign(new Error("Informe se o histórico deve ser compartilhado."), { statusCode: 400 });
@@ -945,6 +974,7 @@ async function updateConversation(id, {
   const currentSnapshot = await prisma.conversation.findUnique({
     where: { id },
     include: {
+      contact: { select: { whatsappInboxId: true } },
       category: { include: { parent: true } },
       assignedUser: { select: { id: true, name: true } },
     },
@@ -965,7 +995,7 @@ async function updateConversation(id, {
       where: { id: categoryId, active: true }, include: { parent: true },
     });
     if (!targetCategory) throw Object.assign(new Error("Categoria não encontrada ou inativa."), { statusCode: 400 });
-    await authorization.assertChannelAccountAllowsCategory(currentSnapshot.channelAccountId, categoryId);
+    if (currentSnapshot.channel !== "META") await authorization.assertChannelAccountAllowsCategory(currentSnapshot.channelAccountId, categoryId);
     if (!authorization.isMaster(viewer) && (targetCategory.masterOnly || targetCategory.parent?.masterOnly)) {
       throw authorization.forbidden("Esta categoria e exclusiva para contas Master.");
     }
@@ -978,7 +1008,10 @@ async function updateConversation(id, {
   if (assignedUserId) {
     const user = await prisma.user.findFirst({ where: { id: assignedUserId, active: true } });
     if (!user) throw Object.assign(new Error("Atendente não encontrado ou inativo."), { statusCode: 400 });
-    if (!(await authorization.canAccessChannelAccount(user, currentSnapshot.channelAccountId))) {
+    const canUseSender = currentSnapshot.channel === "META" && currentSnapshot.contact.whatsappInboxId && categoryId !== undefined
+      ? (await whatsappInbox.senderState({ ...currentSnapshot, categoryId: targetCategory?.id || null, whatsappSendAccountId: null }, user)).options.length > 0
+      : await authorization.canAccessChannelAccount(user, currentSnapshot.channelAccountId);
+    if (!canUseSender) {
       throw Object.assign(new Error("O atendente não foi liberado para esta conta de canal."), { statusCode: 400 });
     }
     const targetCategoryId = categoryId !== undefined ? categoryId : currentAccess.categoryId;
@@ -990,6 +1023,18 @@ async function updateConversation(id, {
     throw authorization.forbidden("Você não pode transferir esta conversa.");
   }
   const data = {};
+  if (currentSnapshot.channel === "META" && categoryId !== undefined && categoryId !== currentSnapshot.categoryId) {
+    data.whatsappSendAccountId = null;
+    const candidates = whatsappInbox.routingCandidates(targetCategory, await prisma.channelAccount.findMany({ where: { channel: "META", enabled: true, status: "CONNECTED" } }));
+    data.channelAccountId = candidates.length === 1 && !candidates[0].config?.isLegacyWhatsApp ? candidates[0].id : null;
+  }
+  if (whatsappSendAccountId !== undefined) {
+    if (currentSnapshot.channel !== "META" || typeof whatsappSendAccountId !== "string") throw Object.assign(new Error("Remetente inválido."), { statusCode: 400 });
+    const state = await whatsappInbox.senderState({ ...currentSnapshot, categoryId: targetCategory?.id || null, whatsappSendAccountId }, viewer);
+    if (!state.account) throw Object.assign(new Error(state.reason), { statusCode: 409 });
+    data.whatsappSendAccountId = whatsappSendAccountId;
+    data.channelAccountId = state.account.config?.isLegacyWhatsApp ? null : state.account.id;
+  }
   if (categoryId !== undefined) data.categoryId = categoryId || null;
   if (assignedUserId !== undefined) data.assignedUserId = assignedUserId || null;
   if (priority !== undefined) data.priority = priority;
@@ -1109,6 +1154,10 @@ async function updateConversation(id, {
           details: { ...contact, from: currentSnapshot.priority, to: updated.priority },
         });
       }
+      if (whatsappSendAccountId !== undefined && currentSnapshot.whatsappSendAccountId !== updated.whatsappSendAccountId) audits.push({
+        action: "CONVERSATION_WHATSAPP_SENDER_CHANGED", summary: `Alterou o número de envio da conversa de ${contactDisplayName(updated.contact)}`,
+        details: { ...contact, from: currentSnapshot.whatsappSendAccountId, to: updated.whatsappSendAccountId },
+      });
       for (const entry of audits) {
         await audit.recordAudit({
           actor: viewer,
@@ -1169,6 +1218,11 @@ async function setConversationPinned(id, { pinned }, viewer) {
 }
 
 async function markAsRead(id, { channel, viewer } = {}) {
+  const requested = await prisma.conversation.findUnique({ where: { id }, select: { channel: true, contactId: true } });
+  if (requested?.channel === "META") {
+    const root = await whatsappInbox.findInbox(requested.contactId);
+    if (root && root.id !== id) return markAsRead(root.id, { channel, viewer });
+  }
   if (viewer && !authorization.isMaster(viewer) && !(await authorization.canActOnConversation(viewer, id))) {
     // Leitura passiva de supervisão: não zera as não lidas do atendente nem
     // confirma leitura ao cliente.
@@ -1185,7 +1239,7 @@ async function markAsRead(id, { channel, viewer } = {}) {
         externalId: { not: null },
       },
       orderBy: { occurredAt: "desc" },
-      select: { externalId: true },
+      select: { externalId: true, channelAccountId: true },
     }),
     prisma.message.findFirst({
       where: { conversationId: id, direction: "RECEBIDA", type: { not: "reaction" } },
@@ -1203,7 +1257,9 @@ async function markAsRead(id, { channel, viewer } = {}) {
     typeof channel?.markAsRead === "function"
   ) {
     try {
-      await channel.markAsRead(latestUnread.externalId);
+      const receiptChannel = latestUnread.channelAccountId ? (await require("./channels/channel-message-service").adapterFor("META", latestUnread.channelAccountId)).channel : channel;
+      const providerId = latestUnread.channelAccountId && latestUnread.externalId.startsWith(`${latestUnread.channelAccountId}:`) ? latestUnread.externalId.slice(latestUnread.channelAccountId.length + 1) : latestUnread.externalId;
+      await receiptChannel.markAsRead(providerId);
       readReceiptSent = true;
     } catch (error) {
       console.error(
@@ -1331,7 +1387,7 @@ async function listTransferCategories(conversationId, viewer) {
   const scope = await authorization.operationalScope(viewer);
   const conversation = await prisma.conversation.findFirst({
     where: { AND: [{ id: conversationId }, scope] },
-    select: { id: true, channelAccountId: true },
+    select: { id: true, channel: true, channelAccountId: true },
   });
   if (!conversation) throw Object.assign(new Error("Conversa não encontrada."), { statusCode: 404 });
 
@@ -1346,7 +1402,7 @@ async function listTransferCategories(conversationId, viewer) {
     include: { parent: { select: { id: true, name: true, code: true, active: true } } },
     orderBy: [{ displayOrder: "asc" }, { name: "asc" }],
   });
-  if (!conversation.channelAccountId) return categories.map((category) => ({ ...category, selectable: true }));
+  if (conversation.channel === "META" || !conversation.channelAccountId) return categories.map((category) => ({ ...category, selectable: true }));
 
   const account = await prisma.channelAccount.findUnique({
     where: { id: conversation.channelAccountId },

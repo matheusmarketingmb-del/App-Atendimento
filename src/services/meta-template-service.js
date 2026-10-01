@@ -23,22 +23,26 @@ function customerServiceWindowFrom(lastCustomerMessageAt, now = new Date(), conf
   };
 }
 
-async function getCustomerServiceWindow(conversationId, now = new Date()) {
+async function getCustomerServiceWindow(conversationId, now = new Date(), channelAccountId) {
+  const conversation = await prisma.conversation.findUnique({ where: { id: conversationId }, select: { contactId: true, channelAccountId: true, contact: { select: { whatsappInboxId: true } } } });
+  const selectedAccountId = channelAccountId === undefined ? conversation?.channelAccountId : channelAccountId;
   const latest = await prisma.message.findFirst({
     where: {
-      conversationId,
+      ...(conversation?.contact.whatsappInboxId ? { conversation: { contactId: conversation.contactId, channel: "META" } } : { conversationId }),
+      channelAccountId: selectedAccountId || null,
       direction: "RECEBIDA",
       type: { not: "reaction" },
-      externalId: { startsWith: "wamid." },
+      OR: [{ externalId: { startsWith: "wamid." } }, ...(selectedAccountId ? [{ externalId: { startsWith: `${selectedAccountId}:wamid.` } }] : [])],
     },
     orderBy: { occurredAt: "desc" },
     select: { occurredAt: true },
   });
-  return customerServiceWindowFrom(latest?.occurredAt, now);
+  const account = selectedAccountId ? await prisma.channelAccount.findUnique({ where: { id: selectedAccountId }, select: { config: true } }) : null;
+  return customerServiceWindowFrom(latest?.occurredAt, now, selectedAccountId ? Boolean(account?.config?.wabaId) : templatesConfigured());
 }
 
-async function assertFreeFormAllowed(conversationId) {
-  const window = await getCustomerServiceWindow(conversationId);
+async function assertFreeFormAllowed(conversationId, now = new Date(), channelAccountId) {
+  const window = await getCustomerServiceWindow(conversationId, now, channelAccountId);
   if (window.requiresTemplate) {
     throw Object.assign(new Error("A janela de 24 horas da Meta está encerrada. Envie um template aprovado para retomar o contato."), {
       statusCode: 409,
@@ -215,9 +219,11 @@ function templateComponents(template, values) {
   return components;
 }
 
-async function sendApprovedTemplate({ conversationId, name, language, values = {}, sentByUserId, channel }) {
+async function sendApprovedTemplate({ conversationId, name, language, values = {}, sentByUserId, channel, requestedAccountId }) {
   const conversation = await prisma.conversation.findUnique({ where: { id: conversationId }, include: { contact: true } });
   if (!conversation) throw Object.assign(new Error("Conversa não encontrada."), { statusCode: 404 });
+  if (requestedAccountId !== undefined) conversation.whatsappSendAccountId = requestedAccountId || "legacy";
+  await require("./whatsapp-inbox-service").applySender(conversation, sentByUserId);
   const providerChannel = conversation.channelAccountId ? (await channelMessageService.adapterFor("META", conversation.channelAccountId)).channel : channel;
   const templates = await providerChannel.listMessageTemplates();
   const template = templates.find((item) => item.name === name && item.language === language && item.status === "APPROVED");

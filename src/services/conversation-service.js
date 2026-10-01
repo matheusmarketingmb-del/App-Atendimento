@@ -1,4 +1,5 @@
 const prisma = require("../database/prisma");
+const whatsappInbox = require("./whatsapp-inbox-service");
 
 function normalizePhone(value = "") {
   return String(value).replace(/\D/g, "");
@@ -86,7 +87,11 @@ async function findOrCreateMetaConversation(event, db = prisma) {
     }
   });
 
-  const conversation = await db.conversation.upsert({
+  let conversation = await whatsappInbox.findInbox(contact.id, db);
+  if (!conversation) conversation = await db.conversation.findFirst({
+    where: { contactId: contact.id, channel: "META" }, orderBy: [{ lastMessageAt: "desc" }, { createdAt: "desc" }],
+  });
+  if (!conversation) conversation = await db.conversation.upsert({
     where: {
       contactId_channel_channelScope: {
         contactId: contact.id,
@@ -105,6 +110,8 @@ async function findOrCreateMetaConversation(event, db = prisma) {
       status: "NOVO"
     }
   });
+
+  conversation = await whatsappInbox.attachInbox(contact.id, conversation.id, db);
 
   return { contact, conversation };
 }

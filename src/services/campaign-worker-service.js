@@ -31,10 +31,10 @@ async function findOrCreateCampaignConversation({ phone, name, channelAccountId 
   const channelScope = channelAccountId || "LEGACY";
   for (const externalId of whatsappIdVariants(phone)) {
     const conversation = await client.conversation.findFirst({
-      where: { channel: "META", channelScope, contact: { is: { channel: "META", externalId } } },
+      where: { channel: "META", contact: { is: { channel: "META", externalId } } },
       select: { id: true, contactId: true },
     });
-    if (conversation) return conversation;
+    if (conversation) return await require("./whatsapp-inbox-service").findInbox(conversation.contactId, client) || conversation;
   }
   // Contato já existe com a outra grafia (com/sem 9º dígito): reaproveita.
   let knownContact = null;
@@ -53,11 +53,13 @@ async function findOrCreateCampaignConversation({ phone, name, channelAccountId 
       where: { contactId_channel_channelScope: { contactId: contact.id, channel: "META", channelScope } },
       select: { id: true, contactId: true },
     });
-    if (existing) return existing;
-    return transaction.conversation.create({
+    const root = await require("./whatsapp-inbox-service").findInbox(contact.id, transaction);
+    if (root || existing) return root || await require("./whatsapp-inbox-service").attachInbox(contact.id, existing.id, transaction);
+    const inserted = await transaction.conversation.create({
       data: { contactId: contact.id, channel: "META", channelScope, channelAccountId, status: "NOVO" },
       select: { id: true, contactId: true },
     });
+    return require("./whatsapp-inbox-service").attachInbox(contact.id, inserted.id, transaction);
   });
 }
 
@@ -224,7 +226,7 @@ async function processCampaign(campaign, channel, now) {
       const values = resolveTemplateValues(campaign, contact, contactTemplate);
       const result = await sendApprovedTemplate({
         conversationId: conversation.id, name: templateName, language: templateLanguage,
-        values, sentByUserId: campaign.origin === "PANEL" ? campaign.createdByUserId : null, channel: senderChannel,
+        values, sentByUserId: campaign.origin === "PANEL" ? campaign.createdByUserId : null, channel: senderChannel, requestedAccountId: campaign.channelAccountId || "legacy",
       });
       await prisma.campaignContact.updateMany({
         where: { id: contact.id, status: "SENDING" },

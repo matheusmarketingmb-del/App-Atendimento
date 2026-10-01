@@ -1,4 +1,5 @@
 const inbox = require("../services/inbox-service");
+const prisma = require("../database/prisma");
 const { resolveMedia } = require("../services/media-storage-service");
 const { finalizeConversation, sendDocument, sendImage, sendText, sendVideo } = require("../services/message-service");
 const inboxEvents = require("../realtime/inbox-events");
@@ -11,6 +12,7 @@ const { submitAgentFeedback } = require("../services/bot-agent-feedback-service"
 const { Channel: ChannelEnum } = require("@prisma/client");
 const contactMerge = require("../services/contact-merge-service");
 const channelMessageService = require("../services/channels/channel-message-service");
+const whatsappInbox = require("../services/whatsapp-inbox-service");
 const { createAdapter } = require("../services/channels/channel-adapter-registry");
 const { resolveForPost } = require("../services/channels/social-content-mapping-service");
 const { moderateMessage } = require("../services/channels/social-moderation-service");
@@ -50,8 +52,9 @@ function createInboxController(channel) {
       try {
         const conversation = await inbox.getConversation(req.params.id, req.user);
         if (!conversation) return res.status(404).json({ error: "Conversa não encontrada." });
+        const sender = conversation.channel === "META" && conversation.contact.whatsappInboxId ? await whatsappInbox.senderState(conversation, req.user) : null;
         const customerServiceWindow = conversation.channel === "META"
-          ? await getCustomerServiceWindow(conversation.id)
+          ? (sender && !sender.account ? customerServiceWindowFrom(null, new Date(), true) : await getCustomerServiceWindow(conversation.id, new Date(), sender ? (sender.account.config?.isLegacyWhatsApp ? null : sender.account.id) : undefined))
           : customerServiceWindowFrom(null, new Date(), false);
         const mergedDestinations = await contactMerge.getMergedDestinations(conversation.contact.id, req.user);
         const channelCaps = channelCapabilities(conversation.channel);
@@ -63,7 +66,8 @@ function createInboxController(channel) {
           : null;
         const transferCategories = conversation.accessMode === "SUPERVISION"
           ? [] : await inbox.listTransferCategories(conversation.id, req.user);
-        return res.json({ ...conversation, customerServiceWindow, mergedDestinations, channelCapabilities: channelCaps, postContext, transferCategories });
+        const whatsappSender = sender ? { selectedId: sender.selectedId, options: sender.options, reason: sender.reason } : null;
+        return res.json({ ...conversation, whatsappSender, customerServiceWindow, mergedDestinations, channelCapabilities: channelCaps, postContext, transferCategories });
       } catch (error) { return next(error); }
     },
     async mergeCandidates(req, res, next) {
@@ -82,7 +86,8 @@ function createInboxController(channel) {
         let providerChannel = channel;
         if (req.query.conversationId) {
           await authorization.assertCanActOnConversation(req.user, req.query.conversationId);
-          const conversation = await prisma.conversation.findUnique({ where: { id: req.query.conversationId }, select: { channelAccountId: true } });
+          const conversation = await prisma.conversation.findUnique({ where: { id: req.query.conversationId } });
+          await whatsappInbox.applySender(conversation, req.user.id);
           if (conversation?.channelAccountId) providerChannel = (await channelMessageService.adapterFor("META", conversation.channelAccountId)).channel;
         } else if (req.query.accountId && req.query.accountId !== "legacy") {
           if (!(await authorization.canAccessChannelAccount(req.user, req.query.accountId))) throw authorization.forbidden("Você não tem acesso a este número.");

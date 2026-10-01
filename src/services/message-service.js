@@ -5,6 +5,7 @@ const { removeImage, storeAudio, storeDocument, storeImage, storeSticker, storeV
 const { formatTeamMessage } = require("./team-message-formatter");
 const { getConversationSettings } = require("./conversation-settings-service");
 const channelMessageService = require("./channels/channel-message-service");
+const whatsappInbox = require("./whatsapp-inbox-service");
 const { buildPublicMediaUrl } = require("./channels/social-media-link-service");
 const statuses = { sent: "ENVIADA", delivered: "ENTREGUE", read: "LIDA", failed: "FALHOU" };
 const closingMessage = "Agradecemos pelo seu contato. Se precisar de qualquer ajuda, estamos à disposição. Você pode voltar a falar conosco quando quiser.";
@@ -33,6 +34,7 @@ async function saveIncoming(event) {
       if (event.type !== "reaction") {
         await tx.conversation.update({ where: { id: conversation.id }, data: {
           unreadCount: { increment: 1 }, lastMessageAt: event.occurredAt,
+          ...(!conversation.categoryId && !conversation.assignedUserId ? { channelAccountId: event.channelAccountId || null } : {}),
         } });
         // Reabertura de conversa finalizada (itens 7 e 8): só reabre se a
         // conversa realmente estava FINALIZADO (evita gravar atividade em
@@ -46,7 +48,7 @@ async function saveIncoming(event) {
           if (withinWindow) {
             const reopened = await tx.conversation.updateMany({
               where: { id: conversation.id, status: "FINALIZADO" },
-              data: { categoryId: null, assignedUserId: null, status: "NOVO", finalizedAt: null },
+              data: { categoryId: null, assignedUserId: null, status: "NOVO", finalizedAt: null, whatsappSendAccountId: null, channelAccountId: event.channelAccountId || null },
             });
             if (reopened.count) {
               // Reabertura limpa o responsável: encerra o período em aberto.
@@ -276,7 +278,8 @@ async function sendText({ conversationId, text, sentByUserId, channel }) {
       ...emailContext, text,
     });
   } else if (conversation.channel === "META") {
-    await require("./meta-template-service").assertFreeFormAllowed(conversationId);
+    await whatsappInbox.applySender(conversation, sentByUserId);
+    await require("./meta-template-service").assertFreeFormAllowed(conversationId, new Date(), conversation.channelAccountId);
     providerText = formatTeamMessage(conversation.category, text);
     if (providerText.length > 4096) {
       throw Object.assign(new Error("A mensagem ficou acima do limite após adicionar o nome da equipe."), { statusCode: 400 });
@@ -348,7 +351,8 @@ async function sendImage({ conversationId, buffer, mimeType, fileName, caption, 
     return sendSocialMedia({ conversation, buffer, mimeType, fileName, caption, sentByUserId, type: "image", store: storeImage });
   }
   if (conversation.channel !== "META") throw Object.assign(new Error("Este canal ainda não está liberado para anexos pela Central."), { statusCode: 409 });
-  await require("./meta-template-service").assertFreeFormAllowed(conversationId);
+  await whatsappInbox.applySender(conversation, sentByUserId);
+  await require("./meta-template-service").assertFreeFormAllowed(conversationId, new Date(), conversation.channelAccountId);
   const cleanCaption = caption?.trim() || null;
   const providerCaption = formatTeamMessage(conversation.category, cleanCaption || "");
   if (providerCaption.length > 1024) {
@@ -387,7 +391,8 @@ async function sendVideo({ conversationId, buffer, mimeType, fileName, caption, 
     return sendSocialMedia({ conversation, buffer, mimeType, fileName, caption, sentByUserId, type: "video", store: storeVideo });
   }
   if (conversation.channel !== "META") throw Object.assign(new Error("Este canal ainda não está liberado para anexos pela Central."), { statusCode: 409 });
-  await require("./meta-template-service").assertFreeFormAllowed(conversationId);
+  await whatsappInbox.applySender(conversation, sentByUserId);
+  await require("./meta-template-service").assertFreeFormAllowed(conversationId, new Date(), conversation.channelAccountId);
   const cleanCaption = caption?.trim() || null;
   const providerCaption = formatTeamMessage(conversation.category, cleanCaption || "");
   if (providerCaption.length > 1024) {
@@ -426,7 +431,8 @@ async function sendDocument({ conversationId, buffer, mimeType, fileName, captio
     return sendSocialMedia({ conversation, buffer, mimeType, fileName, caption, sentByUserId, type: "document", store: storeDocument });
   }
   if (conversation.channel !== "META") throw Object.assign(new Error("Este canal ainda não está liberado para anexos pela Central."), { statusCode: 409 });
-  await require("./meta-template-service").assertFreeFormAllowed(conversationId);
+  await whatsappInbox.applySender(conversation, sentByUserId);
+  await require("./meta-template-service").assertFreeFormAllowed(conversationId, new Date(), conversation.channelAccountId);
   const cleanCaption = caption?.trim() || null;
   const providerCaption = formatTeamMessage(conversation.category, cleanCaption || "");
   if (providerCaption.length > 1024) {

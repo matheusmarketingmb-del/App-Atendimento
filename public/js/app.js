@@ -1153,6 +1153,7 @@ async function openConversation(id, { refreshList = true, markRead = true } = {}
   if (markRead) await api(`/api/conversations/${id}/read`, { method:"POST" });
   const c = await api(`/api/conversations/${id}`);
   if (loadSequence !== conversationLoadSequence || state.selectedId !== id) return;
+  if (c.id !== id) { state.selectedId = c.id; id = c.id; }
   const headerSignature = JSON.stringify({
     id: c.id,
     status: c.status,
@@ -1167,7 +1168,7 @@ async function openConversation(id, { refreshList = true, markRead = true } = {}
     contact: [c.contact.id, c.contact.customName, c.contact.name, c.contact.email, c.contact.phone],
     messageHistoryLimited: c.messageHistoryLimited,
     accessMode: c.accessMode,
-    senderAccount: [c.channelAccountId, c.channelAccount?.name, c.channelAccount?.providerMetadata?.username],
+    senderAccount: [c.channelAccountId, c.channelAccount?.name, c.channelAccount?.providerMetadata?.username, c.whatsappSender],
     customerServiceWindow: c.customerServiceWindow,
     mergedDestinations: (c.mergedDestinations || []).map((item) => [item.id, item.channel, item.contact?.email, item.contact?.phone, item.channelAccount?.name]),
     transferCategories: (c.transferCategories || []).map((category) => [category.id, category.parentId, category.name, category.active, category.selectable]),
@@ -1199,7 +1200,12 @@ async function openConversation(id, { refreshList = true, markRead = true } = {}
     $("#contact-avatar").textContent = initials(name); $("#contact-name").textContent = name; $("#contact-phone").textContent = c.contact.email || (c.contact.phone ? `+${c.contact.phone}` : "");
     $("#conversation-sender").hidden = c.channel !== "META";
     $("#conversation-sender").textContent = c.channel === "META"
-      ? `Enviando por: ${c.channelAccount?.name || "WhatsApp principal"}${c.channelAccount?.providerMetadata?.username ? ` · ${c.channelAccount.providerMetadata.username}` : ""}. A categoria não muda o número.` : "";
+      ? (c.whatsappSender ? (c.whatsappSender.reason || `Enviando por: ${c.whatsappSender.options.find(o => o.id === c.whatsappSender.selectedId)?.name || "Selecione o número"}`) : `Enviando por: ${c.channelAccount?.name || "WhatsApp principal"}`) : "";
+    $("#whatsapp-sender-label").hidden = !c.whatsappSender || c.accessMode === "SUPERVISION";
+    const senderSelect = $("#whatsapp-sender-select");
+    senderSelect.replaceChildren(new Option("Selecione o número", ""));
+    for (const option of c.whatsappSender?.options || []) senderSelect.add(new Option(`${option.name}${option.address ? ` · ${option.address}` : ""}`, option.id));
+    senderSelect.value = c.whatsappSender?.selectedId || "";
     $("#merge-contact").hidden = !state.currentUser?.canMergeContacts;
     renderMergedDestinations(c.mergedDestinations, c.id);
     const primaryCategory = c.category?.parent || (c.category && !c.category.parentId ? c.category : null);
@@ -2646,3 +2652,10 @@ document.addEventListener("click", (event) => {
 
 $("#supervision-button").addEventListener("click", () => window.WaSupervision?.open());
 $("#assignment-timeline").addEventListener("click", () => { if (state.selectedId) window.WaSupervision?.openTimeline(state.selectedId); });
+$("#whatsapp-sender-select").addEventListener("change", async (event) => {
+  if (!state.selectedId || !event.target.value) return;
+  try {
+    await api(`/api/conversations/${state.selectedId}`, { method: "PATCH", body: JSON.stringify({ whatsappSendAccountId: event.target.value }) });
+    await openConversation(state.selectedId, { markRead: false });
+  } catch (error) { alert(error.message); }
+});

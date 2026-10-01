@@ -34,6 +34,7 @@ function publicAccount(account) {
     secretHints: Object.fromEntries(account.secretKeys.map((key) => [key, hints[key] || maskSecret("****")])),
     allowedUsers: rest.accessUsers || [],
     allowedCategoryIds: Array.isArray(config?.allowedCategoryIds) ? config.allowedCategoryIds : [],
+    outboundCategoryIds: Array.isArray(config?.outboundCategoryIds) ? config.outboundCategoryIds : [],
   };
 }
 
@@ -127,6 +128,7 @@ async function createAccount(data, actor) {
 async function updateAccount(id, data, actor) {
   assertIntegrationManager(actor);
   const existing = await ensureAccount(id);
+  if (existing.config?.isLegacyWhatsApp && (data.config !== undefined || data.secrets !== undefined || data.externalAccountId !== undefined)) throw fail("As credenciais do número principal são gerenciadas na configuração do servidor. Use Acessos para configurar os setores de envio.");
   const update = {};
   if (data.name !== undefined) {
     const name = String(data.name).trim();
@@ -292,7 +294,7 @@ async function deleteAccount(id, actor) {
   return { deleted: true };
 }
 
-async function setAccountAccess(id, userIds, categoryIds, actor) {
+async function setAccountAccess(id, userIds, categoryIds, actor, outboundCategoryIds) {
   if (actor === undefined) { actor = categoryIds; categoryIds = undefined; }
   assertIntegrationManager(actor);
   const account = await ensureAccount(id);
@@ -301,6 +303,10 @@ async function setAccountAccess(id, userIds, categoryIds, actor) {
   if (!Array.isArray(categoryIds) || categoryIds.some((value) => typeof value !== "string" || !value)) throw fail("categoryIds deve ser uma lista de categorias.");
   const uniqueIds = [...new Set(userIds)];
   const uniqueCategoryIds = [...new Set(categoryIds)];
+  if (outboundCategoryIds === undefined) outboundCategoryIds = account.config?.outboundCategoryIds || [];
+  if (!Array.isArray(outboundCategoryIds) || outboundCategoryIds.some((value) => typeof value !== "string" || !value)) throw fail("Categorias de envio inválidas.");
+  const uniqueOutboundIds = [...new Set(outboundCategoryIds)];
+  if (uniqueOutboundIds.length !== await prisma.category.count({ where: { id: { in: uniqueOutboundIds }, active: true } })) throw fail("Uma categoria de envio é inválida ou inativa.");
   const [validUsers, validCategories] = await Promise.all([
     uniqueIds.length ? prisma.user.findMany({ where: { id: { in: uniqueIds }, active: true }, select: { id: true } }) : [],
     uniqueCategoryIds.length ? prisma.category.findMany({ where: { id: { in: uniqueCategoryIds }, active: true }, select: { id: true } }) : [],
@@ -311,12 +317,12 @@ async function setAccountAccess(id, userIds, categoryIds, actor) {
   await prisma.$transaction(async (transaction) => {
     await transaction.channelAccountUserAccess.deleteMany({ where: { channelAccountId: id } });
     if (uniqueIds.length) await transaction.channelAccountUserAccess.createMany({ data: uniqueIds.map((userId) => ({ channelAccountId: id, userId })) });
-    await transaction.channelAccount.update({ where: { id }, data: { config: { ...currentConfig, allowedCategoryIds: uniqueCategoryIds } } });
+    await transaction.channelAccount.update({ where: { id }, data: { config: { ...currentConfig, allowedCategoryIds: uniqueCategoryIds, outboundCategoryIds: uniqueOutboundIds } } });
   });
   await audit.recordAudit({
     actor, action: "CHANNEL_ACCOUNT_ACCESS_UPDATED", entityType: "CHANNEL_ACCOUNT", entityId: id,
     summary: `Atualizou os acessos da conta "${account.name}"`,
-    details: { channel: account.channel, userIds: uniqueIds, categoryIds: uniqueCategoryIds },
+    details: { channel: account.channel, userIds: uniqueIds, categoryIds: uniqueCategoryIds, outboundCategoryIds: uniqueOutboundIds },
   });
   return publicAccount(await prisma.channelAccount.findUnique({
     where: { id }, include: { accessUsers: { include: { user: { select: { id: true, name: true, email: true } } } } },
