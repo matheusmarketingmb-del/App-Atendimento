@@ -1,4 +1,5 @@
 const quickReplies = require("../services/quick-reply-service");
+const { resolveMedia } = require("../services/media-storage-service");
 
 module.exports = {
   async list(req, res, next) {
@@ -29,6 +30,34 @@ module.exports = {
   async preview(req, res, next) {
     try { return res.json(quickReplies.previewQuickReplyText(req.body.text || "", req.user)); }
     catch (error) { return next(error); }
+  },
+
+  async createPersonalAudio(req, res, next) {
+    try { return res.status(201).json(await quickReplies.createPersonalAudio(req.body, req.file, req.user)); }
+    catch (error) { return next(error); }
+  },
+
+  async updatePersonalAudio(req, res, next) {
+    try { return res.json(await quickReplies.updatePersonalAudio(req.params.id, req.body, req.file, req.user)); }
+    catch (error) { return next(error); }
+  },
+
+  async deletePersonalAudio(req, res, next) {
+    try { return res.json(await quickReplies.deletePersonalAudio(req.params.id, req.user)); }
+    catch (error) { return next(error); }
+  },
+
+  async audio(req, res, next) {
+    try {
+      const audio = await quickReplies.getQuickReplyAudio(req.params.id, req.user);
+      res.set({
+        "Content-Type": audio.mimeType,
+        "Content-Disposition": `inline; filename="${encodeURIComponent(audio.fileName || "audio")}"`,
+        "Cache-Control": "private, no-store",
+        "X-Content-Type-Options": "nosniff",
+      });
+      return res.sendFile(resolveMedia(audio.storageKey));
+    } catch (error) { return next(error); }
   },
 
   // Seletor do composer (item 7/10) — qualquer atendente autenticado.

@@ -216,6 +216,20 @@ enum QuickReplyType {
   AUTOMATED_REPLY
 }
 
+// Escopo da resposta rápida: GLOBAL (gerida pelo Master, visível conforme
+// canal/setor) ou PERSONAL (biblioteca do próprio atendente — só o dono vê).
+enum QuickReplyScope {
+  GLOBAL
+  PERSONAL
+}
+
+// Conteúdo da resposta rápida: TEXT (texto com variáveis) ou AUDIO
+// (arquivo no storage de mídia — no banco só a referência/metadados).
+enum QuickReplyContentType {
+  TEXT
+  AUDIO
+}
+
 enum QuickReplyUsageSource {
   AGENT
   BOT_SUGGESTION
@@ -376,6 +390,7 @@ model Message {
   mediaMimeType    String?
   mediaFileName    String?
   mediaSize        Int?
+  mediaDurationMs  Int?
   // Item de segurança (file-risk-service.js#assessFileRisk): mídia recebida
   // de canais sem allowlist estrito de MIME (chat interno + canais além do
   // WhatsApp/Meta — ver media-storage-service.js#validateInternalFile) que
@@ -443,6 +458,7 @@ model User {
   agentFeedback                BotAgentFeedback[]
   handoffContextsResumed       BotHandoffContext[]      @relation("HandoffResumedByUser")
   quickRepliesCreated          QuickReply[]             @relation("QuickReplyCreatedBy")
+  quickRepliesOwned            QuickReply[]             @relation("QuickReplyOwner")
   quickReplyFavorites          QuickReplyFavorite[]     @relation("QuickReplyFavoriteUser")
   quickReplyUsages             QuickReplyUsage[]        @relation("QuickReplyUsageUser")
   suggestionFeedbackGiven      BotSuggestionFeedback[]  @relation("SuggestionFeedbackUser")
@@ -1476,6 +1492,15 @@ model QuickReply {
   availableToAgents Boolean        @default(true)
   availableToBots   Boolean        @default(false)
   type              QuickReplyType @default(QUICK_REPLY)
+  scope             QuickReplyScope       @default(GLOBAL)
+  contentType       QuickReplyContentType @default(TEXT)
+  // Dono de uma resposta PERSONAL (nulo para GLOBAL).
+  ownerUserId       String?
+  mediaStorageKey   String?
+  mediaMimeType     String?
+  mediaFileName     String?
+  mediaSize         Int?
+  mediaDurationMs   Int?
   active            Boolean        @default(true)
   archivedAt        DateTime?
   createdByUserId   String?
@@ -1484,6 +1509,7 @@ model QuickReply {
 
   category                Category?            @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   createdBy               User?                @relation("QuickReplyCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  owner                   User?                @relation("QuickReplyOwner", fields: [ownerUserId], references: [id], onDelete: Cascade)
   intents                 QuickReplyIntent[]
   favorites               QuickReplyFavorite[]
   usages                  QuickReplyUsage[]
@@ -1492,6 +1518,7 @@ model QuickReply {
   @@index([active, categoryId])
   @@index([shortcut])
   @@index([createdAt])
+  @@index([scope, ownerUserId])
 }
 
 // Liga uma resposta rápida a uma ou mais BotIntent existentes (nunca
