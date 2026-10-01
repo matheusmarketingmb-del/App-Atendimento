@@ -6,6 +6,7 @@ const multer = require("multer");
 const { rateLimit } = require("express-rate-limit");
 const prisma = require("./database/prisma");
 const MetaCloudChannel = require("./channels/meta-cloud-channel");
+const { routeMetaWebhook } = require("./services/meta-webhook-routing-service");
 const { saveIncoming, updateStatus, sendTextToPhone } = require("./services/message-service");
 const { handleIncomingTriage } = require("./services/triage-bot-service");
 const { observeIncomingMessage } = require("./services/bot-observation-service");
@@ -154,20 +155,13 @@ function createApp({ channel = new MetaCloudChannel() } = {}) {
 
   app.post("/webhook/whatsapp", webhookLimiter, verifyMetaSignature, async (req, res) => {
     try {
-      const incomingPhoneNumberId = req.body?.entry?.[0]?.changes?.[0]?.value?.metadata?.phone_number_id || null;
-      let eventChannel = channel;
-      let channelAccountId = null;
-      if (incomingPhoneNumberId && incomingPhoneNumberId !== process.env.PHONE_NUMBER_ID) {
-        const metaAccounts = await prisma.channelAccount.findMany({ where: { channel: "META", enabled: true, status: "CONNECTED" } });
-        const account = metaAccounts.find((item) => item.externalAccountId === incomingPhoneNumberId || item.config?.phoneNumberId === incomingPhoneNumberId);
-        if (!account) return res.sendStatus(404);
-        const adapter = createAdapter("META", { ...account, secrets: decryptAccountSecretsSafe(account) });
-        eventChannel = adapter.channel;
-        channelAccountId = account.id;
-      }
-      const events = eventChannel.parseWebhook(req.body).map((event) => ({ ...event, channelAccountId }));
+      const metaAccounts = await prisma.channelAccount.findMany({ where: { channel: "META", enabled: true, status: "CONNECTED" } });
+      const events = await routeMetaWebhook(req.body, {
+        legacyChannel: channel, legacyPhoneNumberId: process.env.PHONE_NUMBER_ID, accounts: metaAccounts,
+        createAccountChannel: (account) => createAdapter("META", { ...account, secrets: decryptAccountSecretsSafe(account) }).channel,
+      });
       let changed = false;
-      for (const event of events) {
+      for (const { event, eventChannel } of events) {
         // Item de segurança (resiliência do lote): uma falha ao processar UM
         // evento (ex.: mídia deliberadamente malformada — ver
         // media-storage-service.js#validateDocument, que agora pode lançar
@@ -242,6 +236,7 @@ function createApp({ channel = new MetaCloudChannel() } = {}) {
       if (changed) inboxEvents.publish();
       return res.status(200).json({ received: true, processed: events.length });
     } catch (error) {
+      if (error.statusCode === 404) return res.sendStatus(404);
       console.error("Erro ao processar webhook:", error);
       return res.sendStatus(500);
     }

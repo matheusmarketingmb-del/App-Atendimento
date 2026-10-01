@@ -73,8 +73,16 @@ test("painel e backend preparam atendentes, áreas e escolha do número", () => 
   assert.match(integrations, /allowedCategoryIds/);
   assert.match(inbox, /outbound-meta-account/);
   assert.match(authorization, /channelAccountScope/);
-  assert.match(webhook, /metadata\?\.phone_number_id/);
+  assert.match(webhook, /routeMetaWebhook/);
   assert.match(integrations, /Master, acesso permanente/);
   assert.doesNotMatch(integrations, /state\.users\.filter\(\(user\) => user\.role !== "ADMIN"\)/);
   assert.match(integrationsCss, /\.account-dialog\{[^}]*background:var\(--surface\)/);
+});
+
+test("conta sem credenciais nunca usa número/token principal como fallback", () => {
+  const adapter = new MetaAdapter({ name: "Comercial", config: {}, secrets: {} });
+  assert.equal(adapter.channel.phoneNumberId, null);
+  assert.equal(adapter.channel.accessToken, null);
+  assert.equal(adapter.channel.wabaId, null);
+  assert.throws(() => adapter.channel.assertConfigured(), /ausente/);
 });

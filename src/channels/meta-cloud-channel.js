@@ -3,9 +3,9 @@ const axios = require("axios");
 class MetaCloudChannel {
   constructor(options = {}) {
     this.graphVersion = options.graphVersion || process.env.GRAPH_VERSION;
-    this.phoneNumberId = options.phoneNumberId || process.env.PHONE_NUMBER_ID;
-    this.accessToken = options.accessToken || process.env.WHATSAPP_TOKEN;
-    this.wabaId = options.wabaId || process.env.WHATSAPP_BUSINESS_ACCOUNT_ID;
+    this.phoneNumberId = options.phoneNumberId || (options.accountScoped ? null : process.env.PHONE_NUMBER_ID);
+    this.accessToken = options.accessToken || (options.accountScoped ? null : process.env.WHATSAPP_TOKEN);
+    this.wabaId = options.wabaId || (options.accountScoped ? null : process.env.WHATSAPP_BUSINESS_ACCOUNT_ID);
     this.appId = options.appId || process.env.META_APP_ID;
     this.appSecret = options.appSecret || process.env.META_APP_SECRET;
     this.tokenSource = options.accessToken ? "CHANNEL_ACCOUNT" : "WHATSAPP_TOKEN";

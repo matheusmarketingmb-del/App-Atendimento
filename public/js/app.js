@@ -1167,6 +1167,7 @@ async function openConversation(id, { refreshList = true, markRead = true } = {}
     contact: [c.contact.id, c.contact.customName, c.contact.name, c.contact.email, c.contact.phone],
     messageHistoryLimited: c.messageHistoryLimited,
     accessMode: c.accessMode,
+    senderAccount: [c.channelAccountId, c.channelAccount?.name, c.channelAccount?.providerMetadata?.username],
     customerServiceWindow: c.customerServiceWindow,
     mergedDestinations: (c.mergedDestinations || []).map((item) => [item.id, item.channel, item.contact?.email, item.contact?.phone, item.channelAccount?.name]),
     transferCategories: (c.transferCategories || []).map((category) => [category.id, category.parentId, category.name, category.active, category.selectable]),
@@ -1196,6 +1197,9 @@ async function openConversation(id, { refreshList = true, markRead = true } = {}
     state.selectedHeaderSignature = headerSignature;
     const name = c.contact.customName || c.contact.name || c.contact.email || c.contact.phone;
     $("#contact-avatar").textContent = initials(name); $("#contact-name").textContent = name; $("#contact-phone").textContent = c.contact.email || (c.contact.phone ? `+${c.contact.phone}` : "");
+    $("#conversation-sender").hidden = c.channel !== "META";
+    $("#conversation-sender").textContent = c.channel === "META"
+      ? `Enviando por: ${c.channelAccount?.name || "WhatsApp principal"}${c.channelAccount?.providerMetadata?.username ? ` · ${c.channelAccount.providerMetadata.username}` : ""}. A categoria não muda o número.` : "";
     $("#merge-contact").hidden = !state.currentUser?.canMergeContacts;
     renderMergedDestinations(c.mergedDestinations, c.id);
     const primaryCategory = c.category?.parent || (c.category && !c.category.parentId ? c.category : null);

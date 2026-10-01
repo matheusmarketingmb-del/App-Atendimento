@@ -9,6 +9,7 @@ class MetaAdapter extends ChannelAdapter {
   constructor(account, channel = null) {
     super(account);
     this.channel = channel || new MetaCloudChannel(account ? {
+      accountScoped: true,
       graphVersion: account.config?.graphVersion,
       phoneNumberId: account.config?.phoneNumberId || account.externalAccountId,
       wabaId: account.config?.wabaId,
