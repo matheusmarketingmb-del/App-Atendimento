@@ -653,6 +653,8 @@ function syncCustomerServiceWindow() {
   $("#composer").classList.toggle("window-closed", closed);
   $("#message-input").disabled = closed;
   $("#attachment-input").disabled = closed;
+  $("#open-attachments").disabled = closed;
+  if (closed) closeAttachmentMenu();
   $("#send-button").disabled = closed;
   $("#message-input").placeholder = closed ? (canUseTemplates ? "Use um template aprovado para retomar o contato" : "Envio indisponível") : "Digite uma mensagem...";
 }
@@ -701,7 +703,8 @@ function syncSocialReplyMode(channel, capabilities) {
   // Comentários não suportam mídia pela API (capabilities.canSendMedia) —
   // esconder o anexo evita o atendente tentar e só descobrir pelo erro.
   const canAttach = capabilities ? Boolean(capabilities.canSendMedia) : true;
-  $("#attachment-input").closest(".attach-image").hidden = isComment && !canAttach;
+  $("#attachment-input").closest(".composer-attach").hidden = isComment && !canAttach;
+  if (isComment && !canAttach) closeAttachmentMenu();
 }
 
 const MODERATION_CONFIRM_TEXT = {
@@ -2445,6 +2448,8 @@ function syncAudioAvailability() {
   const windowClosed = $("#composer").classList.contains("window-closed");
   const allowed = canSendAudioHere() && !windowClosed;
   button.disabled = !allowed || isAudioRecording();
+  $("#choose-audio").disabled = button.disabled;
+  $("#choose-audio").title = !allowed ? "Envio de áudio indisponível neste canal ou janela" : "Escolher arquivo de áudio";
   button.title = !canSendAudioHere() ? "Este canal ainda não suporta envio de áudio"
     : (windowClosed ? "Janela de 24 horas encerrada — use um template" : (supportsAudioRecording() ? "Gravar áudio" : "Gravar áudio (abre o gravador do aparelho)"));
   button.setAttribute("aria-label", button.title);
@@ -2637,7 +2642,43 @@ async function sendPendingAudio() {
   }
 }
 
-$("#record-audio").addEventListener("click", () => startAudioRecording().catch((error) => toast(error.message, true)));
+function closeAttachmentMenu() {
+  $("#attachment-menu").hidden = true;
+  $("#open-attachments").setAttribute("aria-expanded", "false");
+}
+$("#open-attachments").addEventListener("click", () => {
+  const menu = $("#attachment-menu");
+  const opening = menu.hidden;
+  menu.hidden = !opening;
+  $("#open-attachments").setAttribute("aria-expanded", String(opening));
+  if (opening) menu.querySelector("button:not(:disabled)")?.focus();
+});
+document.addEventListener("click", (event) => {
+  if (!event.target.closest(".composer-attach")) closeAttachmentMenu();
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !$("#attachment-menu").hidden) {
+    closeAttachmentMenu();
+    $("#open-attachments").focus();
+  }
+});
+$("#choose-attachment").addEventListener("click", () => {
+  closeAttachmentMenu();
+  $("#attachment-input").click();
+});
+$("#choose-audio").addEventListener("click", () => {
+  closeAttachmentMenu();
+  $("#audio-file-input").click();
+});
+$("#audio-file-input").addEventListener("change", (event) => {
+  const file = event.target.files?.[0];
+  event.target.value = "";
+  selectAudioFile(file).catch((error) => toast(error.message, true));
+});
+$("#record-audio").addEventListener("click", () => {
+  closeAttachmentMenu();
+  startAudioRecording().catch((error) => toast(error.message, true));
+});
 $("#audio-stop").addEventListener("click", stopAudioRecording);
 $("#audio-pause").addEventListener("click", toggleAudioPause);
 $("#audio-cancel").addEventListener("click", discardComposerAudio);

@@ -33,6 +33,45 @@ test("nada é enviado automaticamente: concluir gravação, escolher arquivo ou 
   assert.match(fnBody("sendPendingAudio"), /\/api\/conversations\/\$\{conversationId\}\/audios/);
 });
 
+test("menu + reúne arquivo, gravação e áudio, fecha por Escape e mantém as restrições", () => {
+  assert.match(html, /id="open-attachments"[^>]*aria-expanded="false"/);
+  assert.match(html, /id="attachment-menu"[^>]*hidden/);
+  for (const id of ["choose-attachment", "choose-audio", "audio-file-input"]) assert.match(html, new RegExp(`id="${id}"`));
+  assert.doesNotMatch(html, /class="audio-record-button"/);
+  assert.match(js, /if \(event.key === "Escape"/);
+  assert.match(js, /\$\("#choose-audio"\)\.disabled = button\.disabled/);
+  assert.match(js, /\$\("#open-attachments"\)\.disabled = closed/);
+  assert.match(js, /closest\("\.composer-attach"\)/);
+});
+
+test("menu + abre, fecha fora/Escape e aciona apenas a opção escolhida", () => {
+  const vm = require("node:vm");
+  const elements = new Map();
+  const handlers = {};
+  let recordings = 0;
+  const get = (id) => {
+    if (!elements.has(id)) elements.set(id, { hidden:true, clicks:0, attributes:{}, handlers:{}, focus() {}, querySelector() { return get("#choose-attachment"); }, setAttribute(key, value) { this.attributes[key] = value; }, addEventListener(type, handler) { this.handlers[type] = handler; }, click() { this.clicks++; } });
+    return elements.get(id);
+  };
+  const context = vm.createContext({ $:get, document:{ addEventListener:(type, handler) => { handlers[type] = handler; } }, startAudioRecording:() => { recordings++; return Promise.resolve(); }, toast() {}, selectAudioFile:() => Promise.resolve() });
+  vm.runInContext(js.slice(js.indexOf("function closeAttachmentMenu()"), js.indexOf('$("#audio-stop").addEventListener')), context);
+  const open = () => get("#open-attachments").handlers.click();
+  open();
+  assert.equal(get("#attachment-menu").hidden, false);
+  assert.equal(get("#open-attachments").attributes["aria-expanded"], "true");
+  get("#choose-attachment").handlers.click();
+  assert.equal(get("#attachment-input").clicks, 1);
+  assert.equal(get("#attachment-menu").hidden, true);
+  open(); get("#choose-audio").handlers.click();
+  assert.equal(get("#audio-file-input").clicks, 1);
+  open(); get("#record-audio").handlers.click();
+  assert.equal(recordings, 1);
+  open(); handlers.keydown({ key:"Escape" });
+  assert.equal(get("#attachment-menu").hidden, true);
+  open(); handlers.click({ target:{ closest:() => null } });
+  assert.equal(get("#attachment-menu").hidden, true);
+});
+
 test("permissão de microfone negada mostra aviso e mantém o envio por arquivo", () => {
   assert.match(fnBody("startAudioRecording"), /Permissão de microfone necessária para gravar áudio\./);
   assert.match(fnBody("startAudioRecording"), /NotAllowedError/);

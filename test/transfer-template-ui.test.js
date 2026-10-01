@@ -8,9 +8,10 @@ function harness() {
   const storage = new Map();
   const state = { selectedId: "conversation", currentUser: { id: "agent", canManageCampaigns: true }, customerServiceWindow: { configured: true, requiresTemplate: true, state: "NOT_STARTED", senderAccountId: "commercial", senderName: "Comercial" } };
   const context = vm.createContext({ state, localStorage: { getItem: key => storage.get(key), setItem: (key, value) => storage.set(key, value) }, escapeHtml: value => String(value).replaceAll("<", "&lt;"), $: selector => {
-    if (!elements.has(selector)) elements.set(selector, { classList: { toggle() {} }, querySelectorAll: () => [] });
+    if (!elements.has(selector)) elements.set(selector, { classList: { toggle() {} }, querySelectorAll: () => [], setAttribute() {} });
     return elements.get(selector);
   } });
+  vm.runInContext(source.slice(source.indexOf("function closeAttachmentMenu()"), source.indexOf('$("#open-attachments").addEventListener')), context);
   vm.runInContext(source.slice(source.indexOf("function syncCustomerServiceWindow()"), source.indexOf("function templateRateLabel(")), context);
   return { state, elements, storage, run: code => vm.runInContext(code, context) };
 }

@@ -1940,6 +1940,15 @@ html[data-theme="dark"] .workspace[data-channel-view="email"] .conversation-card
 .faq-item p{margin:0;padding:0 16px 15px;color:var(--muted);font-size:12px;line-height:1.6}
 html[data-theme="dark"] .faq-permission.enabled{color:#82dba1;background:#193324}
 /* ---- Áudio: gravação, preview no composer, player e respostas rápidas pessoais ---- */
+.composer-attach { position:relative; flex:none; align-self:center; }
+.composer-attach[hidden],.attachment-menu[hidden] { display:none; }
+.attachment-menu { position:absolute; bottom:calc(100% + 10px); left:0; z-index:30; width:210px; max-width:calc(100vw - 32px); padding:6px; border:1px solid var(--line); border-radius:14px; background:#fff; box-shadow:0 8px 28px rgba(0,0,0,.2); }
+.attachment-menu button { width:100%; display:flex; align-items:center; gap:10px; padding:12px; border:0; border-radius:9px; text-align:left; background:transparent; color:#333; font:inherit; font-size:13px; cursor:pointer; }
+.attachment-menu button:hover:not(:disabled),.attachment-menu button:focus-visible { background:#fff0e9; outline:2px solid var(--orange); outline-offset:-2px; }
+.attachment-menu button:disabled { opacity:.45; cursor:not-allowed; }
+html[data-theme="dark"] .attachment-menu { background:#22262c; border-color:#383d45; }
+html[data-theme="dark"] .attachment-menu button { color:#cbd0d6; }
+html[data-theme="dark"] .attachment-menu button:hover:not(:disabled),html[data-theme="dark"] .attachment-menu button:focus-visible { background:#372a23; }
 .audio-record-button { width:44px; height:44px; flex:none; display:grid; place-items:center; padding:0; border:1px solid var(--line); border-radius:50%; color:#555; background:#fff; cursor:pointer; }
 .audio-record-button svg { width:20px; height:20px; fill:currentColor; }
 .audio-record-button:hover:not(:disabled) { border-color:var(--orange); color:var(--orange); }
