@@ -67,6 +67,8 @@ function createInboxController(channel) {
         const transferCategories = conversation.accessMode === "SUPERVISION"
           ? [] : await inbox.listTransferCategories(conversation.id, req.user);
         const whatsappSender = sender ? { selectedId: sender.selectedId, options: sender.options, reason: sender.reason } : null;
+        if (sender && !sender.account) customerServiceWindow.state = "SENDER_UNAVAILABLE";
+        customerServiceWindow.senderName = sender?.options.find(option => option.id === sender.selectedId)?.name || conversation.channelAccount?.name || "WhatsApp principal";
         return res.json({ ...conversation, whatsappSender, customerServiceWindow, mergedDestinations, channelCapabilities: channelCaps, postContext, transferCategories });
       } catch (error) { return next(error); }
     },

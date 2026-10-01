@@ -88,6 +88,24 @@ test("janela de 24h é por número, inclusive no histórico antigo", async () =>
   const closed = await getCustomerServiceWindow(root.id, new Date(), b.id);
   assert.equal(closed.open, false);
   assert.equal(closed.requiresTemplate, true);
+  assert.equal(closed.state, "EXPIRED");
+  assert.equal(closed.senderAccountId, b.id);
+});
+test("transferência para número sem recebimento pede iniciação, template não abre janela", async () => {
+  const customer = await prisma.contact.create({ data: { channel: "META", externalId: "5511888888888", phone: "5511888888888" } });
+  const conversation = await prisma.conversation.create({ data: { contactId: customer.id, channel: "META", channelAccountId: a.id, channelScope: a.id } });
+  await unified.attachInbox(customer.id, conversation.id);
+  await prisma.message.create({ data: { conversationId: conversation.id, channel: "META", channelAccountId: a.id, direction: "RECEBIDA", status: "RECEBIDA", type: "text", externalId: "wamid.transfer-a", text: "Olá", occurredAt: new Date() } });
+  assert.equal((await getCustomerServiceWindow(conversation.id, new Date(), b.id)).state, "NOT_STARTED");
+  await prisma.message.create({ data: { conversationId: conversation.id, channel: "META", channelAccountId: b.id, direction: "ENVIADA", status: "ENVIADA", type: "template", text: "Iniciar", occurredAt: new Date() } });
+  const waiting = await getCustomerServiceWindow(conversation.id, new Date(), b.id);
+  assert.equal(waiting.state, "AWAITING_REPLY");
+  assert.equal(waiting.requiresTemplate, true);
+  assert.equal(waiting.open, false);
+  await prisma.message.create({ data: { conversationId: conversation.id, channel: "META", channelAccountId: b.id, direction: "RECEBIDA", status: "RECEBIDA", type: "text", externalId: "wamid.transfer-b", text: "Oi", occurredAt: new Date(Date.now() + 1) } });
+  assert.equal((await getCustomerServiceWindow(conversation.id, new Date(), b.id)).state, "OPEN");
+  // Retorno ao número original reutiliza a própria janela, não cria outra conversa.
+  assert.equal((await getCustomerServiceWindow(conversation.id, new Date(), a.id)).state, "OPEN");
 });
 test("trocar categoria limpa escolha manual e muda conta operacional", async () => {
   await assert.rejects(inbox.updateConversation(root.id, { whatsappSendAccountId: a.id }, master), e => e.statusCode === 400);

@@ -295,12 +295,13 @@ test("middleware bloqueia templates e campanhas sem permissão individual", () =
   assert.equal(nextCalled, true);
 });
 
-test("frontend oculta templates e aviso de 24h para usuário sem permissão", () => {
+test("frontend mantém aviso explicativo e oculta ações de templates sem permissão", () => {
   const js = fs.readFileSync(path.join(__dirname, "../public/js/app.js"), "utf8");
   const app = fs.readFileSync(path.join(__dirname, "../src/app.js"), "utf8");
   const controller = fs.readFileSync(path.join(__dirname, "../src/controllers/inbox-controller.js"), "utf8");
   assert.match(js, /open-templates[^\n]+!configured \|\| !canUseTemplates/);
-  assert.match(js, /service-window-notice[^\n]+!closed \|\| !canUseTemplates/);
+  assert.match(js, /service-window-notice[^\n]+!closed/);
+  assert.match(js, /open-required-template[^\n]+!canUseTemplates \|\| unavailable/);
   assert.match(app, /api\/meta\/templates[^\n]+requireCampaignAccess/);
   assert.match(controller, /replyTemplate[\s\S]{0,100}assertCanManageCampaigns/);
 });

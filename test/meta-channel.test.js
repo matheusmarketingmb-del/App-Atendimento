@@ -6,6 +6,7 @@ const MetaCloudChannel = require("../src/channels/meta-cloud-channel");
 test("interpreta todas as mensagens e status de um webhook", () => {
   const channel = new MetaCloudChannel();
   const events = channel.parseWebhook({ entry: [{ changes: [{ value: {
+    metadata: { phone_number_id: "recipient-test" },
     contacts: [{ wa_id: "5511999999999", profile: { name: "Cliente" } }],
     messages: [
       { id: "wamid.1", from: "5511999999999", type: "text", text: { body: "Olá" }, timestamp: "1700000000" },
@@ -21,6 +22,7 @@ test("interpreta todas as mensagens e status de um webhook", () => {
   assert.equal(events.length, 8);
   assert.equal(events[0].contactName, "Cliente");
   assert.equal(events[0].text, "Olá");
+  assert.equal(events[0].rawPayload.recipientPhoneNumberId, "recipient-test");
   assert.equal(events[1].text, "Foto do produto");
   assert.equal(events[1].mediaId, "media.2");
   assert.equal(events[1].mediaMimeType, "image/jpeg");

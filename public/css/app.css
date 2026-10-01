@@ -1336,6 +1336,11 @@ html[data-theme="dark"] .changelog-release-heading b {
 .service-window-notice[hidden] { display: none; }
 .service-window-notice span { display: grid; gap: 2px; }
 .service-window-notice small { color: #89513e; }
+.pinned-transfer-templates { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.service-window-notice .pinned-template { padding: 6px 10px; font-size: 12px; }
+.template-card-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; align-items: start; }
+.template-pin { padding: 9px; border: 1px solid var(--orange); border-radius: 8px; color: var(--text); background: transparent; cursor: pointer; }
+.template-pin[aria-pressed="true"] { color: var(--orange); }
 
 /* Item 24/48 do plano Social — nunca deixar ambíguo se a resposta será
    pública (comentário do Instagram/Facebook) ou privada (Direct/Messenger).

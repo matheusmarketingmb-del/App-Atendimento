@@ -16,6 +16,7 @@ function customerServiceWindowFrom(lastCustomerMessageAt, now = new Date(), conf
   return {
     configured,
     open,
+    state: open ? "OPEN" : last ? "EXPIRED" : "NOT_STARTED",
     requiresTemplate: configured && !open,
     lastCustomerMessageAt: last?.toISOString() || null,
     expiresAt: expiresAt?.toISOString() || null,
@@ -38,13 +39,27 @@ async function getCustomerServiceWindow(conversationId, now = new Date(), channe
     select: { occurredAt: true },
   });
   const account = selectedAccountId ? await prisma.channelAccount.findUnique({ where: { id: selectedAccountId }, select: { config: true } }) : null;
-  return customerServiceWindowFrom(latest?.occurredAt, now, selectedAccountId ? Boolean(account?.config?.wabaId) : templatesConfigured());
+  const window = customerServiceWindowFrom(latest?.occurredAt, now, selectedAccountId ? Boolean(account?.config?.wabaId) : templatesConfigured());
+  if (!window.open) {
+    const initiation = await prisma.message.findFirst({ where: {
+      ...(conversation?.contact.whatsappInboxId ? { conversation: { contactId: conversation.contactId, channel: "META" } } : { conversationId }),
+      channelAccountId: selectedAccountId || null, direction: "ENVIADA", type: "template",
+      status: { in: ["ENVIADA", "ENTREGUE", "LIDA"] },
+      occurredAt: { gt: latest?.occurredAt || new Date(0), gte: new Date(now.getTime() - CUSTOMER_SERVICE_WINDOW_MS) },
+    }, select: { occurredAt: true }, orderBy: { occurredAt: "desc" } });
+    if (initiation) { window.state = "AWAITING_REPLY"; window.lastTemplateSentAt = initiation.occurredAt.toISOString(); }
+  }
+  window.senderAccountId = selectedAccountId || "legacy";
+  return window;
 }
 
 async function assertFreeFormAllowed(conversationId, now = new Date(), channelAccountId) {
   const window = await getCustomerServiceWindow(conversationId, now, channelAccountId);
   if (window.requiresTemplate) {
-    throw Object.assign(new Error("A janela de 24 horas da Meta está encerrada. Envie um template aprovado para retomar o contato."), {
+    throw Object.assign(new Error(window.state === "NOT_STARTED"
+      ? "É necessário iniciar o contato neste número com um template aprovado. A resposta do cliente abre a janela de 24 horas."
+      : window.state === "AWAITING_REPLY" ? "Um template já foi enviado neste número. Aguarde a resposta do cliente para liberar o envio normal."
+      : "A janela de 24 horas deste número está encerrada. Envie um template aprovado e aguarde a resposta do cliente."), {
       statusCode: 409,
       code: "TEMPLATE_REQUIRED",
       details: { customerServiceWindow: window },

@@ -618,12 +618,42 @@ function syncCustomerServiceWindow() {
   const closed = Boolean(state.selectedId && state.customerServiceWindow?.requiresTemplate);
   const canUseTemplates = Boolean(state.currentUser?.canManageCampaigns);
   $("#open-templates").hidden = !configured || !canUseTemplates;
-  $("#service-window-notice").hidden = !closed || !canUseTemplates;
+  const unavailable = state.customerServiceWindow?.state === "SENDER_UNAVAILABLE";
+  const notStarted = state.customerServiceWindow?.state === "NOT_STARTED";
+  const awaitingReply = state.customerServiceWindow?.state === "AWAITING_REPLY";
+  const senderName = state.customerServiceWindow?.senderName || "número selecionado";
+  $("#service-window-notice").hidden = !closed;
+  $("#service-window-title").textContent = unavailable ? "Número de envio indisponível" : awaitingReply ? `Aguardando resposta — ${senderName}` : notStarted ? `Iniciar conversa — ${senderName}` : `Janela de 24 horas encerrada — ${senderName}`;
+  $("#service-window-description").textContent = unavailable
+    ? "Peça ao Master para conferir os Acessos e a configuração deste setor."
+    : awaitingReply ? "Um template já foi enviado neste número. Aguarde a resposta do cliente para liberar o envio normal por 24 horas."
+    : `${notStarted ? "Ainda não há mensagem recebida do cliente neste número. A transferência não abre a janela." : "A última mensagem do cliente neste número passou de 24 horas."} ${canUseTemplates ? "Envie um template aprovado; a resposta do cliente libera o envio normal por 24 horas." : "Peça a alguém com permissão de templates para iniciar o contato."}`;
+  $("#open-required-template").hidden = !canUseTemplates || unavailable;
+  $("#open-templates").hidden ||= unavailable;
+  renderPinnedTransferTemplates();
   $("#composer").classList.toggle("window-closed", closed);
   $("#message-input").disabled = closed;
   $("#attachment-input").disabled = closed;
   $("#send-button").disabled = closed;
   $("#message-input").placeholder = closed ? (canUseTemplates ? "Use um template aprovado para retomar o contato" : "Envio indisponível") : "Digite uma mensagem...";
+}
+
+// Favoritos pessoais por usuário e número, sem misturar WABAs ou armazenar mensagens.
+function templatePinsKey() {
+  return `mibro-template-pins:${state.currentUser?.id || "anonymous"}:${state.customerServiceWindow?.senderAccountId || "legacy"}`;
+}
+function templatePins() {
+  try {
+    const pins = JSON.parse(localStorage.getItem(templatePinsKey()) || "[]");
+    return Array.isArray(pins) ? pins.filter(p => typeof p?.name === "string" && typeof p?.language === "string").slice(0, 20) : [];
+  } catch { return []; }
+}
+function templatePinMatches(pin, template) { return pin.name === template.name && pin.language === template.language; }
+function renderPinnedTransferTemplates() {
+  const target = $("#pinned-transfer-templates");
+  const pins = state.currentUser?.canManageCampaigns && state.customerServiceWindow?.state !== "SENDER_UNAVAILABLE" ? templatePins() : [];
+  target.innerHTML = pins.map((pin, index) => `<button type="button" class="pinned-template" data-pinned-template="${index}" title="Selecionar template fixado; o envio exige confirmação">📌 ${escapeHtml(pin.name)} (${escapeHtml(pin.language)})</button>`).join("");
+  target.querySelectorAll("[data-pinned-template]").forEach(button => button.addEventListener("click", () => openTemplates(pins[Number(button.dataset.pinnedTemplate)])));
 }
 
 function templateRateLabel(template) {
@@ -709,7 +739,19 @@ function renderTemplateEditor() {
 function renderTemplateList() {
   const search = $("#template-search").value.trim().toLocaleLowerCase("pt-BR");
   const templates = state.templates.filter((template) => `${template.name} ${template.language} ${template.category}`.toLocaleLowerCase("pt-BR").includes(search));
-  $("#template-list").innerHTML = templates.length ? templates.map((template) => `<button class="template-card ${state.selectedTemplate?.id === template.id ? "selected" : ""}" type="button" data-template-id="${escapeHtml(template.id)}" ${template.supported ? "" : "disabled"} title="${escapeHtml(template.unsupportedReason || "Selecionar template")}"><strong>${escapeHtml(template.name)}</strong><span><b>${escapeHtml(template.language)}</b><b>${escapeHtml(template.category)}</b></span><small>${escapeHtml(template.unsupportedReason || template.preview || "Sem prévia")}</small><em class="template-rate">${escapeHtml(templateRateLabel(template))}</em></button>`).join("") : `<div class="template-empty">Nenhum template aprovado encontrado.</div>`;
+  $("#template-list").innerHTML = templates.length ? templates.map((template) => `<div class="template-card-row"><button class="template-card ${state.selectedTemplate?.id === template.id ? "selected" : ""}" type="button" data-template-id="${escapeHtml(template.id)}" ${template.supported ? "" : "disabled"} title="${escapeHtml(template.unsupportedReason || "Selecionar template")}"><strong>${escapeHtml(template.name)}</strong><span><b>${escapeHtml(template.language)}</b><b>${escapeHtml(template.category)}</b></span><small>${escapeHtml(template.unsupportedReason || template.preview || "Sem prévia")}</small><em class="template-rate">${escapeHtml(templateRateLabel(template))}</em></button><button type="button" class="template-pin" data-pin-template="${escapeHtml(template.id)}" aria-pressed="${templatePins().some(pin => templatePinMatches(pin, template))}" ${template.supported ? "" : "disabled"} title="Fixar por usuário e número neste navegador">${templatePins().some(pin => templatePinMatches(pin, template)) ? "Desafixar" : "📌 Fixar"}</button></div>`).join("") : `<div class="template-empty">Nenhum template aprovado encontrado.</div>`;
+  document.querySelectorAll("[data-pin-template]").forEach(button => button.addEventListener("click", () => {
+    const template = state.templates.find(item => item.id === button.dataset.pinTemplate);
+    if (!template?.supported) return;
+    const pins = templatePins();
+    const present = pins.some(pin => templatePinMatches(pin, template));
+    if (!present && pins.length >= 20) return toast("Limite de 20 templates fixados por número.", true);
+    try {
+      localStorage.setItem(templatePinsKey(), JSON.stringify(present ? pins.filter(pin => !templatePinMatches(pin, template)) : [...pins, { name: template.name, language: template.language }]));
+      renderTemplateList();
+      renderPinnedTransferTemplates();
+    } catch { toast("Não foi possível salvar o favorito neste navegador.", true); }
+  }));
   document.querySelectorAll("[data-template-id]").forEach((button) => button.addEventListener("click", () => {
     state.selectedTemplate = state.templates.find((template) => template.id === button.dataset.templateId) || null;
     renderTemplateList();
@@ -717,7 +759,7 @@ function renderTemplateList() {
   }));
 }
 
-async function openTemplates() {
+async function openTemplates(pinnedTemplate) {
   if (!state.selectedId) return;
   if (!state.currentUser?.canManageCampaigns) return toast("Você não tem permissão para usar templates.", true);
   if (!state.customerServiceWindow?.configured) {
@@ -729,9 +771,18 @@ async function openTemplates() {
   $("#template-list").innerHTML = `<div class="template-empty">Consultando templates aprovados na Meta...</div>`;
   renderTemplateEditor();
   $("#template-dialog").showModal();
+  const conversationId = state.selectedId;
+  const senderId = state.customerServiceWindow?.senderAccountId;
   try {
-    state.templates = await api(`/api/meta/templates?conversationId=${encodeURIComponent(state.selectedId)}`);
+    const templates = await api(`/api/meta/templates?conversationId=${encodeURIComponent(conversationId)}`);
+    if (state.selectedId !== conversationId || state.customerServiceWindow?.senderAccountId !== senderId) { $("#template-dialog").close(); return; }
+    state.templates = templates;
+    if (pinnedTemplate?.name) {
+      state.selectedTemplate = templates.find(template => template.supported && templatePinMatches(pinnedTemplate, template)) || null;
+      if (!state.selectedTemplate) toast("O template fixado não está mais disponível neste número.", true);
+    }
     renderTemplateList();
+    renderTemplateEditor();
   } catch (error) {
     $("#template-list").innerHTML = `<div class="template-empty">${escapeHtml(error.message)}</div>`;
   }

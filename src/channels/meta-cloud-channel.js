@@ -128,7 +128,7 @@ class MetaCloudChannel {
           reactionEmoji: reaction?.emoji ?? null,
           mediaId: media?.id, mediaMimeType: media?.mime_type,
           mediaFileName: media?.filename || null,
-          occurredAt: new Date(Number(message.timestamp) * 1000), rawPayload: message,
+          occurredAt: new Date(Number(message.timestamp) * 1000), rawPayload: { ...message, recipientPhoneNumberId: value.metadata?.phone_number_id || null },
         });
       }
       for (const status of value.statuses || []) events.push({
