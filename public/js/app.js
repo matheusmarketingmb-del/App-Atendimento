@@ -1781,6 +1781,12 @@ $("#toggle-filters-panel").addEventListener("click", () => {
   setFiltersPanelCollapsed(!$(".workspace").classList.contains("filters-collapsed"));
 });
 $("#toggle-conversation-list").addEventListener("click", () => {
+  if (innerWidth <= 1000) {
+    setConversationListCollapsed(false);
+    $("#chat-panel").classList.remove("open");
+    closeContextPanel();
+    return;
+  }
   setConversationListCollapsed(!$(".workspace").classList.contains("conversation-list-collapsed"));
 });
 
@@ -1806,7 +1812,7 @@ function setSidebarExpanded(expanded, persist = true) {
 $("#sidebar-collapse-toggle").addEventListener("click", () => setSidebarExpanded(!$("#app-sidebar").classList.contains("expanded")));
 $("#sidebar-toggle").addEventListener("click", () => $("#app-sidebar").classList.toggle("mobile-open"));
 document.addEventListener("click", (event) => {
-  if (innerWidth > 700) return;
+  if (innerWidth > 1000) return;
   if (!$("#app-sidebar").classList.contains("mobile-open")) return;
   if (event.target.closest("#app-sidebar") || event.target.closest("#sidebar-toggle")) return;
   $("#app-sidebar").classList.remove("mobile-open");

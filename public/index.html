@@ -19,6 +19,7 @@
   <link rel="stylesheet" href="/css/responsive.css">
   <link rel="stylesheet" href="/css/whatsapp-send.css?v=1">
   <link rel="stylesheet" href="/css/supervision.css?v=1">
+  <link rel="stylesheet" href="/css/layout-fit.css?v=1">
 </head>
 <body>
   <header class="topbar">
@@ -154,11 +155,13 @@
   <button id="merge-contact" class="contact-merge-button" type="button" title="Fundir com outro contato" hidden>Fundir</button>
 </div>
           <div class="chat-actions">
+            <div id="chat-secondary-actions" class="chat-secondary-actions">
             <button id="pin-conversation" class="secondary-action" type="button" title="Fixar esta conversa somente para minha conta">☆ Fixar</button>
             <button id="context-panel-toggle" class="secondary-action" type="button" title="Detalhes da conversa">Detalhes</button>
             <button id="notes-toggle" class="secondary-action" type="button">Notas</button>
             <button id="history-toggle" class="secondary-action" type="button">Histórico</button>
             <button id="assignment-timeline" class="secondary-action" type="button" title="Quem atendeu e quando (supervisão)" hidden>Atendimento</button>
+            </div>
             <span id="category-missing-hint" class="category-missing-hint" role="status" title="Esta conversa ainda não possui categoria definida." hidden>⚠ Sem categoria</span>
             <select id="category-select" aria-label="Categoria principal"></select>
             <select id="subcategory-select" aria-label="Subcategoria" hidden></select>
@@ -622,5 +625,6 @@
   <script src="/js/internal-chat.js"></script>
   <script src="/js/pwa.js"></script>
   <script src="/js/command-palette.js"></script>
+  <script src="/js/layout-fit.js?v=1"></script>
 </body>
 </html>
