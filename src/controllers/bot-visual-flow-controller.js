@@ -29,5 +29,18 @@ module.exports = {
   simulate: handle((req) => flows.simulateFlow(req.params.botId, req.params.flowId, req.body || {}, req.user)),
   executions: handle((req) => flows.listExecutions(req.params.botId, req.params.flowId, req.user)),
   executionLogs: handle((req) => flows.getExecutionLogs(req.params.botId, req.params.flowId, req.params.executionId, req.user)),
-  executionMode: handle((req) => flows.setExecutionMode(req.params.botId, req.body?.executionMode, req.user)),
+  async uploadMedia(req, res, next) {
+    try {
+      if (!req.file) return res.status(400).json({ error: "Envie um arquivo." });
+      return res.status(201).json(await flows.uploadFlowMedia(req.params.botId, {
+        kind: String(req.body?.kind || "").toUpperCase(), buffer: req.file.buffer, mimeType: req.file.mimetype, fileName: req.file.originalname,
+      }, req.user));
+    } catch (error) { return next(error); }
+  },
+  async media(req, res, next) {
+    try {
+      res.set("Cache-Control", "private, max-age=300");
+      return res.sendFile(await flows.getFlowMediaPath(req.params.botId, req.params.storageKey, req.user));
+    } catch (error) { return next(error); }
+  },
 };

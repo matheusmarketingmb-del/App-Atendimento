@@ -33,7 +33,7 @@ test("atalhos ficam agrupados na sidebar e preservam IDs únicos", () => {
   }
   for (const id of [
     "enable-notifications", "manage-devices", "bots-button", "integrations-button",
-    "quick-replies-admin-button", "knowledge-base-button", "campaigns-button",
+    "quick-replies-admin-button", "campaigns-button",
     "conversation-settings-button", "team-button",
   ]) assert.equal((html.match(new RegExp('id="' + id + '"', "g")) || []).length, 1);
 });

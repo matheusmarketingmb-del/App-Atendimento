@@ -1,27 +1,34 @@
-// Flow Builder (Editor Visual de Bots): CRUD de fluxos, draft/publicação/
-// versões/rollback, simulação (dry-run) e a execução real ligada ao webhook.
+// Flow Builder (Editor Visual de Bots) — ÚNICO modelo de Bot: CRUD de
+// fluxos, draft/publicação/versões/rollback, upload de mídia dos nós,
+// simulação (dry-run) e a execução real ligada ao webhook do WhatsApp.
 //
 // Regras de segurança da execução real (handleIncomingVisualFlow):
-//   - só roda para Bot com executionMode = FLOW_BUILDER, status ACTIVE,
-//     autoReplyEnabled = true e automação global ligada (kill switch);
-//   - nunca responde conversa assumida por humano, pausada ou finalizada
-//     (mesma regra de triage-bot-service.js#botIsAllowedToRespond);
-//   - resposta gerada por IA NUNCA é enviada: passa pelo send-mode atual
-//     (DRY_RUN) — ver runFlowAiStep em bot-ai-shadow-service.js;
-//   - Bots LEGACY (todos os existentes) não passam por aqui: o webhook segue
-//     para a triagem atual como antes.
+//   - só roda para Bot com status ACTIVE, autoReplyEnabled = true e
+//     automação global ligada (kill switch). Bots ARCHIVED_LEGACY nunca rodam;
+//   - nunca responde conversa assumida por humano, pausada ("Cancelar Bot")
+//     ou finalizada;
+//   - nenhum nó usa IA: o fluxo é 100% determinístico.
 
+const fs = require("node:fs/promises");
 const prisma = require("../database/prisma");
 const audit = require("./audit-service");
-const { assertBotManager } = require("./bot-version-service");
-const { getGlobalSettings } = require("./bot-governance-service");
-const { getRecentContext } = require("./bot-conversation-state-service");
-const { KnowledgeSourceProvider } = require("./bot-knowledge/knowledge-provider");
-const { defaultGraph, nodeTypeCatalog, normalizeGraph, validateGraph } = require("./bot-visual-flow-graph");
+const authorization = require("./authorization-service");
+const media = require("./media-storage-service");
+const { assertBotManager, getGlobalSettings } = require("./bot-governance-service");
+const { activeResponseMap } = require("./bot-response-library-service");
+const webhookEndpoints = require("./bot-webhook-endpoint-service");
+const { describeSchedule, scheduleState } = require("./bot-schedule-utils");
+const {
+  FLOW_VARIABLES, MEDIA_KINDS, STORAGE_KEY_PATTERN, SYSTEM_VARIABLES, defaultGraph, nodeTypeCatalog, normalizeGraph, validateGraph,
+} = require("./bot-visual-flow-graph");
 const { FINISHED_STATUSES, STATUS, runTurn } = require("./bot-visual-flow-engine");
 
 const FLOW_STATUSES = new Set(["DRAFT", "ACTIVE", "INACTIVE"]);
 const MAX_SIM_STATE_BYTES = 100 * 1024;
+const WHATSAPP_LIST_MAX_ROWS = 10;
+const MEDIA_STORE = { IMAGE: media.storeImage, AUDIO: media.storeAudio, VIDEO: media.storeVideo, DOCUMENT: media.storeDocument };
+const MEDIA_MESSAGE_TYPE = { IMAGE: "image", AUDIO: "audio", VIDEO: "video", DOCUMENT: "document" };
+const CHANNEL_MEDIA_SENDER = { IMAGE: "sendImage", AUDIO: "sendAudio", VIDEO: "sendVideo", DOCUMENT: "sendDocument" };
 
 function fail(message, statusCode = 400, extra = {}) {
   return Object.assign(new Error(message), { statusCode, ...extra });
@@ -31,8 +38,12 @@ function actorFields(actor, prefix) {
   return { [`${prefix}UserId`]: actor?.id || null, [`${prefix}Name`]: actor?.name || null };
 }
 
+const botScheduleInclude = { schedules: true, holidays: true };
+
 async function ensureBot(botId, client = prisma) {
-  const bot = await client.bot.findFirst({ where: { id: botId, archivedAt: null } });
+  const bot = await client.bot.findFirst({
+    where: { id: botId, archivedAt: null, status: { not: "ARCHIVED_LEGACY" } }, include: botScheduleInclude,
+  });
   if (!bot) throw fail("Bot não encontrado.", 404);
   return bot;
 }
@@ -40,7 +51,7 @@ async function ensureBot(botId, client = prisma) {
 async function ensureFlow(botId, flowId, client = prisma) {
   const flow = await client.botFlow.findFirst({
     where: { id: flowId, botId, archivedAt: null },
-    include: { activeVersion: { select: { id: true, version: true, createdAt: true, publishedByName: true } } },
+    include: { activeVersion: { select: { id: true, version: true, createdAt: true, publishedByName: true, graph: true } } },
   });
   if (!flow) throw fail("Fluxo não encontrado.", 404);
   return flow;
@@ -66,7 +77,6 @@ function cleanName(value) {
 async function listFlows(botId, viewer) {
   assertBotManager(viewer);
   await ensureBot(botId);
-  // Listagem = metadata; o grafo só vem ao abrir o editor (getFlow).
   const flows = await prisma.botFlow.findMany({
     where: { botId, archivedAt: null },
     select: {
@@ -88,8 +98,8 @@ async function getFlow(botId, flowId, viewer) {
     select: { id: true, version: true, label: true, publishedByName: true, createdAt: true },
   });
   return {
-    ...flowSummary(flow), graph: flow.draftGraph,
-    bot: { id: bot.id, name: bot.name, executionMode: bot.executionMode, status: bot.status, autoReplyEnabled: bot.autoReplyEnabled },
+    ...flowSummary(flow), graph: normalizeGraph(flow.draftGraph),
+    bot: { id: bot.id, name: bot.name, status: bot.status, autoReplyEnabled: bot.autoReplyEnabled, type: bot.type },
     versions,
   };
 }
@@ -102,27 +112,24 @@ async function getFlowVersion(botId, flowId, version, viewer) {
   return { version: row.version, label: row.label, graph: row.graph, publishedByName: row.publishedByName, createdAt: row.createdAt };
 }
 
-// Dados para os selects do painel de propriedades (setores/usuários do
-// banco — nunca nomes fixos no código).
+// Dados para os selects do painel de propriedades (setores/usuários/fluxos/
+// respostas/endpoints do banco — nunca nomes fixos no código).
 async function getEditorOptions(botId, viewer) {
   assertBotManager(viewer);
-  await ensureBot(botId);
-  const [categories, users, flows] = await Promise.all([
+  const bot = await ensureBot(botId);
+  const [categories, users, flows, responses, webhooks] = await Promise.all([
     prisma.category.findMany({ where: { active: true }, select: { id: true, name: true, parentId: true }, orderBy: [{ displayOrder: "asc" }, { name: "asc" }] }),
     prisma.user.findMany({ where: { active: true, role: { not: "BOT" } }, select: { id: true, name: true, role: true }, orderBy: { name: "asc" } }),
-    prisma.botFlow.findMany({ where: { botId, archivedAt: null }, select: { id: true, name: true } }),
+    prisma.botFlow.findMany({ where: { botId, archivedAt: null }, select: { id: true, name: true, status: true, isDefault: true, activeVersionId: true }, orderBy: { createdAt: "asc" } }),
+    prisma.botResponse.findMany({ where: { active: true }, select: { key: true, title: true, category: true, text: true }, orderBy: [{ category: "asc" }, { key: "asc" }] }),
+    prisma.botWebhookEndpoint.findMany({ where: { active: true }, select: { key: true, name: true, method: true }, orderBy: { key: "asc" } }),
   ]);
   return {
-    nodeTypes: nodeTypeCatalog(), categories, users, flows,
-    aiProviders: [{ id: "LOCAL_QWEN", label: "IA local (Qwen + RAG)" }],
-    variables: [
-      "contact.name", "contact.firstName", "contact.phone", "contact.email",
-      "conversation.id", "conversation.channel",
-      "bot.intent", "bot.product", "bot.confidence", "bot.needsHuman", "bot.action", "bot.answer", "bot.reason",
-      "flow.selectedOption", "flow.lastAnswer", "flow.lastMessage",
-      "knowledge.result", "knowledge.sources", "knowledge.confidence",
-      "customer.cnpj", "customer.orderNumber",
-    ],
+    bot: { id: bot.id, name: bot.name, channels: bot.channels?.length ? bot.channels : [bot.channel] },
+    nodeTypes: nodeTypeCatalog(), categories, users, responses, webhooks,
+    flows: flows.map((flow) => ({ id: flow.id, name: flow.name, status: flow.status, isDefault: flow.isDefault, published: Boolean(flow.activeVersionId) })),
+    mediaKinds: MEDIA_KINDS,
+    variables: [...SYSTEM_VARIABLES, ...FLOW_VARIABLES, "customer.orderNumber", "customer.cnpj", "customer.cpf", "customer.email", "custom.campo"],
   };
 }
 
@@ -138,7 +145,6 @@ async function createFlow(botId, { name, description } = {}, actor) {
       draftGraph: defaultGraph(), isDefault: existing === 0,
       ...actorFields(actor, "createdBy"), ...actorFields(actor, "updatedBy"),
     },
-    include: { activeVersion: { select: { version: true } } },
   });
   await audit.recordAudit({
     actor, action: "BOT_FLOW_CREATED", entityType: "BOT", entityId: botId,
@@ -148,7 +154,7 @@ async function createFlow(botId, { name, description } = {}, actor) {
 }
 
 // Salvar = só o draft. Um fluxo ACTIVE continua executando a versão
-// publicada (activeVersionId) — nunca é alterado silenciosamente.
+// publicada (activeVersionId) — editar nunca altera o que está no ar.
 async function saveDraft(botId, flowId, { name, description, graph, expectedDraftUpdatedAt } = {}, actor) {
   assertBotManager(actor);
   const flow = await ensureFlow(botId, flowId);
@@ -166,31 +172,48 @@ async function saveDraft(botId, flowId, { name, description, graph, expectedDraf
   return getFlow(botId, flowId, actor);
 }
 
-async function loadValidationRefs(botId) {
-  const [categories, users, flows] = await Promise.all([
+async function existingMediaKeys(graph) {
+  const keys = [...new Set((graph.nodes || []).filter((node) => node.type === "media" && node.config?.storageKey).map((node) => node.config.storageKey))];
+  const found = new Set();
+  for (const key of keys) {
+    try { await fs.access(media.resolveMedia(key)); found.add(key); } catch (_error) { /* inexistente */ }
+  }
+  return found;
+}
+
+async function loadValidationRefs(botId, flowId, graph) {
+  const [categories, users, flows, responses, webhooks, mediaKeys] = await Promise.all([
     prisma.category.findMany({ where: { active: true }, select: { id: true } }),
     prisma.user.findMany({ where: { active: true, role: { not: "BOT" } }, select: { id: true } }),
     prisma.botFlow.findMany({ where: { botId, archivedAt: null }, select: { id: true } }),
+    prisma.botResponse.findMany({ where: { active: true }, select: { key: true } }),
+    prisma.botWebhookEndpoint.findMany({ where: { active: true }, select: { key: true } }),
+    existingMediaKeys(normalizeGraph(graph)),
   ]);
   return {
+    currentFlowId: flowId,
     categoryIds: new Set(categories.map((row) => row.id)),
     userIds: new Set(users.map((row) => row.id)),
     flowIds: new Set(flows.map((row) => row.id)),
+    responseKeys: new Set(responses.map((row) => row.key)),
+    webhookKeys: new Set(webhooks.map((row) => row.key)),
+    mediaKeys,
   };
 }
 
 async function validateFlow(botId, flowId, { graph } = {}, viewer) {
   assertBotManager(viewer);
   const flow = await ensureFlow(botId, flowId);
-  const { valid, errors } = validateGraph(graph ?? flow.draftGraph, await loadValidationRefs(botId));
-  return { valid, errors };
+  const target = graph ?? flow.draftGraph;
+  const { valid, errors, warnings } = validateGraph(target, await loadValidationRefs(botId, flowId, target));
+  return { valid, errors, warnings };
 }
 
 async function publishFlow(botId, flowId, { label } = {}, actor) {
   assertBotManager(actor);
   const flow = await ensureFlow(botId, flowId);
-  const { valid, errors, graph } = validateGraph(flow.draftGraph, await loadValidationRefs(botId));
-  if (!valid) throw fail("O fluxo tem erros e não pode ser publicado.", 422, { details: { errors } });
+  const { valid, errors, warnings, graph } = validateGraph(flow.draftGraph, await loadValidationRefs(botId, flowId, flow.draftGraph));
+  if (!valid) throw fail("O fluxo tem erros e não pode ser publicado.", 422, { details: { errors, warnings } });
   const published = await prisma.$transaction(async (transaction) => {
     const last = await transaction.botFlowVersion.findFirst({ where: { flowId }, orderBy: { version: "desc" }, select: { version: true } });
     const version = await transaction.botFlowVersion.create({
@@ -265,10 +288,14 @@ async function setDefaultFlow(botId, flowId, actor) {
 async function archiveFlow(botId, flowId, actor) {
   assertBotManager(actor);
   const flow = await ensureFlow(botId, flowId);
-  const bot = await ensureBot(botId);
-  if (flow.isDefault && bot.executionMode === "FLOW_BUILDER") {
-    throw fail("Este é o fluxo padrão de um Bot em modo Editor Visual. Volte o Bot para o modo atual antes de arquivar.");
-  }
+  if (flow.isDefault) throw fail("Este é o fluxo padrão do Bot. Defina outro fluxo como padrão antes de arquivar.");
+  const needle = `"flowId":"${flowId}"`;
+  const others = await prisma.botFlow.findMany({
+    where: { botId, archivedAt: null, id: { not: flowId } },
+    select: { name: true, draftGraph: true, activeVersion: { select: { graph: true } } },
+  });
+  const callers = others.filter((other) => JSON.stringify(other.draftGraph).includes(needle) || JSON.stringify(other.activeVersion?.graph || {}).includes(needle));
+  if (callers.length) throw fail(`Outros fluxos vão para este (Ir para fluxo): ${callers.map((item) => item.name).join(", ")}. Ajuste-os antes de arquivar.`);
   // Arquivar nunca apaga versões/execuções/logs (histórico e auditoria).
   await prisma.botFlow.update({ where: { id: flowId }, data: { archivedAt: new Date(), isDefault: false, status: "INACTIVE" } });
   await audit.recordAudit({
@@ -278,24 +305,21 @@ async function archiveFlow(botId, flowId, actor) {
   return { archived: true };
 }
 
-async function setExecutionMode(botId, mode, actor) {
+async function uploadFlowMedia(botId, { kind, buffer, mimeType, fileName }, actor) {
   assertBotManager(actor);
-  if (!["LEGACY", "FLOW_BUILDER"].includes(mode)) throw fail("Modo de execução inválido.");
-  const bot = await ensureBot(botId);
-  if (bot.type === "SYSTEM_TRIAGE" && mode === "FLOW_BUILDER") {
-    throw fail("O Bot de Triagem do sistema continua no modo atual nesta versão do Editor Visual.");
-  }
-  if (mode === "FLOW_BUILDER") {
-    const flow = await prisma.botFlow.findFirst({ where: { botId, archivedAt: null, isDefault: true, status: "ACTIVE", activeVersionId: { not: null } } });
-    if (!flow) throw fail("Publique e ative o fluxo padrão antes de usar o Editor Visual como modo de execução.");
-  }
-  await prisma.bot.update({ where: { id: botId }, data: { executionMode: mode } });
-  await audit.recordAudit({
-    actor, action: "BOT_EXECUTION_MODE_CHANGED", entityType: "BOT", entityId: botId,
-    summary: `Bot "${bot.name}" agora usa ${mode === "FLOW_BUILDER" ? "o Editor Visual" : "o motor atual"}`,
-    details: { from: bot.executionMode, to: mode },
-  });
-  return { id: botId, executionMode: mode };
+  await ensureBot(botId);
+  const store = MEDIA_STORE[kind];
+  if (!store) throw fail("Tipo de mídia inválido (use IMAGE, AUDIO, VIDEO ou DOCUMENT).");
+  if (!Buffer.isBuffer(buffer) || !buffer.length) throw fail("Envie um arquivo.");
+  const stored = await store({ buffer, mimeType, fileName });
+  return { kind, storageKey: stored.storageKey, mimeType: stored.mimeType, fileName: stored.fileName, size: stored.size };
+}
+
+async function getFlowMediaPath(botId, storageKey, viewer) {
+  assertBotManager(viewer);
+  await ensureBot(botId);
+  if (!STORAGE_KEY_PATTERN.test(String(storageKey || ""))) throw fail("Mídia inválida.", 404);
+  return media.resolveMedia(storageKey);
 }
 
 async function listExecutions(botId, flowId, viewer) {
@@ -313,43 +337,74 @@ async function listExecutions(botId, flowId, viewer) {
 async function getExecutionLogs(botId, flowId, executionId, viewer) {
   assertBotManager(viewer);
   await ensureFlow(botId, flowId);
-  const execution = await prisma.botFlowExecution.findFirst({ where: { id: executionId, flowId } });
+  const execution = await prisma.botFlowExecution.findFirst({ where: { id: executionId, botId } });
   if (!execution) throw fail("Execução não encontrada.", 404);
   const logs = await prisma.botFlowExecutionLog.findMany({ where: { executionId }, orderBy: { createdAt: "asc" }, take: 500 });
   return { execution: { id: execution.id, status: execution.status, currentNodeKey: execution.currentNodeKey, error: execution.error }, logs };
 }
 
-// ---- simulação (dry-run) --------------------------------------------------
+// ---- contexto inicial (variáveis de sistema) ------------------------------
 
 function contactSeed(contact) {
   const name = contact?.customName || contact?.name || "";
-  return { name, firstName: name.split(/\s+/)[0] || "", phone: contact?.phone || "", email: contact?.email || "" };
+  const realName = name && name !== contact?.phone ? name : "";
+  const firstName = realName.split(/\s+/)[0] || "";
+  return {
+    name: realName, firstName, phone: contact?.phone || "", email: contact?.email || "",
+    greeting: firstName ? `Olá, ${firstName}` : "Olá", greetingComma: firstName ? `, ${firstName}` : "",
+  };
 }
 
-// Nunca envia nada, nunca altera Conversation/Message, nunca chama Tool
-// externa. IA e Knowledge são leitura (RAG/KnowledgeSource) — iguais ao
-// simulador atual do Bot.
-function simulationAdapter({ bot, categories, outputs, aiStep, knowledgeProvider }) {
-  const categoryName = (id) => categories.find((category) => category.id === id)?.name || null;
+function botSeed(bot, now) {
+  const withinBusinessHours = scheduleState(bot, now).withinHours;
+  return { name: bot.name, businessHours: describeSchedule(bot), withinBusinessHours };
+}
+
+function buildSeed({ bot, contact, conversation, now }) {
+  const botVars = botSeed(bot, now);
+  return {
+    contact: contactSeed(contact), bot: botVars,
+    conversation: { id: conversation.id, channel: conversation.channel, withinBusinessHours: botVars.withinBusinessHours },
+  };
+}
+
+// Variáveis de sistema são recalculadas a cada turno (ex.: horário pode ter
+// mudado entre a pergunta e a resposta) — nunca ficam congeladas no estado.
+function refreshSystemContext(state, seed) {
+  if (!state?.context) return state;
+  state.context.contact = { ...(state.context.contact || {}), ...seed.contact };
+  state.context.bot = { ...seed.bot };
+  state.context.conversation = { ...(state.context.conversation || {}), ...seed.conversation };
+  return state;
+}
+
+// ---- simulação (dry-run) --------------------------------------------------
+
+// Nunca envia nada, nunca altera Conversation/Message. Webhooks só são
+// chamados se o Master marcar explicitamente "chamar webhooks no teste".
+function simulationAdapter({ bot, refs, outputs, source, callWebhooks, callWebhook }) {
+  const categoryName = (id) => refs.categories.find((category) => category.id === id)?.name || null;
   return {
     skipDelays: true,
     async send(text) { if (String(text || "").trim()) outputs.push({ type: "bot", text }); },
-    async sendAiAnswer(result) {
-      outputs.push({ type: "ai", text: result.answer, wouldSend: Boolean(result.sendDecision?.shouldSend), sendMode: result.sendDecision?.sendMode || "DRY_RUN", blockedReason: result.sendDecision?.reason || null });
-      return { simulated: true, ...result.sendDecision };
+    async sendMenu({ text, options }) {
+      outputs.push({ type: "bot", text, options: options.map((option) => ({ replyId: option.replyId, label: option.label })), display: "LIST" });
     },
-    async ai({ message, model }) {
-      return aiStep({ bot, message, history: [], model });
-    },
-    async searchKnowledge({ query, product, limit }) {
-      const rows = await knowledgeProvider.search(query, { botId: bot.id, product, limit });
-      return { results: rows.map((row) => ({ title: row.title, excerpt: String(row.content || "").slice(0, 600), score: row.score })) };
+    async sendMedia({ kind, fileName, caption }) {
+      outputs.push({ type: "media", kind, text: `[${kind}] ${fileName || "arquivo"}${caption ? ` — ${caption}` : ""}` });
     },
     async transferToCategory({ categoryId, message, reason }) {
       if (!categoryName(categoryId)) throw new Error("Setor de destino não existe ou está inativo.");
       if (message?.trim()) outputs.push({ type: "bot", text: message });
       outputs.push({ type: "event", text: `Transferiria para o setor ${categoryName(categoryId)}`, reason });
       return { categoryId, categoryName: categoryName(categoryId) };
+    },
+    async transferToUser({ userId, categoryId, message, reason }) {
+      const user = refs.users.find((item) => item.id === userId);
+      if (!user) throw new Error("Atendente não existe ou está inativo.");
+      if (message?.trim()) outputs.push({ type: "bot", text: message });
+      outputs.push({ type: "event", text: `Transferiria para ${user.name}${categoryId && categoryName(categoryId) ? ` (${categoryName(categoryId)})` : ""}`, reason });
+      return { userId, userName: user.name };
     },
     async handoff({ reason, message, categoryId }) {
       if (message?.trim()) outputs.push({ type: "bot", text: message });
@@ -359,34 +414,72 @@ function simulationAdapter({ bot, categories, outputs, aiStep, knowledgeProvider
     async finish({ finalizeConversation }) {
       outputs.push({ type: "event", text: finalizeConversation ? "Finalizaria a conversa" : "Encerraria o Bot e deixaria a conversa para a equipe" });
     },
+    async loadFlow(flowId) {
+      const target = await prisma.botFlow.findFirst({ where: { id: flowId, botId: bot.id, archivedAt: null }, include: { activeVersion: true } });
+      if (!target) return null;
+      const graph = source === "ACTIVE" ? target.activeVersion?.graph : target.draftGraph;
+      if (!graph) return null;
+      outputs.push({ type: "event", text: `Seguiria para o fluxo "${target.name}"` });
+      return { flowId: target.id, versionId: source === "ACTIVE" ? target.activeVersionId : null, version: source === "ACTIVE" ? target.activeVersion?.version : null, name: target.name, graph };
+    },
+    async callWebhook({ endpointKey, fields }) {
+      if (!callWebhooks) {
+        outputs.push({ type: "event", text: `Chamaria o endpoint "${endpointKey}" (não chamado no teste)` });
+        return { ok: true, simulated: true, status: null, data: null };
+      }
+      const result = await callWebhook(endpointKey, fields);
+      outputs.push({ type: "event", text: `Endpoint "${endpointKey}": ${result.ok ? `HTTP ${result.status}` : `falhou (${result.errorCode})`}` });
+      return result;
+    },
   };
 }
 
-async function simulateFlow(botId, flowId, { message, state = null, source = "DRAFT", graph: graphOverride } = {}, viewer, deps = {}) {
+async function simulateFlow(botId, flowId, {
+  message, replyId, state = null, source = "DRAFT", graph: graphOverride, callWebhooks = false, contactName,
+} = {}, viewer, deps = {}) {
   assertBotManager(viewer);
   const bot = await ensureBot(botId);
   const flow = await ensureFlow(botId, flowId);
   if (state && JSON.stringify(state).length > MAX_SIM_STATE_BYTES) throw fail("Estado de simulação grande demais.");
+  // Uma simulação que já passou por "Ir para fluxo" continua no fluxo atual
+  // do estado (sempre do mesmo Bot).
+  let current = { flowId: flow.id, name: flow.name, versionId: null, version: null };
   let graph = graphOverride ?? flow.draftGraph;
   if (source === "ACTIVE") {
-    if (!flow.activeVersionId) throw fail("Este fluxo ainda não tem versão publicada.");
-    graph = (await prisma.botFlowVersion.findUnique({ where: { id: flow.activeVersionId } })).graph;
+    if (!flow.activeVersion) throw fail("Este fluxo ainda não tem versão publicada.");
+    graph = flow.activeVersion.graph;
+    current = { ...current, versionId: flow.activeVersion.id, version: flow.activeVersion.version };
   }
-  const categories = await prisma.category.findMany({ where: { active: true }, select: { id: true, name: true } });
+  if (state?.flow?.flowId && state.flow.flowId !== flow.id) {
+    const other = await ensureFlow(botId, state.flow.flowId);
+    graph = source === "ACTIVE" ? other.activeVersion?.graph : other.draftGraph;
+    if (!graph) throw fail("O fluxo atual da simulação não tem versão publicada.");
+    current = { flowId: other.id, name: other.name, versionId: source === "ACTIVE" ? other.activeVersion?.id : null, version: source === "ACTIVE" ? other.activeVersion?.version : null };
+  }
+  const [categories, users] = await Promise.all([
+    prisma.category.findMany({ where: { active: true }, select: { id: true, name: true } }),
+    prisma.user.findMany({ where: { active: true, role: { not: "BOT" } }, select: { id: true, name: true } }),
+  ]);
   const outputs = [];
   const adapter = simulationAdapter({
-    bot, categories, outputs,
-    aiStep: deps.aiStep || require("./bot-ai-shadow-service").runFlowAiStep,
-    knowledgeProvider: deps.knowledgeProvider || new KnowledgeSourceProvider(prisma),
+    bot, refs: { categories, users }, outputs, source, callWebhooks: callWebhooks === true,
+    callWebhook: deps.callWebhook || webhookEndpoints.callEndpoint,
   });
-  const input = state ? { type: "MESSAGE", text: String(message || "").slice(0, 2000) } : { type: "START", text: String(message || "").slice(0, 2000) };
-  const seed = { contact: { name: "Cliente Teste", firstName: "Cliente", phone: "5500000000000", email: "" }, conversation: { id: "simulacao", channel: bot.channel } };
-  const result = await runTurn({ graph, state, input, adapter, seed, flowName: flow.name });
+  const text = String(message || "").slice(0, 2000);
+  const input = state ? { type: "MESSAGE", text, replyId: replyId ? String(replyId).slice(0, 120) : null } : { type: "START", text };
+  const now = deps.now || new Date();
+  const seed = buildSeed({
+    bot, now, contact: { name: String(contactName || "Cliente Teste").slice(0, 80), phone: "5500000000000", email: "" },
+    conversation: { id: "simulacao", channel: (bot.channels?.[0] || bot.channel) },
+  });
+  const result = await runTurn({
+    graph, flow: current, state: state ? refreshSystemContext(JSON.parse(JSON.stringify(state)), seed) : null,
+    input, adapter, seed, responses: await activeResponseMap(), now,
+  });
   return {
     state: result.state, trace: result.trace, outputs, ignored: Boolean(result.ignored),
-    visited: result.state.context?._engine?.visited || [],
-    currentNodeKey: result.state.currentNodeKey, status: result.state.status,
-    dryRun: true,
+    currentNodeKey: result.state.currentNodeKey, currentFlowId: result.state.flow?.flowId || flow.id,
+    status: result.state.status, dryRun: true,
   };
 }
 
@@ -400,27 +493,28 @@ function botIsAllowedToRespond(conversation) {
 }
 
 function botEligible(bot, globalSettings) {
-  return Boolean(bot && !bot.archivedAt && bot.executionMode === "FLOW_BUILDER" && bot.status === "ACTIVE"
-    && bot.autoReplyEnabled && globalSettings.automationEnabled);
+  return Boolean(bot && !bot.archivedAt && bot.status === "ACTIVE" && bot.autoReplyEnabled && globalSettings.automationEnabled);
 }
 
-function liveAdapter({ conversation, bot, channel, execution, aiStep }) {
+function liveAdapter({ conversation, bot, channel, execution, deps }) {
   const conversationId = conversation.id;
-  const saveSent = async (text, result, system, nodeInfo = {}) => {
+  const callWebhook = deps.callWebhook || webhookEndpoints.callEndpoint;
+  const saveSent = async (data) => {
     const occurredAt = new Date();
     await prisma.$transaction([
       prisma.message.create({ data: {
-        conversationId, externalId: result?.externalId || null, channel: conversation.channel,
-        direction: "ENVIADA", status: "ENVIADA", type: "text", text, occurredAt,
-        rawPayload: { message: result?.data || null, system, flowId: execution.flowId, executionId: execution.id, ...nodeInfo },
+        conversationId, channel: conversation.channel, direction: "ENVIADA", status: "ENVIADA", occurredAt, ...data,
+        rawPayload: { ...(data.rawPayload || {}), system: "visual_flow", flowId: execution.flowId, executionId: execution.id },
       } }),
       prisma.conversation.update({ where: { id: conversationId }, data: { lastMessageAt: occurredAt } }),
     ]);
   };
-  const send = async (text) => {
+  // flowHandoff marca a mensagem de encaminhamento: o monitor de
+  // inatividade nunca finaliza uma conversa que está esperando a equipe.
+  const send = async (text, { flowHandoff = false } = {}) => {
     if (!String(text || "").trim()) return;
     const result = await channel.sendText(conversation.contact.phone, text);
-    await saveSent(text, result, "visual_flow");
+    await saveSent({ externalId: result?.externalId || null, type: "text", text, rawPayload: { message: result?.data || null, ...(flowHandoff ? { flowHandoff: true } : {}) } });
   };
   const activity = (action, details) => prisma.conversationActivity.create({ data: { conversationId, action, details } });
   const contactLabel = conversation.contact.customName || conversation.contact.name || conversation.contact.phone;
@@ -450,29 +544,64 @@ function liveAdapter({ conversation, bot, channel, execution, aiStep }) {
   return {
     skipDelays: false,
     send,
-    // Resposta de IA: nunca enviada — o send-mode atual (DRY_RUN) é a
-    // única saída; registra o que teria sido enviado.
-    async sendAiAnswer(result) {
-      return { simulated: true, ...result.sendDecision };
+    // Lista interativa só no WhatsApp e até 10 opções (limite da Meta); fora
+    // disso cai para o texto numerado — o cliente pode responder igual.
+    async sendMenu({ text, fallbackText, buttonLabel, options }) {
+      if (conversation.channel !== "META" || options.length > WHATSAPP_LIST_MAX_ROWS || typeof channel.sendList !== "function") {
+        return send(fallbackText);
+      }
+      const rows = options.map((option) => ({ id: option.replyId, title: option.label.slice(0, 24) }));
+      const result = await channel.sendList(conversation.contact.phone, { body: text || fallbackText, button: buttonLabel.slice(0, 20), rows });
+      await saveSent({ externalId: result?.externalId || null, type: "interactive", text: fallbackText, rawPayload: { message: result?.data || null } });
     },
-    async ai({ message, model }) {
-      const rows = await getRecentContext(conversationId, { limit: 10 }, prisma);
-      const history = rows.filter((row) => row.text).map((row) => ({ role: row.direction === "RECEBIDA" ? "customer" : "assistant", content: row.text }));
-      return aiStep({ bot, message, history, model });
-    },
-    async searchKnowledge({ query, product, limit }) {
-      const rows = await new KnowledgeSourceProvider(prisma).search(query, { botId: bot.id, product, limit });
-      return { results: rows.map((row) => ({ title: row.title, excerpt: String(row.content || "").slice(0, 600), score: row.score })) };
+    async sendMedia({ kind, storageKey, mimeType, fileName, caption }) {
+      const buffer = await fs.readFile(media.resolveMedia(storageKey));
+      // Cópia própria por mensagem: excluir a conversa nunca apaga o arquivo
+      // do nó (que outras conversas continuam usando).
+      const stored = await MEDIA_STORE[kind]({ buffer, mimeType, fileName });
+      const result = await channel[CHANNEL_MEDIA_SENDER[kind]](conversation.contact.phone, {
+        buffer, mimeType: stored.mimeType, fileName: stored.fileName, caption: caption || undefined,
+      });
+      await saveSent({
+        externalId: result?.externalId || null, type: MEDIA_MESSAGE_TYPE[kind], text: caption || null,
+        mediaStorageKey: stored.storageKey, mediaMimeType: stored.mimeType, mediaFileName: stored.fileName, mediaSize: stored.size,
+        rawPayload: { message: result?.data || null },
+      });
     },
     async transferToCategory({ categoryId, message, reason }) {
-      await send(message);
+      await send(message, { flowHandoff: true });
       return moveToCategory({ categoryId, reason, action: "BOT_FLOW_TRANSFERRED" });
     },
+    // Mesmo sistema de atribuição da Central: responsável + setor (o
+    // atendente precisa ter acesso ao setor), status EM_ATENDIMENTO, histórico
+    // e auditoria. Nunca tira uma conversa de quem já assumiu.
+    async transferToUser({ userId, categoryId, message, reason }) {
+      const user = await prisma.user.findFirst({ where: { id: userId, active: true, role: { not: "BOT" } } });
+      if (!user) throw new Error("Atendente não existe ou está inativo.");
+      const targetCategoryId = categoryId || conversation.categoryId || null;
+      if (targetCategoryId && !(await prisma.category.findFirst({ where: { id: targetCategoryId, active: true }, select: { id: true } }))) {
+        throw new Error("Setor de destino não existe ou está inativo.");
+      }
+      if (!(await authorization.canAccessCategory(user, targetCategoryId))) throw new Error("O atendente não tem acesso ao setor desta conversa.");
+      await send(message, { flowHandoff: true });
+      const moved = await prisma.conversation.updateMany({
+        where: { id: conversationId, status: "BOT", assignedUserId: null },
+        data: { assignedUserId: user.id, categoryId: targetCategoryId, status: "EM_ATENDIMENTO", finalizedAt: null },
+      });
+      if (!moved.count) return { userId: user.id, userName: user.name, skipped: true };
+      await activity("BOT_FLOW_TRANSFERRED_TO_USER", { toUserId: user.id, to: user.name, categoryId: targetCategoryId, reason, flowId: execution.flowId, executionId: execution.id });
+      await audit.recordAudit({
+        actor: null, action: "CONVERSATION_ASSIGNEE_CHANGED", entityType: "CONVERSATION", entityId: conversationId,
+        summary: `Fluxo do Bot "${bot.name}" transferiu a conversa de ${contactLabel} para ${user.name}`,
+        details: { conversationId, contactPhone: conversation.contact.phone, from: "Sem responsável", to: user.name, toUserId: user.id, toCategoryId: targetCategoryId, reason, flowId: execution.flowId },
+      });
+      return { userId: user.id, userName: user.name };
+    },
     async handoff({ reason, message, categoryId }) {
-      await send(message);
+      await send(message, { flowHandoff: true });
       if (categoryId) return moveToCategory({ categoryId, reason, action: "BOT_FLOW_HANDOFF" });
-      // Sem setor: HANDOFF_BOT (visível para a equipe e fora do alcance da
-      // triagem automática, que só age em NOVO sem categoria).
+      // Sem setor: HANDOFF_BOT (visível para a equipe e fora do alcance do
+      // início automático, que só age em NOVO sem categoria).
       await prisma.conversation.updateMany({ where: { id: conversationId, status: "BOT", assignedUserId: null }, data: { status: "HANDOFF_BOT" } });
       await activity("BOT_FLOW_HANDOFF", { reason, flowId: execution.flowId, executionId: execution.id });
       return { categoryId: null };
@@ -488,16 +617,30 @@ function liveAdapter({ conversation, bot, channel, execution, aiStep }) {
       }
       await activity("BOT_FLOW_COMPLETED", { finalizeConversation, flowId: execution.flowId, executionId: execution.id });
     },
+    // Subfluxo em produção: mesmo Bot, publicado e ativo.
+    async loadFlow(flowId) {
+      const target = await prisma.botFlow.findFirst({
+        where: { id: flowId, botId: bot.id, archivedAt: null, status: "ACTIVE", activeVersionId: { not: null } },
+        include: { activeVersion: true },
+      });
+      if (!target?.activeVersion) return null;
+      return { flowId: target.id, versionId: target.activeVersion.id, version: target.activeVersion.version, name: target.name, graph: target.activeVersion.graph };
+    },
+    async callWebhook({ endpointKey, fields }) {
+      return callWebhook(endpointKey, fields);
+    },
   };
 }
 
-async function persistTurn(execution, claimedStep, turn, version) {
+async function persistTurn(execution, claimedStep, turn) {
   const { state, trace } = turn;
   const finished = FINISHED_STATUSES.has(state.status);
   const updated = await prisma.botFlowExecution.updateMany({
     where: { id: execution.id, step: claimedStep },
     data: {
       status: state.status, currentNodeKey: state.currentNodeKey, context: state.context,
+      // "Ir para fluxo": a execução passa a apontar para o fluxo/versão atual.
+      ...(state.flow?.flowId && state.flow?.versionId ? { flowId: state.flow.flowId, versionId: state.flow.versionId } : {}),
       resumeAt: state.status === STATUS.WAITING_TIMER && state.resumeAt ? new Date(state.resumeAt) : null,
       error: state.error || null, step: claimedStep + 1, finishedAt: finished ? new Date() : null,
     },
@@ -505,7 +648,7 @@ async function persistTurn(execution, claimedStep, turn, version) {
   if (trace.length) {
     await prisma.botFlowExecutionLog.createMany({
       data: trace.map((entry) => ({
-        executionId: execution.id, flowId: execution.flowId, version: version.version,
+        executionId: execution.id, flowId: entry.flowId || execution.flowId, version: entry.version ?? execution.version?.version ?? 0,
         nodeKey: entry.nodeKey, nodeType: entry.nodeType, input: entry.input ?? undefined, output: entry.output ?? undefined,
         branch: entry.branch, result: entry.result, error: entry.error, durationMs: entry.durationMs,
       })),
@@ -518,6 +661,7 @@ function toEngineState(execution) {
   return {
     currentNodeKey: execution.currentNodeKey, status: execution.status, context: execution.context || {},
     resumeAt: execution.resumeAt ? execution.resumeAt.toISOString() : null, error: execution.error || null,
+    flow: { flowId: execution.flowId, versionId: execution.versionId, version: execution.version?.version ?? null, name: execution.flow?.name || "" },
   };
 }
 
@@ -533,17 +677,22 @@ async function cancelExecution(execution, reason) {
 const conversationInclude = {
   contact: true,
   category: { select: { id: true, name: true } },
-  botState: { select: { humanPausedAt: true } },
+  botState: { select: { humanPausedAt: true, activeBotId: true } },
 };
 
 async function findStartBot(conversation) {
   const bots = await prisma.bot.findMany({
     where: {
-      archivedAt: null, executionMode: "FLOW_BUILDER", status: "ACTIVE", autoReplyEnabled: true,
+      archivedAt: null, status: "ACTIVE", autoReplyEnabled: true,
       OR: [{ channel: conversation.channel }, { channels: { has: conversation.channel } }],
     },
+    include: botScheduleInclude,
     orderBy: { updatedAt: "desc" },
   });
+  // "Bot de resposta" de uma Campanha (ConversationBotState.activeBotId)
+  // tem prioridade sobre os demais Bots do canal.
+  const preferred = conversation.botState?.activeBotId;
+  bots.sort((left, right) => Number(right.id === preferred) - Number(left.id === preferred));
   for (const bot of bots) {
     const flow = await prisma.botFlow.findFirst({
       where: { botId: bot.id, archivedAt: null, isDefault: true, status: "ACTIVE", activeVersionId: { not: null } },
@@ -567,13 +716,16 @@ async function hadExecutionThisSession(conversationId) {
   return count > 0;
 }
 
-async function runLiveTurn({ execution, claimedStep, conversation, bot, channel, version, flowName, input, aiStep, now }) {
-  const adapter = liveAdapter({ conversation, bot, channel, execution, aiStep });
-  const seed = { contact: contactSeed(conversation.contact), conversation: { id: conversation.id, channel: conversation.channel } };
-  const state = execution.currentNodeKey || execution.status !== STATUS.RUNNING ? toEngineState(execution) : null;
+async function runLiveTurn({ execution, claimedStep, conversation, bot, channel, version, flowName, input, now, deps }) {
+  const adapter = liveAdapter({ conversation, bot, channel, execution, deps });
+  const seed = buildSeed({ bot, contact: conversation.contact, conversation, now });
+  const state = execution.currentNodeKey || execution.status !== STATUS.RUNNING ? refreshSystemContext(toEngineState(execution), seed) : null;
   let turn;
   try {
-    turn = await runTurn({ graph: version.graph, state, input, adapter, seed, flowName, now });
+    turn = await runTurn({
+      graph: version.graph, flow: { flowId: execution.flowId, versionId: version.id, version: version.version, name: flowName },
+      state, input, adapter, seed, responses: await activeResponseMap(), now,
+    });
   } catch (error) {
     // Nunca derruba o processamento geral: registra e entrega para humano.
     turn = {
@@ -582,25 +734,24 @@ async function runLiveTurn({ execution, claimedStep, conversation, bot, channel,
     };
     await prisma.conversation.updateMany({ where: { id: conversation.id, status: "BOT", assignedUserId: null }, data: { status: "HANDOFF_BOT" } }).catch(() => {});
   }
-  await persistTurn(execution, claimedStep, turn, version);
+  await persistTurn({ ...execution, version }, claimedStep, turn);
   return turn;
 }
 
-// Hook do webhook. Devolve true quando o Flow Builder é dono desta mensagem
-// (a triagem legada NÃO deve rodar); false para seguir o caminho atual.
-async function handleIncomingVisualFlow(event, message, channel, { now = new Date(), aiStep } = {}) {
+// Hook do webhook do WhatsApp. Devolve true quando o Flow Builder é dono
+// desta mensagem; false quando nenhum fluxo se aplica (a mensagem já foi
+// salva e segue para a equipe normalmente).
+async function handleIncomingVisualFlow(event, message, channel, { now = new Date(), ...deps } = {}) {
   if (event.type === "reaction") return false;
   const conversation = await prisma.conversation.findUnique({ where: { id: message.conversationId }, include: conversationInclude });
   if (!conversation) return false;
-  // Só consulta o kill switch global quando o Flow Builder realmente for
-  // decidir algo (evita uma escrita/consulta extra em toda mensagem legada).
   let globalSettings = null;
   const eligible = async (bot) => {
     globalSettings ||= await getGlobalSettings(prisma);
     return botEligible(bot, globalSettings);
   };
-  const runAi = aiStep || require("./bot-ai-shadow-service").runFlowAiStep;
   const text = event.type === "text" ? String(event.text || "") : (event.interactiveTitle || event.text || "");
+  const replyId = event.interactiveReplyId || null;
 
   const active = await prisma.botFlowExecution.findFirst({
     where: { conversationId: conversation.id, status: { in: [STATUS.WAITING_CUSTOMER, STATUS.WAITING_TIMER, STATUS.RUNNING] } },
@@ -610,7 +761,7 @@ async function handleIncomingVisualFlow(event, message, channel, { now = new Dat
 
   if (active) {
     if (active.lastMessageId === message.id) return true; // reentrega do mesmo evento
-    const bot = await prisma.bot.findUnique({ where: { id: active.botId } });
+    const bot = await prisma.bot.findUnique({ where: { id: active.botId }, include: botScheduleInclude });
     if (!botIsAllowedToRespond(conversation)) { await cancelExecution(active, "HUMAN_TOOK_OVER_OR_FINALIZED"); return false; }
     if (!(await eligible(bot))) { await cancelExecution(active, "BOT_DISABLED"); return false; }
     if (active.status !== STATUS.WAITING_CUSTOMER) return true; // RUNNING/WAITING_TIMER: mensagem salva, fluxo não avança duas vezes
@@ -622,7 +773,7 @@ async function handleIncomingVisualFlow(event, message, channel, { now = new Dat
     if (!claimed.count) return true;
     await runLiveTurn({
       execution: active, claimedStep: active.step + 1, conversation, bot, channel, version: active.version,
-      flowName: active.flow.name, input: { type: "MESSAGE", text }, aiStep: runAi, now,
+      flowName: active.flow.name, input: { type: "MESSAGE", text, replyId }, now, deps,
     });
     return true;
   }
@@ -632,8 +783,8 @@ async function handleIncomingVisualFlow(event, message, channel, { now = new Dat
   const consumed = await prisma.botFlowExecution.findFirst({ where: { conversationId: conversation.id, lastMessageId: message.id }, select: { id: true } });
   if (consumed) return true;
 
-  // Início: mesma pré-condição da triagem (conversa nova, sem categoria,
-  // sem responsável) — nunca "rouba" uma conversa já em atendimento.
+  // Início: conversa nova, sem categoria, sem responsável — nunca "rouba"
+  // uma conversa já em atendimento.
   if (!botIsAllowedToRespond(conversation) || conversation.categoryId || conversation.status !== "NOVO") return false;
   const target = await findStartBot(conversation);
   if (!target || !(await eligible(target.bot))) return false;
@@ -659,14 +810,14 @@ async function handleIncomingVisualFlow(event, message, channel, { now = new Dat
   } });
   await runLiveTurn({
     execution, claimedStep: 0, conversation: { ...conversation, status: "BOT" }, bot: target.bot, channel, version: target.version,
-    flowName: target.flow.name, input: { type: "START", text }, aiStep: runAi, now,
+    flowName: target.flow.name, input: { type: "START", text }, now, deps,
   });
   return true;
 }
 
 // Worker do nó Intervalo: nunca "dorme" dentro de um request — a execução
 // fica WAITING_TIMER com resumeAt e este tick retoma quando vencer.
-async function processDueTimers({ channel, now = new Date(), limit = 20, aiStep } = {}) {
+async function processDueTimers({ channel, now = new Date(), limit = 20, ...deps } = {}) {
   const due = await prisma.botFlowExecution.findMany({
     where: { status: STATUS.WAITING_TIMER, resumeAt: { lte: now } },
     orderBy: { resumeAt: "asc" }, take: limit,
@@ -677,7 +828,7 @@ async function processDueTimers({ channel, now = new Date(), limit = 20, aiStep 
   let processed = 0;
   for (const execution of due) {
     try {
-      const bot = await prisma.bot.findUnique({ where: { id: execution.botId } });
+      const bot = await prisma.bot.findUnique({ where: { id: execution.botId }, include: botScheduleInclude });
       if (!botIsAllowedToRespond(execution.conversation)) { await cancelExecution(execution, "HUMAN_TOOK_OVER_OR_FINALIZED"); continue; }
       if (!botEligible(bot, globalSettings)) { await cancelExecution(execution, "BOT_DISABLED"); continue; }
       const claimed = await prisma.botFlowExecution.updateMany({
@@ -687,7 +838,7 @@ async function processDueTimers({ channel, now = new Date(), limit = 20, aiStep 
       if (!claimed.count) continue;
       await runLiveTurn({
         execution, claimedStep: execution.step + 1, conversation: execution.conversation, bot, channel, version: execution.version,
-        flowName: execution.flow.name, input: { type: "TIMER" }, aiStep: aiStep || require("./bot-ai-shadow-service").runFlowAiStep, now,
+        flowName: execution.flow.name, input: { type: "TIMER" }, now, deps,
       });
       processed += 1;
     } catch (error) {
@@ -717,7 +868,7 @@ function startVisualFlowWorker({ channel, onChange, intervalMs = 5000 } = {}) {
 }
 
 module.exports = {
-  archiveFlow, createFlow, getEditorOptions, getExecutionLogs, getFlow, getFlowVersion, handleIncomingVisualFlow,
-  listExecutions, listFlows, processDueTimers, publishFlow, restoreVersionToDraft, rollbackFlow, saveDraft,
-  setDefaultFlow, setExecutionMode, setFlowStatus, simulateFlow, startVisualFlowWorker, validateFlow,
+  archiveFlow, botEligible, createFlow, getEditorOptions, getExecutionLogs, getFlow, getFlowMediaPath, getFlowVersion,
+  handleIncomingVisualFlow, listExecutions, listFlows, processDueTimers, publishFlow, restoreVersionToDraft, rollbackFlow,
+  saveDraft, setDefaultFlow, setFlowStatus, simulateFlow, startVisualFlowWorker, uploadFlowMedia, validateFlow,
 };

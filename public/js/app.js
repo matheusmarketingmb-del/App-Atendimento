@@ -18,7 +18,6 @@ const state = {
   customerServiceWindow: null, templates: [], selectedTemplate: null,
   outboundChannels: [], categoryVisibility: { hideUncategorized:false, hiddenCategoryIds:[] }, visibilityMode:false,
   quickReplies: [], quickReplyCategoryFilter: "", quickReplyTypeFilter: "", quickReplySearch: "",
-  botSuggestion: null, pendingBotSuggestion: null,
   mergedDestinations: [],
 };
 const $ = (selector) => document.querySelector(selector);
@@ -142,9 +141,6 @@ function closeConversationView() {
   state.mergedDestinations = [];
   $("#merge-contact").hidden = true;
   $("#merged-channel-control").hidden = true;
-  state.botSuggestion = null;
-  state.pendingBotSuggestion = null;
-  hideBotSuggestion();
   state.customerServiceWindow = null;
   syncCustomerServiceWindow();
   if ($("#contact-files-dialog")?.open) $("#contact-files-dialog").close();
@@ -207,11 +203,12 @@ function setConversationListCollapsed(collapsed) {
 }
 
 // Painel lateral direito (item 7 do redesign): abas Detalhes/Notas/Histórico/
-// Bot/SLA/Arquivos substituindo as antigas gavetas independentes de
-// notas/histórico. Os elementos #notes-panel/#history-panel/#bot-suggestion-card
-// mantêm os mesmos IDs e lógica de dados — só passam a viver dentro de uma
-// aba em vez de um painel deslizante próprio.
-const CONTEXT_TABS = ["details", "notes", "history", "bot", "sla", "files"];
+// SLA/Arquivos substituindo as antigas gavetas independentes de
+// notas/histórico. Os elementos #notes-panel/#history-panel mantêm os mesmos
+// IDs e lógica de dados — só passam a viver dentro de uma aba em vez de um
+// painel deslizante próprio. (A aba "Bot" com sugestões de IA foi removida
+// junto com o sistema de Bots legado.)
+const CONTEXT_TABS = ["details", "notes", "history", "sla", "files"];
 function setContextPanelOpen(open, persist = true) {
   const workspace = $(".workspace");
   workspace.classList.toggle("context-open", open);
@@ -225,7 +222,6 @@ function setContextTab(tab, { open = true } = {}) {
   if (!CONTEXT_TABS.includes(tab)) tab = "details";
   document.querySelectorAll("[data-context-tab]").forEach((button) => button.classList.toggle("active", button.dataset.contextTab === tab));
   document.querySelectorAll("[data-context-panel]").forEach((panel) => { panel.hidden = panel.dataset.contextPanel !== tab; });
-  if (tab === "bot") $("[data-context-tab='bot']")?.classList.remove("has-update");
   try { localStorage.setItem("mibro-context-tab", tab); } catch {}
   if (open) setContextPanelOpen(true);
 }
@@ -483,7 +479,6 @@ function openContactFiles() {
   if (!state.selectedId) return;
   $("#contact-files-title").textContent = state.selectedContactName || "Arquivos da conversa";
   $("#contact-files-conversation-id").textContent = state.selectedId;
-  $("#analyze-conversation-learning").hidden = !state.currentUser?.isMaster;
   renderContactFiles("media");
   $("#contact-files-dialog").showModal();
 }
@@ -507,8 +502,7 @@ async function loadCurrentUser() {
   $("#current-user").textContent = status.user.name;
   $("#bots-button").hidden = !status.user.isMaster;
   $("#quick-replies-admin-button").hidden = !status.user.isMaster;
-  $("#knowledge-base-button").hidden = !status.user.isMaster;
-  $("#integrations-button").hidden = !status.user.isMaster;
+    $("#integrations-button").hidden = !status.user.isMaster;
   $("#campaigns-button").hidden = !status.user.canManageCampaigns;
   $("#new-conversation").hidden = !status.user.canStartConversations;
   $("#conversation-settings-button").hidden = !status.user.isMaster && status.user.role !== "SUPERVISOR";
@@ -907,79 +901,6 @@ async function loadConversations() {
   renderConversationCards(state.conversations);
 }
 
-function hideBotSuggestion() {
-  state.botSuggestion = null;
-  $("#bot-suggestion-card").hidden = true;
-  $("#bot-tab-empty").hidden = false;
-  $("[data-context-tab='bot']")?.classList.remove("has-update");
-}
-
-function renderBotSuggestion(suggestion) {
-  state.botSuggestion = suggestion || null;
-  const card = $("#bot-suggestion-card");
-  const hasSuggestion = Boolean(suggestion?.suggestedResponseText);
-  if (!hasSuggestion) {
-    card.hidden = true;
-    $("#bot-tab-empty").hidden = false;
-    $("[data-context-tab='bot']")?.classList.remove("has-update");
-    return;
-  }
-  $("#bot-suggestion-text").textContent = suggestion.suggestedResponseText;
-  const confidence = typeof suggestion.confidence === "number" ? ` · ${Math.round(suggestion.confidence * 100)}%` : "";
-  $("#bot-suggestion-meta").textContent = `${suggestion.intentName || "Resposta sugerida"}${confidence}`;
-  card.hidden = false;
-  $("#bot-tab-empty").hidden = true;
-  if (activeContextTab() !== "bot") $("[data-context-tab='bot']")?.classList.add("has-update");
-}
-
-async function loadBotSuggestion(conversationId, loadSequence) {
-  try {
-    const suggestion = await api(`/api/conversations/${conversationId}/bot-suggestion`);
-    if (loadSequence !== conversationLoadSequence || state.selectedId !== conversationId) return;
-    renderBotSuggestion(suggestion);
-  } catch (_error) {
-    if (loadSequence === conversationLoadSequence && state.selectedId === conversationId) hideBotSuggestion();
-  }
-}
-
-async function sendBotSuggestionFeedback(payload) {
-  if (!state.botSuggestion?.id) return;
-  await api("/api/bot-suggestion-feedback", {
-    method: "POST", body: JSON.stringify({ observationId: state.botSuggestion.id, ...payload }),
-  });
-}
-
-function placeBotSuggestionInComposer() {
-  if (!state.botSuggestion?.suggestedResponseText) return;
-  const input = $("#message-input");
-  input.value = state.botSuggestion.suggestedResponseText;
-  state.pendingBotSuggestion = {
-    observationId: state.botSuggestion.id,
-    originalText: state.botSuggestion.suggestedResponseText,
-  };
-  autoResizeComposer();
-  input.focus();
-  input.setSelectionRange(input.value.length, input.value.length);
-}
-
-$("#use-bot-suggestion").addEventListener("click", placeBotSuggestionInComposer);
-$("#edit-bot-suggestion").addEventListener("click", placeBotSuggestionInComposer);
-$("#ignore-bot-suggestion").addEventListener("click", async () => {
-  try {
-    await sendBotSuggestionFeedback({ action: "IGNORED" });
-    state.pendingBotSuggestion = null;
-    hideBotSuggestion();
-  } catch (error) { toast(error.message, true); }
-});
-$("#like-bot-suggestion").addEventListener("click", async () => {
-  try { await sendBotSuggestionFeedback({ helpful: true }); toast("Sugestão marcada como útil."); }
-  catch (error) { toast(error.message, true); }
-});
-$("#dislike-bot-suggestion").addEventListener("click", async () => {
-  try { await sendBotSuggestionFeedback({ helpful: false }); toast("Feedback registrado."); }
-  catch (error) { toast(error.message, true); }
-});
-
 const mergedChannelLabels = { META:"WhatsApp", EMAIL:"E-mail", INSTAGRAM_DIRECT:"Instagram", FACEBOOK_MESSENGER:"Facebook", MERCADO_LIVRE:"Mercado Livre", TIKTOK_SHOP:"TikTok Shop", AMAZON_MARKETPLACE:"Amazon", SHOPEE:"Shopee", GOOGLE_REVIEWS:"Google Reviews" };
 function renderMergedDestinations(destinations, selectedId) {
   state.mergedDestinations = destinations || [];
@@ -1008,8 +929,6 @@ async function openConversation(id, { refreshList = true, markRead = true } = {}
     state.selectedActivitiesSignature = "";
     state.selectedMessageItems = [];
     state.selectedMessages = [];
-    state.pendingBotSuggestion = null;
-    hideBotSuggestion();
     discardComposerAudio();
     loadQuickRepliesCache(id).catch(() => {});
     $("#empty-state").hidden = true;
@@ -1115,7 +1034,6 @@ async function openConversation(id, { refreshList = true, markRead = true } = {}
     state.selectedActivitiesSignature = activitiesSignature;
     renderActivities(c.activities || []);
   }
-  await loadBotSuggestion(id, loadSequence);
   if (loadSequence !== conversationLoadSequence || state.selectedId !== id) return;
   if (refreshList) await loadConversations();
 }
@@ -1565,7 +1483,6 @@ document.addEventListener("click", (event) => {
 });
 $("#bots-button").addEventListener("click", () => { location.href = "/bots"; });
 $("#quick-replies-admin-button").addEventListener("click", () => { location.href = "/quick-replies"; });
-$("#knowledge-base-button").addEventListener("click", () => { location.href = "/knowledge-base"; });
 $("#campaigns-button").addEventListener("click", () => { location.href = "/campaigns"; });
 $("#conversation-settings-button").addEventListener("click", () => { location.href = "/configuracoes"; });
 $("#integrations-button").addEventListener("click", () => { location.href = "/integrations"; });
@@ -1695,32 +1612,6 @@ $("#copy-conversation-id").addEventListener("click", async () => {
     toast("ID copiado.");
   } catch {
     toast("Não foi possível copiar o ID.", true);
-  }
-});
-$("#analyze-conversation-learning").addEventListener("click", async (event) => {
-  const conversationId = state.selectedId;
-  if (!conversationId) { toast("Nenhuma conversa selecionada.", true); return; }
-  const button = event.currentTarget;
-  if (button.disabled) return;
-  const originalText = button.textContent;
-  button.disabled = true;
-  button.textContent = "Analisando...";
-  try {
-    const result = await api(`/api/bot-learning/conversations/${encodeURIComponent(conversationId)}/analyze`, { method: "POST" });
-    if (result.analyzed) {
-      toast(`Análise concluída: ${result.suggestionsGenerated} sugestão(ões) geradas.`);
-    } else if (result.reason === "CONVERSATION_NOT_FINALIZED") {
-      toast("Esta conversa precisa estar finalizada antes de ser analisada para aprendizado.", true);
-    } else if (result.reason === "ALREADY_ANALYZED") {
-      toast("Esta conversa já foi analisada (sem mensagens novas desde então).");
-    } else {
-      toast("Não foi possível analisar esta conversa agora.", true);
-    }
-  } catch (error) {
-    toast(error.message, true);
-  } finally {
-    button.disabled = false;
-    button.textContent = originalText;
   }
 });
 $("#contact-files-dialog").addEventListener("click", (event) => { if (event.target === $("#contact-files-dialog")) $("#contact-files-dialog").close(); });
@@ -2815,7 +2706,6 @@ $("#composer").addEventListener("submit", async (event) => {
   }
   if (pendingAudio) return sendPendingAudio();
   if (!text && !selectedAttachment) return;
-  const pendingSuggestion = state.pendingBotSuggestion;
   $("#send-button").disabled = true;
   try {
     if (selectedAttachment) {
@@ -2831,14 +2721,6 @@ $("#composer").addEventListener("submit", async (event) => {
     } else {
       await api(`/api/conversations/${state.selectedId}/messages`, { method:"POST", body:JSON.stringify({ text }) });
     }
-    if (pendingSuggestion?.observationId && text) {
-      const action = text === pendingSuggestion.originalText.trim() ? "USED" : "EDITED";
-      await api("/api/bot-suggestion-feedback", {
-        method: "POST",
-        body: JSON.stringify({ observationId: pendingSuggestion.observationId, action, finalResponseText: text }),
-      }).catch(() => {});
-    }
-    state.pendingBotSuggestion = null;
     input.value = "";
     resetComposerHeight();
     hideSlashSuggestions();

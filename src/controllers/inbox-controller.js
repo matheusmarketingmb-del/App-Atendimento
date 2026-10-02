@@ -6,8 +6,6 @@ const authorization = require("../services/authorization-service");
 const internalChat = require("../services/internal-chat-service");
 const { customerServiceWindowFrom, getCustomerServiceWindow, listApprovedTemplates, sendApprovedTemplate, templatesConfigured } = require("../services/meta-template-service");
 const { createOutboundConversation, createOutboundEmail, listOutboundChannels } = require("../services/outbound-conversation-service");
-const { analyzeConversation } = require("../services/bot-learning-service");
-const { submitAgentFeedback } = require("../services/bot-agent-feedback-service");
 const { Channel: ChannelEnum } = require("@prisma/client");
 const contactMerge = require("../services/contact-merge-service");
 const { createAdapter } = require("../services/channels/channel-adapter-registry");
@@ -279,7 +277,6 @@ async signalTransfer(req, res, next) {
           action: "STATUS_CHANGED", details: { from: result.previousStatus, to: "FINALIZADO" },
         });
         inboxEvents.publish();
-        if (!result.alreadyFinalized) analyzeConversation(req.params.id).catch(() => {});
         return res.json(result);
       } catch (error) { return next(error); }
     },
@@ -288,12 +285,6 @@ async signalTransfer(req, res, next) {
         const result = await moderateMessage({ messageId: req.params.messageId, action: req.body.action, actor: req.user });
         inboxEvents.publish();
         return res.json(result);
-      } catch (error) { return next(error); }
-    },
-    async botFeedback(req, res, next) {
-      try {
-        await authorization.assertCanViewConversation(req.user, req.params.id);
-        return res.status(201).json(await submitAgentFeedback(req.params.id, req.body, req.user));
       } catch (error) { return next(error); }
     },
     async media(req, res, next) {

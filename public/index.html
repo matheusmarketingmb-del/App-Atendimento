@@ -54,7 +54,6 @@
           <p class="sidebar-group-label">Automação</p>
           <button id="bots-button" class="sidebar-item" type="button" hidden><span class="sidebar-item-icon" aria-hidden="true">🤖</span><span class="sidebar-item-label">Bots</span></button>
           <button id="quick-replies-admin-button" class="sidebar-item" type="button" hidden><span class="sidebar-item-icon" aria-hidden="true">⚡</span><span class="sidebar-item-label">Respostas rápidas</span></button>
-          <button id="knowledge-base-button" class="sidebar-item" type="button" hidden><span class="sidebar-item-icon" aria-hidden="true">📚</span><span class="sidebar-item-label">Conhecimento</span></button>
         </div>
         <div class="sidebar-group">
           <p class="sidebar-group-label">Canais</p>
@@ -225,7 +224,6 @@
           <button type="button" class="context-tab active" data-context-tab="details" role="tab">Detalhes</button>
           <button type="button" class="context-tab" data-context-tab="notes" role="tab">Notas</button>
           <button type="button" id="history-tab-button" class="context-tab" data-context-tab="history" role="tab">Histórico</button>
-          <button type="button" class="context-tab" data-context-tab="bot" role="tab">Bot</button>
           <button type="button" class="context-tab" data-context-tab="sla" role="tab">SLA</button>
           <button type="button" class="context-tab" data-context-tab="files" role="tab">Arquivos</button>
         </nav>
@@ -249,20 +247,6 @@
             <p class="notes-help">Registro de alterações realizadas pela equipe nesta conversa.</p>
             <div id="history-list" class="history-list"></div>
           </aside>
-        </section>
-        <section data-context-panel="bot" class="context-pane" hidden>
-          <p id="bot-tab-empty" class="context-empty">Nenhuma sugestão do bot no momento.</p>
-          <section id="bot-suggestion-card" class="bot-suggestion-card" hidden aria-live="polite">
-            <div class="bot-suggestion-head"><span>SUGESTÃO DO BOT</span><small id="bot-suggestion-meta"></small></div>
-            <p id="bot-suggestion-text"></p>
-            <div class="bot-suggestion-actions">
-              <button id="use-bot-suggestion" type="button">Usar</button>
-              <button id="edit-bot-suggestion" type="button">Editar</button>
-              <button id="ignore-bot-suggestion" type="button">Ignorar</button>
-              <button id="like-bot-suggestion" type="button" aria-label="Sugestão útil">👍</button>
-              <button id="dislike-bot-suggestion" type="button" aria-label="Sugestão não útil">👎</button>
-            </div>
-          </section>
         </section>
         <section data-context-panel="sla" class="context-pane" hidden>
           <div id="context-tab-sla-body" class="context-info-list"></div>
@@ -340,7 +324,7 @@
     <div id="merge-contact-results" class="merge-contact-results"></div>
   </dialog>
   <dialog id="contact-files-dialog" class="contact-files-dialog">
-    <div class="dialog-header"><div><span>CONTEÚDO COMPARTILHADO</span><h2 id="contact-files-title">Arquivos da conversa</h2><p>Somente o conteúdo que sua conta pode visualizar nesta conversa.</p><div class="conversation-id-row"><span class="conversation-id-label">ID: <code id="contact-files-conversation-id"></code></span><button id="copy-conversation-id" type="button" class="conversation-id-copy">Copiar ID</button><button id="analyze-conversation-learning" type="button" class="conversation-id-analyze" hidden>Analisar para aprendizado</button></div></div><button id="close-contact-files" type="button" aria-label="Fechar">×</button></div>
+    <div class="dialog-header"><div><span>CONTEÚDO COMPARTILHADO</span><h2 id="contact-files-title">Arquivos da conversa</h2><p>Somente o conteúdo que sua conta pode visualizar nesta conversa.</p><div class="conversation-id-row"><span class="conversation-id-label">ID: <code id="contact-files-conversation-id"></code></span><button id="copy-conversation-id" type="button" class="conversation-id-copy">Copiar ID</button></div></div><button id="close-contact-files" type="button" aria-label="Fechar">×</button></div>
     <nav class="contact-files-tabs" aria-label="Tipos de conteúdo">
       <button type="button" data-files-tab="media">Imagens e vídeos <span id="media-files-count">0</span></button>
       <button type="button" data-files-tab="documents">Documentos <span id="document-files-count">0</span></button>

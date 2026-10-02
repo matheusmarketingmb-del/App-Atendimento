@@ -5,7 +5,7 @@
 const prisma = require("../database/prisma");
 const authorization = require("./authorization-service");
 const audit = require("./audit-service");
-const { normalizeText } = require("./bot-simulator-service");
+const { normalizeText } = require("./bot-schedule-utils");
 const { OPT_OUT_PATTERNS } = require("./campaign-constants");
 
 function fail(message, statusCode = 400) {

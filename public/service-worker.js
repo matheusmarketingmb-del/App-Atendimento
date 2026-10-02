@@ -10,7 +10,6 @@ const STATIC_ASSETS = [
   "/css/bots.css",
   "/css/login.css",
   "/css/skeleton.css",
-  "/css/knowledge-base.css",
   "/css/campaigns.css",
   "/css/configuracoes.css",
 
@@ -21,7 +20,6 @@ const STATIC_ASSETS = [
   "/js/changelog.js",
   "/js/internal-chat.js",
   "/js/pwa.js",
-  "/js/knowledge-base.js",
   "/js/campaigns.js",
   "/js/configuracoes.js",
 

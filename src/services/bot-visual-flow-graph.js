@@ -1,76 +1,86 @@
 // Flow Builder (Editor Visual): shape do grafo, registry de tipos de nó e
 // validação de publicação. Puro, sem I/O — as checagens que dependem do
-// banco (categoria/usuário/fluxo existentes) recebem os ids válidos prontos
-// em `refs` (ver bot-visual-flow-service.js#loadValidationRefs).
+// banco (setor/usuário/fluxo/resposta/endpoint/mídia existentes) recebem os
+// ids válidos prontos em `refs` (ver bot-visual-flow-service.js#loadValidationRefs).
 //
 // Grafo salvo em BotFlow.draftGraph / BotFlowVersion.graph:
 //   { nodes: [{ key, type, name, x, y, config }],
 //     edges: [{ id, source, sourceHandle, target }],
 //     viewport: { x, y, zoom } }
 //
-// Adicionar um tipo novo = registrar mais um item em NODE_TYPES (e um
-// handler em bot-visual-flow-engine.js). `available: false` aparece na
-// biblioteca como "em breve" e bloqueia a publicação se usado.
+// Motor 100% determinístico: nenhum nó depende de IA. Adicionar um tipo novo
+// = registrar mais um item em NODE_TYPES (e um handler em
+// bot-visual-flow-engine.js).
 
 const MAX_NODES = 300;
 const MAX_EDGES = 900;
 const MAX_TEXT = 4000;
+const MAX_MENU_OPTIONS = 50;
 const NODE_KEY_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 const VARIABLE_PATH_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*){0,4}$/;
-// Raízes do contexto que um nó pode ESCREVER (Pergunta/Variável). contact/
-// conversation/bot/knowledge são preenchidos só pelo motor.
-const WRITABLE_ROOTS = new Set(["customer", "flow", "vars"]);
+const TEMPLATE_PATTERN = /\{\{\s*([A-Za-z_][A-Za-z0-9_.]*)\s*\}\}/g;
+const STORAGE_KEY_PATTERN = /^[a-f0-9]{32,64}\.[a-z0-9]{2,5}$/;
+
+// Raízes que um nó pode ESCREVER (Pergunta/Menu/Variável/Webhook).
+const WRITABLE_ROOTS = new Set(["customer", "flow", "vars", "custom"]);
+// Variáveis de sistema (preenchidas só pelo motor) — qualquer outra coisa
+// em contact./conversation./bot. é "variável inexistente".
+const SYSTEM_VARIABLES = Object.freeze([
+  "contact.name", "contact.firstName", "contact.phone", "contact.email", "contact.greeting", "contact.greetingComma",
+  "conversation.id", "conversation.channel", "conversation.withinBusinessHours",
+  "bot.name", "bot.businessHours", "bot.withinBusinessHours",
+]);
+const SYSTEM_ROOTS = new Set(["contact", "conversation", "bot"]);
+const FLOW_VARIABLES = Object.freeze(["flow.selectedOption", "flow.lastAnswer", "flow.lastMessage"]);
+// Atalhos aceitos em Condições.
+const PATH_ALIASES = Object.freeze({ channel: "conversation.channel", withinBusinessHours: "bot.withinBusinessHours" });
 
 const CONDITION_OPERATORS = ["==", "!=", "contains", "not_contains", ">", "<", ">=", "<=", "exists", "not_exists"];
-const ANSWER_TYPES = ["TEXT", "NUMBER", "EMAIL", "CPF_CNPJ", "PHONE"];
+const ANSWER_TYPES = ["TEXT", "NUMBER", "EMAIL", "CPF_CNPJ", "PHONE", "YES_NO"];
+const MEDIA_KINDS = ["IMAGE", "AUDIO", "VIDEO", "DOCUMENT"];
 const DELAY_UNITS = { SECONDS: 1000, MINUTES: 60 * 1000, HOURS: 60 * 60 * 1000 };
 const MAX_DELAY_MS = 24 * 60 * 60 * 1000;
-const AI_MODES = ["UNDERSTAND", "RESPOND", "CLASSIFY", "EXTRACT", "DECIDE"];
-const AI_PROVIDERS = ["LOCAL_QWEN"];
 
-// group/label/icon alimentam a biblioteca do editor (GET .../flow-node-types).
-// outputs: lista fixa de handles; `dynamicOutputs` = handles derivados da
-// config (opções do Menu). `terminal` = nó sem saída (encerra a execução).
-// `pauses` = nó que espera algo externo (cliente/timer) — usado na detecção
-// de loop infinito.
+// group/label/icon alimentam a biblioteca do editor. outputs: handles fixos;
+// `dynamicOutputs` = handles derivados da config (opções do Menu).
+// `terminal` = encerra a execução (ou troca de fluxo). `pauses` = espera algo
+// externo (cliente/timer) — usado na detecção de loop infinito.
 const NODE_TYPES = {
-  start: { group: "FLUXO", label: "Início", icon: "▶", outputs: ["next"], available: true },
-  end: { group: "FLUXO", label: "Finalizar", icon: "■", outputs: [], terminal: true, available: true },
-  goto_flow: { group: "FLUXO", label: "Ir para fluxo", icon: "↪", outputs: [], terminal: true, available: false },
+  start: { group: "FLUXO", label: "Início", icon: "▶", outputs: ["next"] },
+  goto_flow: { group: "FLUXO", label: "Ir para fluxo", icon: "↪", outputs: [], terminal: true },
+  end: { group: "FLUXO", label: "Finalizar", icon: "■", outputs: [], terminal: true },
 
-  message: { group: "MENSAGENS", label: "Mensagem de texto", icon: "💬", outputs: ["next"], available: true },
-  question: { group: "MENSAGENS", label: "Pergunta", icon: "❓", outputs: ["next", "invalid"], optionalOutputs: ["invalid"], pauses: true, available: true },
-  menu: { group: "MENSAGENS", label: "Menu", icon: "☰", outputs: ["invalid"], optionalOutputs: ["invalid"], dynamicOutputs: true, pauses: true, available: true },
+  message: { group: "MENSAGENS", label: "Mensagem", icon: "💬", outputs: ["next"] },
+  menu: { group: "MENSAGENS", label: "Menu", icon: "☰", outputs: ["invalid"], optionalOutputs: ["invalid"], dynamicOutputs: true, pauses: true },
+  question: { group: "MENSAGENS", label: "Pergunta", icon: "❓", outputs: ["next", "invalid"], optionalOutputs: ["invalid"], pauses: true },
+  media: { group: "MENSAGENS", label: "Mídia", icon: "🖼", outputs: ["next"] },
 
-  image: { group: "MÍDIA", label: "Imagem", icon: "🖼", outputs: ["next"], available: false },
-  audio: { group: "MÍDIA", label: "Áudio", icon: "🎧", outputs: ["next"], available: false },
-  video: { group: "MÍDIA", label: "Vídeo", icon: "🎬", outputs: ["next"], available: false },
-  document: { group: "MÍDIA", label: "Documento", icon: "📄", outputs: ["next"], available: false },
+  condition: { group: "CONTROLE", label: "Condição", icon: "⋔", outputs: ["true", "false"] },
+  delay: { group: "CONTROLE", label: "Intervalo", icon: "⏱", outputs: ["next"], pauses: true },
 
-  delay: { group: "CONTROLE", label: "Intervalo", icon: "⏱", outputs: ["next"], pauses: true, available: true },
-  condition: { group: "CONTROLE", label: "Condição", icon: "⋔", outputs: ["true", "false"], available: true },
-  variable: { group: "CONTROLE", label: "Variável", icon: "𝑥", outputs: ["next"], available: true },
+  variable: { group: "DADOS", label: "Variável", icon: "𝑥", outputs: ["next"] },
 
-  ai: { group: "BOT / IA", label: "IA", icon: "✦", outputs: ["next", "handoff", "error"], optionalOutputs: ["handoff", "error"], available: true },
-  knowledge: { group: "BOT / IA", label: "Consultar conhecimento", icon: "📚", outputs: ["found", "not_found"], optionalOutputs: ["not_found"], available: true },
-  classify_intent: { group: "BOT / IA", label: "Classificar intenção", icon: "🏷", outputs: ["next"], available: false },
+  transfer_category: { group: "ATENDIMENTO", label: "Transferir para setor", icon: "⇄", outputs: [], terminal: true },
+  transfer_user: { group: "ATENDIMENTO", label: "Transferir para atendente", icon: "👤", outputs: [], terminal: true },
+  human_handoff: { group: "ATENDIMENTO", label: "Solicitar humano", icon: "🙋", outputs: [], terminal: true },
 
-  transfer_category: { group: "ATENDIMENTO", label: "Transferir para setor", icon: "⇄", outputs: [], terminal: true, available: true },
-  transfer_user: { group: "ATENDIMENTO", label: "Transferir para atendente", icon: "👤", outputs: [], terminal: true, available: false },
-  human_handoff: { group: "ATENDIMENTO", label: "Solicitar atendimento humano", icon: "🙋", outputs: [], terminal: true, available: true },
+  webhook: { group: "INTEGRAÇÕES", label: "Webhook/API", icon: "⚡", outputs: ["next", "error"], optionalOutputs: ["error"] },
 
-  webhook: { group: "INTEGRAÇÕES", label: "Webhook/API", icon: "⚡", outputs: ["next", "error"], available: false },
-  create_lead: { group: "INTEGRAÇÕES", label: "Criar Lead", icon: "➕", outputs: ["next", "error"], available: false },
-  update_contact: { group: "INTEGRAÇÕES", label: "Atualizar contato", icon: "✎", outputs: ["next"], available: false },
+  // Placeholder de nós que existiam no editor antigo (IA, Conhecimento,
+  // Classificar intenção, Criar Lead, Atualizar contato): rascunhos antigos
+  // continuam abrindo, mas o nó bloqueia a publicação até ser removido.
+  removed: { group: null, label: "Nó removido", icon: "⚠", outputs: [], hidden: true },
 };
+const GROUP_ORDER = ["FLUXO", "MENSAGENS", "CONTROLE", "DADOS", "ATENDIMENTO", "INTEGRAÇÕES"];
+const REMOVED_TYPES = new Set(["ai", "knowledge", "classify_intent", "create_lead", "update_contact"]);
+const MEDIA_TYPE_ALIASES = { image: "IMAGE", audio: "AUDIO", video: "VIDEO", document: "DOCUMENT" };
 
 function nodeTypeCatalog() {
-  return Object.entries(NODE_TYPES).map(([type, meta]) => ({
+  return Object.entries(NODE_TYPES).filter(([, meta]) => !meta.hidden).map(([type, meta]) => ({
     type, group: meta.group, label: meta.label, icon: meta.icon,
     outputs: meta.outputs, optionalOutputs: meta.optionalOutputs || [],
-    dynamicOutputs: Boolean(meta.dynamicOutputs), terminal: Boolean(meta.terminal),
-    available: meta.available,
-  }));
+    dynamicOutputs: Boolean(meta.dynamicOutputs), terminal: Boolean(meta.terminal), available: true,
+  })).sort((a, b) => GROUP_ORDER.indexOf(a.group) - GROUP_ORDER.indexOf(b.group));
 }
 
 function badRequest(message, details) {
@@ -87,11 +97,14 @@ function finiteNumber(value, fallback = 0) {
   return Number.isFinite(number) ? Math.round(number * 100) / 100 : fallback;
 }
 
+function attempts(value) {
+  return Math.min(10, Math.max(1, Math.trunc(finiteNumber(value, 3))));
+}
+
 function menuOptionHandle(optionId) {
   return `opt:${optionId}`;
 }
 
-// Handles de saída válidos para um nó (inclui os dinâmicos do Menu).
 function outputHandles(node) {
   const meta = NODE_TYPES[node.type];
   if (!meta) return [];
@@ -109,10 +122,14 @@ function requiredHandles(node) {
   return outputHandles(node).filter((handle) => !optional.has(handle));
 }
 
+function keyValueList(value, max = 20) {
+  return (Array.isArray(value) ? value : []).slice(0, max).map((item) => ({ key: text(item?.key, 80), value: text(item?.value, 1000) }));
+}
+
 // ---- normalização (aplicada em todo save de draft) ------------------------
 // Nunca confia no shape vindo do editor: corta tamanhos, descarta campos
-// desconhecidos e tipos inexistentes. Não valida regras de publicação — um
-// draft pode estar incompleto.
+// desconhecidos. Não valida regras de publicação — um draft pode estar
+// incompleto.
 
 function normalizeConfig(type, config = {}) {
   const c = config && typeof config === "object" ? config : {};
@@ -125,27 +142,43 @@ function normalizeConfig(type, config = {}) {
         trigger: ["NEW_CONVERSATION", "ANY_MESSAGE"].includes(c.trigger) ? c.trigger : "NEW_CONVERSATION",
       };
     case "message":
-      return { text: text(c.text) };
+      return {
+        source: c.source === "LIBRARY" ? "LIBRARY" : "TEXT",
+        text: text(c.text),
+        responseKey: text(c.responseKey, 64),
+      };
     case "question":
       return {
         text: text(c.text),
         variable: text(c.variable, 80) || "flow.lastAnswer",
         answerType: ANSWER_TYPES.includes(c.answerType) ? c.answerType : "TEXT",
         invalidMessage: text(c.invalidMessage, 1000),
-        maxAttempts: Math.min(10, Math.max(1, Math.trunc(finiteNumber(c.maxAttempts, 3)))),
+        maxAttempts: attempts(c.maxAttempts),
       };
     case "menu":
       return {
         text: text(c.text),
-        options: (Array.isArray(c.options) ? c.options : []).slice(0, 20).map((option, index) => ({
+        options: (Array.isArray(c.options) ? c.options : []).slice(0, MAX_MENU_OPTIONS).map((option, index) => ({
           id: NODE_KEY_PATTERN.test(String(option?.id || "")) ? String(option.id) : `o${index + 1}`,
           label: text(option?.label, 120),
           keywords: (Array.isArray(option?.keywords) ? option.keywords : String(option?.keywords || "").split(","))
-            .map((word) => text(word, 60).trim()).filter(Boolean).slice(0, 20),
+            .map((word) => text(word, 60).trim()).filter(Boolean).slice(0, 30),
         })),
         variable: text(c.variable, 80) || "flow.selectedOption",
         invalidMessage: text(c.invalidMessage, 1000),
-        maxAttempts: Math.min(10, Math.max(1, Math.trunc(finiteNumber(c.maxAttempts, 3)))),
+        maxAttempts: attempts(c.maxAttempts),
+        // LIST = lista interativa do WhatsApp (até 10 opções; acima disso, ou
+        // fora do WhatsApp, cai automaticamente para texto numerado).
+        display: c.display === "LIST" ? "LIST" : "TEXT",
+        buttonLabel: text(c.buttonLabel, 20) || "Ver opções",
+      };
+    case "media":
+      return {
+        kind: MEDIA_KINDS.includes(c.kind) ? c.kind : "IMAGE",
+        storageKey: STORAGE_KEY_PATTERN.test(String(c.storageKey || "")) ? String(c.storageKey) : "",
+        mimeType: text(c.mimeType, 120),
+        fileName: text(c.fileName, 200),
+        caption: text(c.caption, 1000),
       };
     case "condition":
       return {
@@ -162,29 +195,14 @@ function normalizeConfig(type, config = {}) {
         unit: Object.hasOwn(DELAY_UNITS, c.unit) ? c.unit : "SECONDS",
       };
     case "variable":
-      return {
-        assignments: (Array.isArray(c.assignments) ? c.assignments : []).slice(0, 20).map((item) => ({
-          key: text(item?.key, 80), value: text(item?.value, 1000),
-        })),
-      };
-    case "ai":
-      return {
-        mode: AI_MODES.includes(c.mode) ? c.mode : "UNDERSTAND",
-        provider: AI_PROVIDERS.includes(c.provider) ? c.provider : "LOCAL_QWEN",
-        model: text(c.model, 80),
-        input: text(c.input, 500) || "{{flow.lastMessage}}",
-        sendAnswer: c.sendAnswer === true,
-      };
-    case "knowledge":
-      return {
-        query: text(c.query, 500) || "{{flow.lastMessage}}",
-        product: text(c.product, 120),
-        limit: Math.min(10, Math.max(1, Math.trunc(finiteNumber(c.limit, 3)))),
-      };
+      return { assignments: keyValueList(c.assignments) };
     case "transfer_category":
       return { categoryId: c.categoryId ? text(c.categoryId, 64) : "", message: text(c.message), reason: text(c.reason, 500) };
     case "transfer_user":
-      return { userId: c.userId ? text(c.userId, 64) : "", shareHistory: c.shareHistory !== false, message: text(c.message) };
+      return {
+        userId: c.userId ? text(c.userId, 64) : "", categoryId: c.categoryId ? text(c.categoryId, 64) : "",
+        message: text(c.message), reason: text(c.reason, 500),
+      };
     case "human_handoff":
       return { reason: text(c.reason, 500), categoryId: c.categoryId ? text(c.categoryId, 64) : "", message: text(c.message) };
     case "end":
@@ -194,25 +212,26 @@ function normalizeConfig(type, config = {}) {
     case "goto_flow":
       return { flowId: c.flowId ? text(c.flowId, 64) : "" };
     case "webhook":
-      // Nunca aceita headers/segredos vindos do editor: o nó só referencia
-      // um endpoint pré-cadastrado no backend (`endpointKey`), que resolve
-      // URL/credenciais do lado do servidor (item de segurança).
+      // Nunca aceita URL/headers/segredos vindos do editor: o nó só
+      // referencia um endpoint pré-cadastrado (bot-webhook-endpoint-service.js).
       return {
-        endpointKey: text(c.endpointKey, 80), method: ["GET", "POST"].includes(c.method) ? c.method : "POST",
-        body: text(c.body, 2000), timeoutMs: Math.min(15000, Math.max(500, Math.trunc(finiteNumber(c.timeoutMs, 5000)))),
+        endpointKey: text(c.endpointKey, 64),
+        fields: keyValueList(c.fields),
+        resultVariable: text(c.resultVariable, 80) || "vars.webhook",
       };
-    case "create_lead":
-      return Object.fromEntries(["source", "name", "phone", "email", "cpf", "cnpj", "product", "interest", "quantity", "notes"]
-        .map((field) => [field, text(c[field], 500)]).concat([["includeSummary", c.includeSummary !== false]]));
-    case "update_contact":
-      return { name: text(c.name, 200), email: text(c.email, 200) };
-    case "image": case "audio": case "video": case "document":
-      return { mediaUrl: text(c.mediaUrl, 1000), caption: text(c.caption, 1000) };
-    case "classify_intent":
-      return {};
+    case "removed":
+      return { originalType: text(c.originalType, 40) };
     default:
       return {};
   }
+}
+
+// Converte tipos de versões antigas do editor: mídia separada -> "media";
+// IA/Conhecimento/etc. -> "removed" (bloqueia publicação, nunca executa).
+function migrateLegacyNode(raw) {
+  if (MEDIA_TYPE_ALIASES[raw.type]) return { ...raw, type: "media", config: { ...(raw.config || {}), kind: MEDIA_TYPE_ALIASES[raw.type] } };
+  if (REMOVED_TYPES.has(raw.type)) return { ...raw, type: "removed", config: { originalType: raw.type } };
+  return raw;
 }
 
 function normalizeGraph(input) {
@@ -224,7 +243,8 @@ function normalizeGraph(input) {
 
   const nodes = [];
   const seen = new Set();
-  for (const raw of rawNodes) {
+  for (const original of rawNodes) {
+    const raw = original && typeof original === "object" ? migrateLegacyNode(original) : original;
     const key = String(raw?.key || "");
     if (!NODE_KEY_PATTERN.test(key)) throw badRequest("Identificador de nó inválido.");
     if (seen.has(key)) throw badRequest(`Nó duplicado: ${key}.`);
@@ -244,8 +264,6 @@ function normalizeGraph(input) {
     const source = String(raw?.source || "");
     const target = String(raw?.target || "");
     const sourceHandle = String(raw?.sourceHandle || "next").slice(0, 80);
-    // Conexão para nó inexistente é descartada no save (o editor pode
-    // mandar uma aresta pendurada depois de apagar um nó).
     if (!byKey.has(source) || !byKey.has(target)) continue;
     let id = String(raw?.id || `${source}:${sourceHandle}->${target}`).slice(0, 200);
     if (edgeIds.has(id)) id = `${id}#${edges.length}`;
@@ -269,9 +287,65 @@ function defaultGraph() {
   };
 }
 
+// ---- variáveis ---------------------------------------------------------------
+
+function isWritablePath(path) {
+  if (!VARIABLE_PATH_PATTERN.test(path || "")) return false;
+  const [root, ...rest] = path.split(".");
+  return WRITABLE_ROOTS.has(root) && rest.length >= 1;
+}
+
+function resolveAlias(path) {
+  return PATH_ALIASES[path] || path;
+}
+
+// "unknown" = variável que nunca pode existir (raiz desconhecida ou variável
+// de sistema inexistente) -> erro. Variáveis graváveis (customer./vars./
+// custom./flow.) lidas sem ninguém gravar no fluxo viram só AVISO — podem
+// vir de outro fluxo (Ir para fluxo compartilha o contexto).
+function classifyVariable(rawPath) {
+  const path = resolveAlias(rawPath);
+  if (!VARIABLE_PATH_PATTERN.test(path)) return "invalid";
+  const root = path.split(".")[0];
+  if (SYSTEM_ROOTS.has(root)) return SYSTEM_VARIABLES.includes(path) ? "system" : "unknown";
+  if (WRITABLE_ROOTS.has(root)) return path.includes(".") ? "writable" : "invalid";
+  return "unknown";
+}
+
+function templateVariables(template) {
+  return [...String(template || "").matchAll(TEMPLATE_PATTERN)].map((match) => match[1]);
+}
+
+// Todos os textos com {{variáveis}} de um nó.
+function nodeTemplates(node) {
+  const c = node.config || {};
+  switch (node.type) {
+    case "start": return [c.initialMessage];
+    case "message": return c.source === "LIBRARY" ? [] : [c.text];
+    case "question": case "menu": return [c.text, c.invalidMessage];
+    case "media": return [c.caption];
+    case "variable": return (c.assignments || []).map((item) => item.value);
+    case "transfer_category": case "transfer_user": case "human_handoff": return [c.message, c.reason];
+    case "end": return [c.message];
+    case "webhook": return (c.fields || []).map((item) => item.value);
+    default: return [];
+  }
+}
+
+// Variáveis que este nó GRAVA.
+function nodeWrites(node) {
+  const c = node.config || {};
+  switch (node.type) {
+    case "question": case "menu": return [c.variable];
+    case "variable": return (c.assignments || []).map((item) => item.key);
+    case "webhook": return [c.resultVariable];
+    default: return [];
+  }
+}
+
 // ---- validação de publicação ---------------------------------------------
-// Devolve { valid, errors: [{ nodeKey|null, code, message }] } — o editor
-// pinta cada erro no nó correspondente.
+// Devolve { valid, errors, warnings } — errors: [{ nodeKey|null, code,
+// message }] bloqueiam a publicação; warnings só informam.
 
 function tarjanCycles(nodes, adjacency) {
   let index = 0;
@@ -303,15 +377,19 @@ function validateNodeConfig(node, refs) {
   const errors = [];
   const add = (code, message) => errors.push({ nodeKey: node.key, code, message });
   const c = node.config || {};
-  const meta = NODE_TYPES[node.type];
-  if (!meta.available) add("NODE_NOT_AVAILABLE", `"${meta.label}" ainda não está disponível nesta versão — remova o nó para publicar.`);
   switch (node.type) {
+    case "removed":
+      add("NODE_REMOVED", `Este nó (${c.originalType || "antigo"}) não existe mais — o Bot funciona sem IA. Exclua o nó e use Mensagem/Menu/Condição.`);
+      break;
     case "message":
-      if (!c.text?.trim()) add("MISSING_TEXT", "Informe o texto da mensagem.");
+      if (c.source === "LIBRARY") {
+        if (!c.responseKey) add("MISSING_RESPONSE", "Selecione a resposta da biblioteca.");
+        else if (refs.responseKeys && !refs.responseKeys.has(c.responseKey)) add("RESPONSE_NOT_FOUND", `A resposta "${c.responseKey}" não existe ou está inativa.`);
+      } else if (!c.text?.trim()) add("MISSING_TEXT", "Informe o texto da mensagem.");
       break;
     case "question":
       if (!c.text?.trim()) add("MISSING_TEXT", "Informe o texto da pergunta.");
-      if (!isWritablePath(c.variable)) add("INVALID_VARIABLE", "A variável deve começar com customer., flow. ou vars.");
+      if (!isWritablePath(c.variable)) add("INVALID_VARIABLE", "A variável deve começar com customer., flow., vars. ou custom.");
       break;
     case "menu": {
       if (!c.text?.trim()) add("MISSING_TEXT", "Informe o texto do menu.");
@@ -322,13 +400,23 @@ function validateNodeConfig(node, refs) {
         if (ids.has(option.id)) add("MENU_OPTION_DUPLICATE", "Há opções do menu com o mesmo identificador.");
         ids.add(option.id);
       }
-      if (!isWritablePath(c.variable)) add("INVALID_VARIABLE", "A variável deve começar com customer., flow. ou vars.");
+      if (!isWritablePath(c.variable)) add("INVALID_VARIABLE", "A variável deve começar com customer., flow., vars. ou custom.");
       break;
     }
+    case "media":
+      if (!c.storageKey) add("MISSING_MEDIA", "Envie o arquivo de mídia.");
+      else if (refs.mediaKeys && !refs.mediaKeys.has(c.storageKey)) add("MEDIA_NOT_FOUND", "O arquivo de mídia não foi encontrado no servidor. Envie de novo.");
+      break;
     case "condition":
       if (!(c.rules || []).length) add("CONDITION_RULES", "Adicione pelo menos uma regra.");
       for (const rule of c.rules || []) {
-        if (!VARIABLE_PATH_PATTERN.test(rule.left || "")) add("CONDITION_LEFT", "Toda regra precisa de uma variável válida (ex.: bot.intent).");
+        const kind = classifyVariable(rule.left || "");
+        if (kind === "invalid") add("CONDITION_LEFT", "Toda regra precisa de uma variável válida (ex.: flow.selectedOption).");
+        else if (kind === "unknown") add("VARIABLE_NOT_FOUND", `Variável inexistente na condição: ${rule.left}.`);
+        // == / != com valor vazio comparam com "vazio" (equivale a not_exists/exists).
+        if (!["exists", "not_exists", "==", "!="].includes(rule.operator) && String(rule.right ?? "").trim() === "") {
+          add("CONDITION_RIGHT", `Informe o valor para comparar em "${rule.left} ${rule.operator}".`);
+        }
       }
       break;
     case "delay": {
@@ -340,12 +428,17 @@ function validateNodeConfig(node, refs) {
     case "variable":
       if (!(c.assignments || []).length) add("VARIABLE_ASSIGNMENTS", "Defina pelo menos uma variável.");
       for (const item of c.assignments || []) {
-        if (!isWritablePath(item.key)) add("INVALID_VARIABLE", `Variável inválida "${item.key}" — use customer., flow. ou vars.`);
+        if (!isWritablePath(item.key)) add("INVALID_VARIABLE", `Variável inválida "${item.key}" — use customer., flow., vars. ou custom.`);
       }
       break;
     case "transfer_category":
       if (!c.categoryId) add("MISSING_CATEGORY", "Selecione o setor de destino.");
       else if (refs.categoryIds && !refs.categoryIds.has(c.categoryId)) add("CATEGORY_NOT_FOUND", "O setor selecionado não existe ou está inativo.");
+      break;
+    case "transfer_user":
+      if (!c.userId) add("MISSING_USER", "Selecione o atendente.");
+      else if (refs.userIds && !refs.userIds.has(c.userId)) add("USER_NOT_FOUND", "O atendente selecionado não existe ou está inativo.");
+      if (c.categoryId && refs.categoryIds && !refs.categoryIds.has(c.categoryId)) add("CATEGORY_NOT_FOUND", "O setor selecionado não existe ou está inativo.");
       break;
     case "human_handoff":
       if (c.categoryId && refs.categoryIds && !refs.categoryIds.has(c.categoryId)) add("CATEGORY_NOT_FOUND", "O setor selecionado não existe ou está inativo.");
@@ -353,42 +446,43 @@ function validateNodeConfig(node, refs) {
     case "start":
       if (c.categoryId && refs.categoryIds && !refs.categoryIds.has(c.categoryId)) add("CATEGORY_NOT_FOUND", "A categoria inicial não existe ou está inativa.");
       break;
-    case "transfer_user":
-      if (!c.userId) add("MISSING_USER", "Selecione o atendente.");
-      else if (refs.userIds && !refs.userIds.has(c.userId)) add("USER_NOT_FOUND", "O atendente selecionado não existe ou está inativo.");
-      break;
     case "goto_flow":
       if (!c.flowId) add("MISSING_FLOW", "Selecione o fluxo de destino.");
-      else if (refs.flowIds && !refs.flowIds.has(c.flowId)) add("FLOW_NOT_FOUND", "O fluxo referenciado não existe.");
+      else if (refs.currentFlowId && c.flowId === refs.currentFlowId) add("GOTO_SELF", "Um fluxo não pode ir para ele mesmo — use uma conexão.");
+      else if (refs.flowIds && !refs.flowIds.has(c.flowId)) add("FLOW_NOT_FOUND", "O fluxo referenciado não existe neste Bot.");
+      break;
+    case "webhook":
+      if (!c.endpointKey) add("MISSING_ENDPOINT", "Selecione o endpoint cadastrado.");
+      else if (refs.webhookKeys && !refs.webhookKeys.has(c.endpointKey)) add("ENDPOINT_NOT_FOUND", `O endpoint "${c.endpointKey}" não existe ou está inativo.`);
+      if (!isWritablePath(c.resultVariable)) add("INVALID_VARIABLE", "Salve o resultado em customer., flow., vars. ou custom.");
+      for (const field of c.fields || []) if (!/^[A-Za-z0-9_.-]{1,80}$/.test(field.key)) add("WEBHOOK_FIELD", `Nome de campo inválido: "${field.key}".`);
       break;
     default:
       break;
   }
+  for (const template of nodeTemplates(node)) {
+    for (const path of templateVariables(template)) {
+      if (classifyVariable(path) === "unknown") add("VARIABLE_NOT_FOUND", `Variável inexistente: {{${path}}}.`);
+    }
+  }
   return errors;
-}
-
-function isWritablePath(path) {
-  if (!VARIABLE_PATH_PATTERN.test(path || "")) return false;
-  const [root, ...rest] = path.split(".");
-  return WRITABLE_ROOTS.has(root) && rest.length >= 1;
 }
 
 function validateGraph(graphInput, refs = {}) {
   const graph = normalizeGraph(graphInput);
   const errors = [];
+  const warnings = [];
   const starts = graph.nodes.filter((node) => node.type === "start");
   if (starts.length === 0) errors.push({ nodeKey: null, code: "NO_START", message: "O fluxo precisa de um nó Início." });
   if (starts.length > 1) for (const node of starts.slice(1)) errors.push({ nodeKey: node.key, code: "MULTIPLE_START", message: "O fluxo só pode ter um nó Início." });
 
   const byKey = new Map(graph.nodes.map((node) => [node.key, node]));
   const adjacency = new Map(graph.nodes.map((node) => [node.key, []]));
-  const incoming = new Map(graph.nodes.map((node) => [node.key, 0]));
   const usedHandles = new Map();
 
   for (const edge of graph.edges) {
     const source = byKey.get(edge.source);
-    const handles = outputHandles(source);
-    if (!handles.includes(edge.sourceHandle)) {
+    if (!outputHandles(source).includes(edge.sourceHandle)) {
       errors.push({ nodeKey: source.key, code: "INVALID_EDGE", message: `Conexão saindo de uma saída inexistente (${edge.sourceHandle}).` });
       continue;
     }
@@ -396,13 +490,13 @@ function validateGraph(graphInput, refs = {}) {
       errors.push({ nodeKey: edge.target, code: "EDGE_TO_START", message: "Nenhuma conexão pode entrar no nó Início." });
     }
     const handleKey = `${edge.source}::${edge.sourceHandle}`;
-    if (usedHandles.has(handleKey)) {
-      errors.push({ nodeKey: source.key, code: "DUPLICATE_OUTPUT", message: "Cada saída pode ter só uma conexão." });
-    }
+    if (usedHandles.has(handleKey)) errors.push({ nodeKey: source.key, code: "DUPLICATE_OUTPUT", message: "Cada saída pode ter só uma conexão." });
     usedHandles.set(handleKey, edge.target);
     adjacency.get(edge.source).push(edge.target);
-    incoming.set(edge.target, incoming.get(edge.target) + 1);
   }
+
+  const written = new Set(FLOW_VARIABLES);
+  for (const node of graph.nodes) for (const path of nodeWrites(node)) if (path) written.add(path);
 
   for (const node of graph.nodes) {
     errors.push(...validateNodeConfig(node, refs));
@@ -414,9 +508,16 @@ function validateGraph(graphInput, refs = {}) {
         errors.push({ nodeKey: node.key, code: node.type === "menu" ? "MENU_OUTPUT_MISSING" : (node.type === "condition" ? "CONDITION_OUTPUT_MISSING" : "OUTPUT_MISSING"), message: `Conecte ${label}.` });
       }
     }
+    const reads = [...nodeTemplates(node).flatMap(templateVariables), ...(node.type === "condition" ? (node.config.rules || []).map((rule) => rule.left) : [])];
+    const warned = new Set();
+    for (const path of reads.map(resolveAlias)) {
+      if (warned.has(path) || classifyVariable(path) !== "writable" || written.has(path)) continue;
+      if ([...written].some((item) => path.startsWith(`${item}.`))) continue; // ex.: vars.webhook.data.status
+      warned.add(path);
+      warnings.push({ nodeKey: node.key, code: "VARIABLE_NEVER_SET", message: `Nenhum nó deste fluxo preenche ${path} (ok se vier de outro fluxo).` });
+    }
   }
 
-  // Nós inalcançáveis a partir do Início (desconectados).
   if (starts.length) {
     const reachable = new Set([starts[0].key]);
     const queue = [starts[0].key];
@@ -430,18 +531,18 @@ function validateGraph(graphInput, refs = {}) {
     }
   }
 
-  // Loop infinito óbvio: ciclo sem nenhum nó que espere o cliente/timer.
   for (const component of tarjanCycles(graph.nodes, adjacency)) {
     if (!component.some((key) => NODE_TYPES[byKey.get(key).type].pauses)) {
       for (const key of component) errors.push({ nodeKey: key, code: "INFINITE_LOOP", message: "Este nó faz parte de um ciclo sem pergunta/menu/intervalo — loop infinito." });
     }
   }
 
-  return { valid: errors.length === 0, errors, graph };
+  return { valid: errors.length === 0, errors, warnings, graph };
 }
 
 module.exports = {
-  ANSWER_TYPES, CONDITION_OPERATORS, DELAY_UNITS, MAX_DELAY_MS, NODE_TYPES, VARIABLE_PATH_PATTERN,
-  defaultGraph, isWritablePath, menuOptionHandle, nodeTypeCatalog, normalizeConfig, normalizeGraph,
+  ANSWER_TYPES, CONDITION_OPERATORS, DELAY_UNITS, FLOW_VARIABLES, MAX_DELAY_MS, MAX_MENU_OPTIONS, MEDIA_KINDS, NODE_TYPES,
+  PATH_ALIASES, STORAGE_KEY_PATTERN, SYSTEM_VARIABLES, VARIABLE_PATH_PATTERN, WRITABLE_ROOTS,
+  classifyVariable, defaultGraph, isWritablePath, menuOptionHandle, nodeTypeCatalog, normalizeConfig, normalizeGraph,
   outputHandles, validateGraph,
 };

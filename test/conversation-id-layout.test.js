@@ -8,7 +8,9 @@ const css = fs.readFileSync(path.join(process.cwd(), "public", "css", "app.css")
 test("botões do ID não herdam o estilo circular do botão de fechar", () => {
   assert.doesNotMatch(css, /\.dialog-header button\s*\{/);
   assert.match(css, /\.dialog-header > button,\.dialog-header-actions button\s*\{/);
-  assert.match(css, /\.conversation-id-copy,\.conversation-id-analyze\s*\{/);
+  assert.match(css, /\.conversation-id-copy\s*\{/);
+  // "Analisar para aprendizado" saiu junto com o sistema de Bots legado.
+  assert.doesNotMatch(css, /conversation-id-analyze/);
 });
 
 test("modal de conteúdo compartilhado acomoda cabeçalho com altura dinâmica", () => {

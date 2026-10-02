@@ -12,9 +12,10 @@ const categories = [
 // Bot de Triagem Inicial (item "Integrar o Bot de Triagem ao sistema de
 // Bots"): mesmos valores da migration prisma/migrations/20260902170000_bot_system_triage.
 // Duplicado aqui porque `npm test` roda via `prisma db push` (não aplica
-// migrations, só sincroniza o schema) — sem isso, o schema de teste teria as
-// colunas/tabelas novas mas nenhum Bot SYSTEM_TRIAGE, e handleIncomingTriage
-// ficaria em "estado seguro" (sem bot) em vez de testar o fluxo real.
+// migrations, só sincroniza o schema). Desde a migração para o Flow Builder
+// (2026-10) estes dados só servem de ORIGEM para a conversão automática em
+// fluxo visual (flow-builder-migration-service.js#ensureTriageFlow, rodada no
+// boot) — o Bot nasce com a resposta automática desligada.
 const triageBotId = "system-triage-bot";
 const triageSchedules = [
   [0, false], [1, true], [2, true], [3, true], [4, true], [5, true], [6, false],
@@ -45,7 +46,8 @@ async function seedTriageBot(client = prisma) {
       timezone: "America/Sao_Paulo",
       runOnNewConversation: true,
       runAfterReopen: true,
-      autoReplyEnabled: true,
+      autoReplyEnabled: false,
+      executionMode: "FLOW_BUILDER",
     },
   });
 

@@ -111,7 +111,6 @@ html[data-theme=dark] .fb-node-errors{background:#3a1d1a}
 .fb-bubble{max-width:88%;padding:7px 10px;border-radius:10px;font-size:9px;line-height:1.45;white-space:pre-wrap}
 .fb-bubble.customer{justify-self:end;color:#f5f5f5;background:#252a30}
 .fb-bubble.bot{justify-self:start;color:#fff;background:#8f3518}
-.fb-bubble.ai{justify-self:start;color:var(--ink);background:#ede9fe}
 .fb-bubble.event{justify-self:center;max-width:100%;color:var(--muted);background:none;font-size:8px;font-weight:800;text-align:center}
 .fb-test-form{display:flex;gap:5px}.fb-test-form input{flex:1;min-width:0;height:32px;padding:0 9px;border:1px solid var(--line);border-radius:8px;color:var(--ink);background:var(--surface);font-size:10px}
 .fb-trace{margin-top:12px;display:grid;gap:4px}
@@ -126,3 +125,23 @@ html[data-theme=dark] .fb-node-errors{background:#3a1d1a}
 
 @media(max-width:1180px){.fb-shell{grid-template-columns:190px minmax(0,1fr) 300px}.fb-version{display:none}}
 @media(max-width:860px){.flow-builder-page .topbar{height:auto;flex-wrap:wrap;padding:8px 12px}.fb-actions{margin-left:0;flex-wrap:wrap}.fb-shell{height:auto;grid-template-columns:1fr}.fb-library{max-height:220px;border-right:0;border-bottom:1px solid var(--line)}.fb-canvas{height:60vh}.fb-panel{border-left:0;border-top:1px solid var(--line)}.fb-title-row input{width:140px}}
+
+/* Flow Builder único (2026-10): barra do canvas, minimapa, seleção por área, opções clicáveis no simulador, mídia e nós novos. */
+.fb-toolbar{position:absolute;top:12px;left:14px;z-index:4;display:flex;align-items:center;gap:4px;padding:4px;border:1px solid var(--line);border-radius:12px;background:var(--surface);box-shadow:0 4px 12px #17202a12}
+.fb-toolbar button{padding:5px 8px;border:0;border-radius:8px;background:transparent;color:var(--ink);font:inherit;font-size:9px;font-weight:800;cursor:pointer}.fb-toolbar button:hover:not(:disabled){background:var(--panel)}.fb-toolbar button:disabled{opacity:.35;cursor:default}
+.fb-selection-info{padding:0 6px;color:var(--orange);font-size:9px;font-weight:800}.fb-selection-info:empty{display:none}
+.fb-canvas.testing .fb-toolbar{top:48px}
+.fb-minimap{position:absolute;right:14px;bottom:62px;z-index:4;width:180px;height:120px;border:1px solid var(--line);border-radius:10px;background:var(--surface);box-shadow:0 4px 12px #17202a12;cursor:pointer}
+.fb-minimap .mm-node{fill:var(--panel);stroke:var(--fb-edge);stroke-width:4}.fb-minimap .mm-node.start{fill:#fff0ea}.fb-minimap .mm-node.selected{stroke:var(--orange);stroke-width:10}
+.fb-minimap .mm-view{fill:#ef5b2a14;stroke:var(--orange);stroke-width:8}
+.fb-box{position:absolute;z-index:3;border:1px dashed var(--orange);background:#ef5b2a14;pointer-events:none}
+.fb-bubble-options{margin-top:6px;display:flex;flex-wrap:wrap;gap:4px}.fb-bubble-options button{padding:4px 8px;border:1px solid #ffffff66;border-radius:12px;background:#ffffff22;color:inherit;font:inherit;font-size:8px;font-weight:800;cursor:pointer}.fb-bubble-options button:hover{background:#ffffff44}
+.fb-media-preview{display:block;max-width:100%;max-height:180px;border-radius:8px;border:1px solid var(--line)}
+.fb-upload input{padding:6px 0;border:0}
+.fb-node-errors.warn{color:#93370d;background:#fef0c7}html[data-theme=dark] .fb-node-errors.warn{color:#fec84b;background:#3a2a0f}
+.fb-validation b.warn{display:block;margin-top:6px;color:#b54708}
+.fb-node.removed{border-color:var(--danger);border-style:dashed;opacity:.85}
+.fb-node.transfer_user .fb-node-head,.fb-node.transfer_category .fb-node-head,.fb-node.human_handoff .fb-node-head{background:#ecfdf3}html[data-theme=dark] .fb-node.transfer_user .fb-node-head,html[data-theme=dark] .fb-node.transfer_category .fb-node-head,html[data-theme=dark] .fb-node.human_handoff .fb-node-head{background:#0f2e20}
+.fb-node.goto_flow .fb-node-head,.fb-node.webhook .fb-node-head{background:#eef4ff}html[data-theme=dark] .fb-node.goto_flow .fb-node-head,html[data-theme=dark] .fb-node.webhook .fb-node-head{background:#10263d}
+#fb-bot-settings{display:inline-block;text-align:center;text-decoration:none}
+@media(max-width:900px){.fb-minimap{display:none}.fb-toolbar{flex-wrap:wrap;right:14px}}

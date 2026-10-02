@@ -207,11 +207,9 @@ html[data-theme="dark"] .contact-files-dialog { color:#eef0f3; background:#1b1e2
 .conversation-id-row { margin-top:8px; display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
 .conversation-id-label { min-width:0; color:var(--muted); font-size:9px; }
 .conversation-id-label code { padding:2px 5px; overflow-wrap:anywhere; border-radius:5px; color:var(--ink); background:#f1f2f4; font-size:9px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; user-select:all; }
-.conversation-id-copy,.conversation-id-analyze { padding:5px 10px; border:1px solid var(--line); border-radius:12px; color:var(--ink); background:#fff; font-size:8px; font-weight:800; cursor:pointer; }
-.conversation-id-analyze { color:#7a3418; border-color:#f1d0c5; background:#fff8f5; }
+.conversation-id-copy { padding:5px 10px; border:1px solid var(--line); border-radius:12px; color:var(--ink); background:#fff; font-size:8px; font-weight:800; cursor:pointer; }
 html[data-theme="dark"] .conversation-id-label code { color:#eef0f3; background:#2b3037; }
 html[data-theme="dark"] .conversation-id-copy { color:#eef0f3; border-color:#383e46; background:#24282e; }
-html[data-theme="dark"] .conversation-id-analyze { color:#ffb39a; border-color:#6b3829; background:#34231e; }
 html[data-theme="dark"] .contact-files-tabs button { border-color:#383e46; color:#cdd2d8; background:#24282e; }
 html[data-theme="dark"] .contact-files-tabs button.active { border-color:var(--orange); color:#fff; background:var(--orange); }
 html[data-theme="dark"] .shared-media-card,html[data-theme="dark"] .shared-document-card,html[data-theme="dark"] .shared-link-card { border-color:#373d45; background:#22262c; }
@@ -1487,15 +1485,6 @@ html[data-theme="dark"] .device-card { border-color:#333840; background:#22262c;
 html[data-theme="dark"] .device-status { color:#a7adb6; background:#2a2e34; }
 html[data-theme="dark"] .device-status.active { color:#87d7a4; background:#1d3024; }
 @media (max-width:700px) { .devices-dialog { width:100vw; height:100vh; max-height:none; border-radius:0; } .devices-body { max-height:calc(100vh - 110px); } }
-.bot-suggestion-card{margin:0 18px 10px;padding:12px 14px;border:1px solid #f4b49e;border-radius:12px;background:#fff7f3}
-.bot-suggestion-head{display:flex;justify-content:space-between;gap:12px;color:var(--orange);font-size:9px;font-weight:900;letter-spacing:.08em}
-.bot-suggestion-head small{color:var(--muted);font-weight:700;letter-spacing:0}
-.bot-suggestion-card p{margin:7px 0 10px;white-space:pre-wrap;font-size:12px;line-height:1.45}
-.bot-suggestion-actions{display:flex;flex-wrap:wrap;gap:6px}
-.bot-suggestion-actions button{padding:6px 10px;border:1px solid var(--line);border-radius:14px;background:#fff;color:var(--ink);font-size:10px;font-weight:800;cursor:pointer}
-.bot-suggestion-actions button:hover{border-color:var(--orange);color:var(--orange)}
-html[data-theme="dark"] .bot-suggestion-card{border-color:#70402f;background:#25201e}
-html[data-theme="dark"] .bot-suggestion-actions button{border-color:#434850;background:#22262c;color:#e6e8eb}
 
 /* Navegação principal agrupada por áreas. */
 .topbar{gap:12px}
@@ -1779,13 +1768,12 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,te
 /* ---- 13. Notas/Histórico/Bot: neutraliza o antigo layout de gaveta
    (position:absolute + transform) agora que vivem dentro das abas do
    painel de contexto — as regras abaixo têm maior especificidade que as
-   originais (.notes-panel / .history-panel / .bot-suggestion-card) e por
+   originais (.notes-panel / .history-panel) e por
    isso vencem a cascata sem precisar remover o CSS legado. ---- */
 .context-pane .notes-panel,.context-pane .history-panel {
   position:static; z-index:auto; top:auto; right:auto; bottom:auto; width:auto; height:auto;
   padding:0; overflow:visible; border-left:0; background:transparent; box-shadow:none; transform:none; transition:none;
 }
-.context-pane .bot-suggestion-card { margin:0; }
 .context-pane .notes-header span,.context-pane .notes-header h3 { color:inherit; }
 #notes-close,#history-close { width:26px; height:26px; border-radius:50%; color:var(--text-2); background:var(--surface-0); font-size:16px; }
 #notes-close:hover,#history-close:hover { color:var(--orange); }

@@ -1,50 +1,54 @@
-// Editor Visual de Fluxos (Flow Builder) — canvas próprio em JS puro (sem
-// dependência nova): nós em DOM, conexões em SVG. Toda regra de permissão,
-// validação e execução fica no backend (bot-visual-flow-*.js); o editor só
-// monta o grafo e chama a API.
+// Editor Visual de Fluxos (Flow Builder) — único modo de criar/editar Bots.
+// Canvas próprio em JS puro (sem dependência nova): nós em DOM, conexões em
+// SVG. Toda regra de permissão, validação e execução fica no backend
+// (bot-visual-flow-*.js); o editor só monta o grafo e chama a API. Sem IA.
 (() => {
   const $ = (selector, root = document) => root.querySelector(selector);
   const params = new URLSearchParams(location.search);
   const botId = params.get("botId");
 
-  const OUTPUT_LABELS = {
-    next: "Próximo", invalid: "Resposta inválida", true: "Verdadeiro", false: "Falso",
-    handoff: "Precisa de humano", error: "Erro", found: "Encontrou", not_found: "Não encontrou",
-  };
+  const GROUP_ORDER = ["FLUXO", "MENSAGENS", "CONTROLE", "DADOS", "ATENDIMENTO", "INTEGRAÇÕES"];
+  const OUTPUT_LABELS = { next: "Próximo", invalid: "Resposta inválida", true: "Verdadeiro", false: "Falso", error: "Erro" };
   const RESULT_LABELS = { OK: "ok", DONE: "fim", WAITING: "aguardando", ERROR: "erro" };
   const STATUS_LABELS = { DRAFT: "RASCUNHO", ACTIVE: "ATIVO", INACTIVE: "INATIVO" };
   const EXEC_STATUS_LABELS = {
     RUNNING: "executando", WAITING_CUSTOMER: "aguardando o cliente", WAITING_TIMER: "aguardando intervalo",
     HANDED_OFF: "entregue para a equipe", COMPLETED: "concluído", FAILED: "falhou",
   };
-  const AI_MODES = { UNDERSTAND: "Entender mensagem", RESPOND: "Responder", CLASSIFY: "Classificar intenção", EXTRACT: "Extrair dados", DECIDE: "Decidir próxima ação" };
-  const ANSWER_TYPES = { TEXT: "Texto livre", NUMBER: "Número", EMAIL: "E-mail", CPF_CNPJ: "CPF/CNPJ", PHONE: "Telefone" };
+  const ANSWER_TYPES = { TEXT: "Texto livre", NUMBER: "Número", PHONE: "Telefone", EMAIL: "E-mail", CPF_CNPJ: "CPF/CNPJ", YES_NO: "Confirmação Sim/Não" };
+  const MEDIA_KINDS = { IMAGE: "Imagem", AUDIO: "Áudio", VIDEO: "Vídeo", DOCUMENT: "Documento" };
+  const MEDIA_ACCEPT = { IMAGE: "image/jpeg,image/png", AUDIO: "audio/*", VIDEO: "video/mp4,video/3gpp", DOCUMENT: ".pdf,.txt,.doc,.docx,.xls,.xlsx,.ppt,.pptx" };
   const OPERATORS = ["==", "!=", "contains", "not_contains", ">", "<", ">=", "<=", "exists", "not_exists"];
   const START_CHANNELS = { META: "WhatsApp", INSTAGRAM_DIRECT: "Instagram Direct", FACEBOOK_MESSENGER: "Messenger", EMAIL: "E-mail" };
   const SAMPLE_CONTEXT = {
-    contact: { name: "Maria Silva", firstName: "Maria", phone: "5511999990000", email: "maria@exemplo.com" },
-    conversation: { id: "123", channel: "META" }, bot: { intent: "suporte", product: "GS Pro 2", confidence: "HIGH" },
-    flow: { selectedOption: "Suporte", lastAnswer: "12345", lastMessage: "Olá" }, customer: {}, vars: {}, knowledge: {},
+    contact: { name: "Maria Silva", firstName: "Maria", phone: "5511999990000", email: "maria@exemplo.com", greeting: "Olá, Maria", greetingComma: ", Maria" },
+    conversation: { id: "123", channel: "META", withinBusinessHours: true },
+    bot: { name: "Atendimento", businessHours: "segunda a sexta-feira, das 8h às 17h", withinBusinessHours: true },
+    flow: { selectedOption: "Suporte", lastAnswer: "12345", lastMessage: "Olá" }, customer: { orderNumber: "12345" }, vars: {}, custom: {},
   };
+  const NODE_WIDTH = 224;
+  const CLIPBOARD_KEY = "mibro-flow-clipboard";
 
   const state = {
     options: null, bot: null, flows: [], flow: null,
     graph: { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } },
-    selectedNode: null, selectedEdge: null, dirty: false,
+    selection: new Set(), selectedEdge: null, dirty: false,
     undo: [], redo: [], editSnapshotTaken: false,
-    errors: [], test: null,
+    errors: [], warnings: [], test: null, clipboard: null,
   };
 
   // ---------- utilidades --------------------------------------------------
   async function api(url, options = {}) {
-    const headers = { ...(options.body ? { "Content-Type": "application/json" } : {}) };
+    const isForm = options.body instanceof FormData;
+    const headers = { ...(options.body && !isForm ? { "Content-Type": "application/json" } : {}) };
     const response = await fetch(url, { ...options, headers });
     if (response.status === 401) { location.replace("/login.html"); throw new Error("Sessão encerrada."); }
     const body = response.status === 204 ? null : await response.json().catch(() => ({}));
     if (!response.ok) throw Object.assign(new Error(body?.error || "Não foi possível concluir a operação."), { status: response.status, body });
     return body;
   }
-  const flowUrl = (suffix = "") => `/api/bots/${encodeURIComponent(botId)}/visual-flows/${encodeURIComponent(state.flow.id)}${suffix}`;
+  const botUrl = (suffix = "") => `/api/bots/${encodeURIComponent(botId)}${suffix}`;
+  const flowUrl = (suffix = "") => botUrl(`/visual-flows/${encodeURIComponent(state.flow.id)}${suffix}`);
   function escapeHtml(value) {
     return String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
   }
@@ -58,8 +62,11 @@
   }
   const uid = (prefix) => `${prefix}${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
   const clone = (value) => JSON.parse(JSON.stringify(value));
-  const typeMeta = (type) => state.options?.nodeTypes.find((item) => item.type === type) || { label: type, icon: "?", outputs: [], optionalOutputs: [] };
+  const typeMeta = (type) => state.options?.nodeTypes.find((item) => item.type === type)
+    || (type === "removed" ? { label: "Nó removido", icon: "⚠", outputs: [], optionalOutputs: [], terminal: false } : { label: type, icon: "?", outputs: [], optionalOutputs: [] });
   const nodeByKey = (key) => state.graph.nodes.find((node) => node.key === key);
+  const primaryKey = () => (state.selection.size === 1 ? [...state.selection][0] : null);
+  const libraryText = (key) => state.options?.responses.find((item) => item.key === key)?.text;
   function renderTemplate(template) {
     return String(template || "").replace(/\{\{\s*([A-Za-z_][A-Za-z0-9_.]*)\s*\}\}/g, (_m, path) => {
       const value = path.split(".").reduce((acc, part) => (acc && typeof acc === "object" ? acc[part] : undefined), SAMPLE_CONTEXT);
@@ -83,7 +90,7 @@
     if (!from.length) return;
     to.push(JSON.stringify(state.graph));
     state.graph = JSON.parse(from.pop());
-    if (state.selectedNode && !nodeByKey(state.selectedNode)) state.selectedNode = null;
+    for (const key of [...state.selection]) if (!nodeByKey(key)) state.selection.delete(key);
     state.selectedEdge = null;
     markDirty();
     render();
@@ -95,7 +102,7 @@
     $("#fb-redo").disabled = !state.redo.length;
   }
 
-  // ---------- saídas de cada nó -------------------------------------------
+  // ---------- saídas e resumo de cada nó ------------------------------------
   function outputsFor(node) {
     const meta = typeMeta(node.type);
     if (meta.terminal) return [];
@@ -104,25 +111,31 @@
     if (node.type === "menu") {
       (node.config.options || []).forEach((option, index) => outputs.push({ handle: `opt:${option.id}`, label: `${index + 1}. ${option.label || "Opção"}` }));
     }
-    for (const handle of meta.outputs) outputs.push({ handle, label: OUTPUT_LABELS[handle] || handle, optional: optional.has(handle) });
+    for (const handle of meta.outputs || []) outputs.push({ handle, label: OUTPUT_LABELS[handle] || handle, optional: optional.has(handle) });
     return outputs;
   }
 
   function summaryFor(node) {
     const c = node.config || {};
     const categoryName = (id) => state.options?.categories.find((item) => item.id === id)?.name;
+    const userName = (id) => state.options?.users.find((item) => item.id === id)?.name;
     switch (node.type) {
       case "start": return [c.trigger === "ANY_MESSAGE" ? "Qualquer mensagem" : "Nova conversa", c.initialMessage].filter(Boolean).join("\n");
-      case "message": case "question": case "menu": return c.text || "Sem texto";
+      case "message": return c.source === "LIBRARY" ? (c.responseKey ? `📚 ${c.responseKey}` : "Selecione a resposta") : (c.text || "Sem texto");
+      case "question": return `${c.text || "Sem texto"}\n→ ${c.variable} (${ANSWER_TYPES[c.answerType] || c.answerType})`;
+      case "menu": return `${c.text || "Sem texto"}${c.display === "LIST" ? "\n(lista do WhatsApp)" : ""}`;
+      case "media": return `${MEDIA_KINDS[c.kind] || c.kind}: ${c.fileName || "envie o arquivo"}`;
       case "delay": return `Aguardar ${c.amount} ${{ SECONDS: "segundo(s)", MINUTES: "minuto(s)", HOURS: "hora(s)" }[c.unit] || ""}`;
       case "condition": return (c.rules || []).map((rule) => `${rule.left} ${rule.operator} ${rule.right}`).join(c.match === "ANY" ? "\nOU " : "\nE ") || "Sem regras";
       case "variable": return (c.assignments || []).map((item) => `${item.key} = ${item.value}`).join("\n") || "Nenhuma variável";
-      case "ai": return `${AI_MODES[c.mode] || c.mode}${c.sendAnswer ? " • responde (dry-run)" : ""}`;
-      case "knowledge": return `Busca: ${c.query}`;
       case "transfer_category": return categoryName(c.categoryId) ? `Setor: ${categoryName(c.categoryId)}` : "Selecione o setor";
+      case "transfer_user": return userName(c.userId) ? `Atendente: ${userName(c.userId)}` : "Selecione o atendente";
       case "human_handoff": return c.reason || (categoryName(c.categoryId) ? `Setor: ${categoryName(c.categoryId)}` : "Entregar para a equipe");
       case "end": return c.finalizeConversation === false ? "Encerra o Bot (conversa continua)" : "Finaliza a conversa";
-      default: return typeMeta(node.type).available === false ? "Disponível em breve" : "";
+      case "goto_flow": return state.options?.flows.find((flow) => flow.id === c.flowId)?.name ? `→ ${state.options.flows.find((flow) => flow.id === c.flowId).name}` : "Selecione o fluxo";
+      case "webhook": return c.endpointKey ? `${c.endpointKey} → ${c.resultVariable}` : "Selecione o endpoint";
+      case "removed": return `Nó "${c.originalType || "antigo"}" não existe mais (IA removida). Exclua para publicar.`;
+      default: return "";
     }
   }
 
@@ -138,11 +151,12 @@
     canvas.style.backgroundPosition = `${x}px ${y}px`;
     canvas.style.backgroundSize = `${22 * zoom}px ${22 * zoom}px`;
     $("#fb-zoom-label").textContent = `${Math.round(zoom * 100)}%`;
+    renderMinimap();
   }
 
   function nodeClasses(node) {
     const classes = ["fb-node", node.type];
-    if (state.selectedNode === node.key) classes.push("selected");
+    if (state.selection.has(node.key)) classes.push("selected");
     if (state.errors.some((error) => error.nodeKey === node.key)) classes.push("has-error");
     if (state.test) {
       if (state.test.errored.has(node.key)) classes.push("errored");
@@ -156,7 +170,7 @@
     const connected = new Set(state.graph.edges.map((edge) => `${edge.source}::${edge.sourceHandle}`));
     nodesEl.innerHTML = state.graph.nodes.map((node) => {
       const meta = typeMeta(node.type);
-      const errorCount = state.errors.filter((error) => error.nodeKey === node.key).length;
+      const nodeErrors = state.errors.filter((error) => error.nodeKey === node.key);
       const outputs = outputsFor(node).map((output) => `
         <div class="fb-output ${output.optional ? "optional" : ""} ${output.handle}">${escapeHtml(output.label)}
           <span class="fb-handle out ${connected.has(`${node.key}::${output.handle}`) ? "connected" : ""}" data-handle="${escapeHtml(output.handle)}" title="Arraste para conectar"></span>
@@ -164,7 +178,7 @@
       return `
         <div class="${nodeClasses(node)}" data-key="${escapeHtml(node.key)}" style="left:${node.x}px;top:${node.y}px">
           ${node.type === "start" ? "" : '<span class="fb-handle in" title="Entrada"></span>'}
-          ${errorCount ? `<span class="fb-error-badge" title="${escapeHtml(state.errors.filter((error) => error.nodeKey === node.key).map((error) => error.message).join("\n"))}">${errorCount}</span>` : ""}
+          ${nodeErrors.length ? `<span class="fb-error-badge" title="${escapeHtml(nodeErrors.map((error) => error.message).join("\n"))}">${nodeErrors.length}</span>` : ""}
           <div class="fb-node-head"><i>${meta.icon}</i><span>${escapeHtml(meta.label)}</span>
             <div class="fb-node-tools">
               <button type="button" data-action="duplicate" title="Duplicar (Ctrl+D)">⧉</button>
@@ -175,6 +189,7 @@
           ${outputs ? `<div class="fb-outputs">${outputs}</div>` : ""}
         </div>`;
     }).join("");
+    updateSelectionInfo();
   }
 
   // Coordenadas (no espaço do grafo, sem zoom) dos handles, lidas do DOM
@@ -210,10 +225,66 @@
     }).join("") + `<defs><marker id="fb-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--fb-edge)"></path></marker></defs>`;
   }
 
-  function render() {
+  function nodeSize(node) {
+    const element = nodesEl.querySelector(`.fb-node[data-key="${CSS.escape(node.key)}"]`);
+    return { width: element?.offsetWidth || NODE_WIDTH, height: element?.offsetHeight || 110 };
+  }
+
+  // Minimapa: visão geral do grafo + retângulo da área visível; clicar
+  // centraliza o canvas naquele ponto.
+  function renderMinimap() {
+    const svg = $("#fb-minimap");
+    if (!svg || !state.graph.nodes.length) { if (svg) svg.innerHTML = ""; return; }
+    const boxes = state.graph.nodes.map((node) => ({ node, ...nodeSize(node) }));
+    const { x, y, zoom } = state.graph.viewport;
+    const view = { x: -x / zoom, y: -y / zoom, w: canvas.clientWidth / zoom, h: canvas.clientHeight / zoom };
+    const minX = Math.min(view.x, ...boxes.map((box) => box.node.x)) - 40;
+    const minY = Math.min(view.y, ...boxes.map((box) => box.node.y)) - 40;
+    const maxX = Math.max(view.x + view.w, ...boxes.map((box) => box.node.x + box.width)) + 40;
+    const maxY = Math.max(view.y + view.h, ...boxes.map((box) => box.node.y + box.height)) + 40;
+    svg.setAttribute("viewBox", `${minX} ${minY} ${maxX - minX} ${maxY - minY}`);
+    svg.dataset.bounds = JSON.stringify({ minX, minY, width: maxX - minX, height: maxY - minY });
+    svg.innerHTML = boxes.map((box) => `<rect class="mm-node ${box.node.type} ${state.selection.has(box.node.key) ? "selected" : ""}" x="${box.node.x}" y="${box.node.y}" width="${box.width}" height="${box.height}" rx="12"></rect>`).join("")
+      + `<rect class="mm-view" x="${view.x}" y="${view.y}" width="${view.w}" height="${view.h}"></rect>`;
+  }
+  $("#fb-minimap").addEventListener("mousedown", (event) => {
+    event.stopPropagation();
+    const svg = event.currentTarget;
+    const bounds = JSON.parse(svg.dataset.bounds || "null");
+    if (!bounds) return;
+    const rect = svg.getBoundingClientRect();
+    const gx = bounds.minX + ((event.clientX - rect.left) / rect.width) * bounds.width;
+    const gy = bounds.minY + ((event.clientY - rect.top) / rect.height) * bounds.height;
+    const { zoom } = state.graph.viewport;
+    state.graph.viewport.x = canvas.clientWidth / 2 - gx * zoom;
+    state.graph.viewport.y = canvas.clientHeight / 2 - gy * zoom;
     applyViewport();
+    markViewportDirty();
+  });
+
+  function render() {
     renderNodes();
     renderEdges();
+    applyViewport();
+  }
+
+  // ---------- seleção -----------------------------------------------------------
+  function setSelection(keys) {
+    state.selection = new Set(keys);
+    state.selectedEdge = null;
+    renderNodes();
+    renderEdges();
+    renderMinimap();
+    if (state.selection.size) showPanel("props");
+    renderPanel();
+  }
+  function updateSelectionInfo() {
+    const count = state.selection.size;
+    $("#fb-selection-info").textContent = count > 1 ? `${count} nós selecionados` : "";
+    $("#fb-align-left").disabled = count < 2;
+    $("#fb-align-top").disabled = count < 2;
+    $("#fb-distribute").disabled = count < 3;
+    $("#fb-copy").disabled = !count;
   }
 
   // ---------- canvas: interação --------------------------------------------
@@ -223,14 +294,15 @@
     return { x: (clientX - rect.left - x) / zoom, y: (clientY - rect.top - y) / zoom };
   }
 
-  let drag = null; // { kind: "pan"|"node"|"connect", ... }
+  let drag = null; // { kind: "pan"|"nodes"|"connect"|"box", ... }
 
   canvas.addEventListener("mousedown", (event) => {
     if (event.button !== 0) return;
     const handle = event.target.closest(".fb-handle.out");
     const nodeEl = event.target.closest(".fb-node");
     const edgeEl = event.target.closest("[data-edge]");
-    if (event.target.closest(".fb-zoom, .fb-validation, .fb-test-legend")) return;
+    if (event.target.closest(".fb-zoom, .fb-validation, .fb-test-legend, .fb-toolbar, .fb-minimap")) return;
+    const additive = event.shiftKey || event.ctrlKey || event.metaKey;
     if (handle && nodeEl) {
       event.preventDefault();
       drag = { kind: "connect", source: nodeEl.dataset.key, sourceHandle: handle.dataset.handle };
@@ -239,28 +311,48 @@
     if (event.target.closest(".fb-node-tools")) return;
     if (nodeEl) {
       const key = nodeEl.dataset.key;
-      selectNode(key);
+      if (additive) {
+        const next = new Set(state.selection);
+        if (next.has(key)) next.delete(key); else next.add(key);
+        setSelection(next);
+        return;
+      }
+      if (!state.selection.has(key)) setSelection([key]);
       if (event.target.closest(".fb-node-head, .fb-node-body")) {
-        const node = nodeByKey(key);
         const point = toGraphPoint(event.clientX, event.clientY);
-        drag = { kind: "node", key, offsetX: point.x - node.x, offsetY: point.y - node.y, before: JSON.stringify(state.graph), moved: false };
+        const offsets = [...state.selection].map((selectedKey) => {
+          const node = nodeByKey(selectedKey);
+          return { key: selectedKey, dx: point.x - node.x, dy: point.y - node.y };
+        });
+        drag = { kind: "nodes", offsets, before: JSON.stringify(state.graph), moved: false };
       }
       return;
     }
     if (edgeEl) {
       state.selectedEdge = edgeEl.dataset.edge;
-      state.selectedNode = null;
+      state.selection = new Set();
       renderEdges();
       renderNodes();
       renderPanel();
       return;
     }
     state.selectedEdge = null;
-    if (state.selectedNode) { state.selectedNode = null; renderNodes(); renderPanel(); }
+    if (additive) {
+      // Shift + arrastar no vazio = seleção por área.
+      const start = toGraphPoint(event.clientX, event.clientY);
+      drag = { kind: "box", start, base: new Set(state.selection) };
+      canvas.insertAdjacentHTML("beforeend", '<div id="fb-box" class="fb-box"></div>');
+      return;
+    }
+    if (state.selection.size) setSelection([]);
     renderEdges();
     drag = { kind: "pan", startX: event.clientX, startY: event.clientY, originX: state.graph.viewport.x, originY: state.graph.viewport.y };
     canvas.classList.add("panning");
   });
+
+  function boxRect(from, to) {
+    return { x: Math.min(from.x, to.x), y: Math.min(from.y, to.y), w: Math.abs(to.x - from.x), h: Math.abs(to.y - from.y) };
+  }
 
   window.addEventListener("mousemove", (event) => {
     if (!drag) return;
@@ -268,15 +360,17 @@
       state.graph.viewport.x = drag.originX + event.clientX - drag.startX;
       state.graph.viewport.y = drag.originY + event.clientY - drag.startY;
       applyViewport();
-    } else if (drag.kind === "node") {
+    } else if (drag.kind === "nodes") {
       const point = toGraphPoint(event.clientX, event.clientY);
-      const node = nodeByKey(drag.key);
-      node.x = Math.round(point.x - drag.offsetX);
-      node.y = Math.round(point.y - drag.offsetY);
+      for (const offset of drag.offsets) {
+        const node = nodeByKey(offset.key);
+        node.x = Math.round(point.x - offset.dx);
+        node.y = Math.round(point.y - offset.dy);
+        const element = nodesEl.querySelector(`.fb-node[data-key="${CSS.escape(offset.key)}"]`);
+        element.style.left = `${node.x}px`;
+        element.style.top = `${node.y}px`;
+      }
       drag.moved = true;
-      const element = nodesEl.querySelector(`.fb-node[data-key="${CSS.escape(drag.key)}"]`);
-      element.style.left = `${node.x}px`;
-      element.style.top = `${node.y}px`;
       renderEdges();
     } else if (drag.kind === "connect") {
       const from = handlePoint(drag.source, drag.sourceHandle);
@@ -286,6 +380,10 @@
       nodesEl.querySelectorAll(".drop-target").forEach((element) => element.classList.remove("drop-target"));
       const target = document.elementFromPoint(event.clientX, event.clientY)?.closest(".fb-node");
       if (target && target.dataset.key !== drag.source && !target.classList.contains("start")) target.classList.add("drop-target");
+    } else if (drag.kind === "box") {
+      const rect = boxRect(drag.start, toGraphPoint(event.clientX, event.clientY));
+      const { x, y, zoom } = state.graph.viewport;
+      Object.assign($("#fb-box").style, { left: `${rect.x * zoom + x}px`, top: `${rect.y * zoom + y}px`, width: `${rect.w * zoom}px`, height: `${rect.h * zoom}px` });
     }
   });
 
@@ -294,11 +392,12 @@
     const current = drag;
     drag = null;
     canvas.classList.remove("panning");
-    if (current.kind === "node" && current.moved) {
+    if (current.kind === "nodes" && current.moved) {
       state.undo.push(current.before);
       state.redo = [];
       markDirty();
       updateHistoryButtons();
+      renderMinimap();
     } else if (current.kind === "pan") {
       markViewportDirty();
     } else if (current.kind === "connect") {
@@ -309,6 +408,14 @@
       } else {
         renderEdges();
       }
+    } else if (current.kind === "box") {
+      $("#fb-box")?.remove();
+      const rect = boxRect(current.start, toGraphPoint(event.clientX, event.clientY));
+      const inside = state.graph.nodes.filter((node) => {
+        const size = nodeSize(node);
+        return node.x < rect.x + rect.w && node.x + size.width > rect.x && node.y < rect.y + rect.h && node.y + size.height > rect.y;
+      }).map((node) => node.key);
+      setSelection([...current.base, ...inside]);
     }
   });
 
@@ -336,11 +443,10 @@
 
   function fitView() {
     if (!state.graph.nodes.length) return;
-    const elements = [...nodesEl.querySelectorAll(".fb-node")];
     const minX = Math.min(...state.graph.nodes.map((node) => node.x));
     const minY = Math.min(...state.graph.nodes.map((node) => node.y));
-    const maxX = Math.max(...state.graph.nodes.map((node, index) => node.x + (elements[index]?.offsetWidth || 224)));
-    const maxY = Math.max(...state.graph.nodes.map((node, index) => node.y + (elements[index]?.offsetHeight || 120)));
+    const maxX = Math.max(...state.graph.nodes.map((node) => node.x + nodeSize(node).width));
+    const maxY = Math.max(...state.graph.nodes.map((node) => node.y + nodeSize(node).height));
     const padding = 60;
     const zoom = Math.min(1.2, Math.max(0.2, Math.min((canvas.clientWidth - padding * 2) / (maxX - minX || 1), (canvas.clientHeight - padding * 2) / (maxY - minY || 1))));
     state.graph.viewport = {
@@ -354,8 +460,8 @@
     const button = event.target.closest(".fb-node-tools button");
     if (!button) return;
     const key = button.closest(".fb-node").dataset.key;
-    if (button.dataset.action === "delete") deleteNode(key);
-    if (button.dataset.action === "duplicate") duplicateNode(key);
+    if (button.dataset.action === "delete") deleteNodes([key]);
+    if (button.dataset.action === "duplicate") duplicateNodes([key]);
   });
 
   // ---------- operações do grafo ---------------------------------------------
@@ -369,61 +475,180 @@
 
   function addNode(type, point) {
     const meta = typeMeta(type);
-    if (meta.available === false) { toast(`"${meta.label}" estará disponível em uma próxima versão.`); return; }
     if (type === "start" && state.graph.nodes.some((node) => node.type === "start")) { toast("O fluxo já tem um nó Início."); return; }
     pushHistory();
     const node = { key: uid("n"), type, name: meta.label, x: Math.round(point.x), y: Math.round(point.y), config: defaultConfig(type) };
     state.graph.nodes.push(node);
-    state.selectedNode = node.key;
+    state.selection = new Set([node.key]);
     render();
+    showPanel("props");
     renderPanel();
   }
 
   function defaultConfig(type) {
     switch (type) {
-      case "message": return { text: "" };
+      case "message": return { source: "TEXT", text: "", responseKey: "" };
       case "question": return { text: "", variable: "flow.lastAnswer", answerType: "TEXT", invalidMessage: "", maxAttempts: 3 };
-      case "menu": return { text: "Como podemos ajudar?", options: [{ id: uid("o"), label: "Opção 1", keywords: [] }, { id: uid("o"), label: "Opção 2", keywords: [] }], variable: "flow.selectedOption", invalidMessage: "", maxAttempts: 3 };
-      case "condition": return { match: "ALL", rules: [{ left: "bot.intent", operator: "==", right: "" }] };
+      case "menu": return { text: "Como podemos ajudar?", options: [{ id: uid("o"), label: "Opção 1", keywords: [] }, { id: uid("o"), label: "Opção 2", keywords: [] }], variable: "flow.selectedOption", invalidMessage: "", maxAttempts: 3, display: "TEXT", buttonLabel: "Ver opções" };
+      case "media": return { kind: "IMAGE", storageKey: "", mimeType: "", fileName: "", caption: "" };
+      case "condition": return { match: "ALL", rules: [{ left: "flow.selectedOption", operator: "==", right: "" }] };
       case "delay": return { amount: 5, unit: "SECONDS" };
       case "variable": return { assignments: [{ key: "vars.nome", value: "" }] };
-      case "ai": return { mode: "UNDERSTAND", provider: "LOCAL_QWEN", model: "", input: "{{flow.lastMessage}}", sendAnswer: false };
-      case "knowledge": return { query: "{{flow.lastMessage}}", product: "", limit: 3 };
       case "transfer_category": return { categoryId: "", message: "", reason: "" };
+      case "transfer_user": return { userId: "", categoryId: "", message: "", reason: "" };
       case "human_handoff": return { reason: "", categoryId: "", message: "" };
       case "end": return { message: "", finalizeConversation: true };
+      case "goto_flow": return { flowId: "" };
+      case "webhook": return { endpointKey: "", fields: [], resultVariable: "vars.webhook" };
       case "start": return { initialMessage: "", channels: [], categoryId: null, trigger: "NEW_CONVERSATION" };
       default: return {};
     }
   }
 
-  function deleteNode(key) {
-    const node = nodeByKey(key);
-    if (!node) return;
-    if (node.type === "start" && state.graph.nodes.filter((item) => item.type === "start").length <= 1) {
-      toast("O nó Início não pode ser apagado — todo fluxo precisa de exatamente um.", true);
-      return;
-    }
+  function deleteNodes(keys) {
+    const starts = state.graph.nodes.filter((node) => node.type === "start");
+    const removable = keys.filter((key) => {
+      const node = nodeByKey(key);
+      return node && !(node.type === "start" && starts.length <= 1);
+    });
+    if (!removable.length) { toast("O nó Início não pode ser apagado — todo fluxo precisa de exatamente um.", true); return; }
     pushHistory();
-    state.graph.nodes = state.graph.nodes.filter((item) => item.key !== key);
-    state.graph.edges = state.graph.edges.filter((edge) => edge.source !== key && edge.target !== key);
-    if (state.selectedNode === key) state.selectedNode = null;
+    const removed = new Set(removable);
+    state.graph.nodes = state.graph.nodes.filter((item) => !removed.has(item.key));
+    state.graph.edges = state.graph.edges.filter((edge) => !removed.has(edge.source) && !removed.has(edge.target));
+    for (const key of removed) state.selection.delete(key);
     render();
     renderPanel();
   }
 
-  function duplicateNode(key) {
-    const node = nodeByKey(key);
-    if (!node) return;
-    if (node.type === "start") { toast("O nó Início não pode ser duplicado."); return; }
+  // Copia nós + conexões internas com chaves novas (menu ganha ids de opção
+  // novos e as conexões das opções são remapeadas).
+  function cloneNodes(nodes, edges, offset) {
+    const keyMap = new Map();
+    const optionMap = new Map();
+    const copies = nodes.filter((node) => node.type !== "start").map((node) => {
+      const copy = { ...clone(node), key: uid("n"), x: node.x + offset.x, y: node.y + offset.y };
+      keyMap.set(node.key, copy.key);
+      if (copy.type === "menu") {
+        copy.config.options = copy.config.options.map((option) => {
+          const id = uid("o");
+          optionMap.set(`${node.key}::opt:${option.id}`, `opt:${id}`);
+          return { ...option, id };
+        });
+      }
+      return copy;
+    });
+    const copiedEdges = edges.filter((edge) => keyMap.has(edge.source) && keyMap.has(edge.target)).map((edge) => {
+      const sourceHandle = optionMap.get(`${edge.source}::${edge.sourceHandle}`) || edge.sourceHandle;
+      const source = keyMap.get(edge.source);
+      const target = keyMap.get(edge.target);
+      return { id: `${source}:${sourceHandle}->${target}`, source, sourceHandle, target };
+    });
+    return { nodes: copies, edges: copiedEdges };
+  }
+
+  function duplicateNodes(keys) {
+    const nodes = keys.map(nodeByKey).filter(Boolean);
+    if (!nodes.some((node) => node.type !== "start")) { toast("O nó Início não pode ser duplicado."); return; }
     pushHistory();
-    const copy = { ...clone(node), key: uid("n"), name: `${node.name} (cópia)`, x: node.x + 40, y: node.y + 40 };
-    if (copy.type === "menu") copy.config.options = copy.config.options.map((option) => ({ ...option, id: uid("o") }));
-    state.graph.nodes.push(copy);
-    state.selectedNode = copy.key;
+    const copied = cloneNodes(nodes, state.graph.edges, { x: 40, y: 40 });
+    if (copied.nodes.length === 1) copied.nodes[0].name = `${copied.nodes[0].name} (cópia)`;
+    state.graph.nodes.push(...copied.nodes);
+    state.graph.edges.push(...copied.edges);
+    state.selection = new Set(copied.nodes.map((node) => node.key));
     render();
     renderPanel();
   }
+
+  function copySelection() {
+    const nodes = [...state.selection].map(nodeByKey).filter((node) => node && node.type !== "start");
+    if (!nodes.length) { toast("Selecione nós para copiar (o Início não é copiado)."); return; }
+    const keys = new Set(nodes.map((node) => node.key));
+    state.clipboard = { nodes: clone(nodes), edges: clone(state.graph.edges.filter((edge) => keys.has(edge.source) && keys.has(edge.target))) };
+    try { localStorage.setItem(CLIPBOARD_KEY, JSON.stringify(state.clipboard)); } catch { /* só em memória */ }
+    toast(`${nodes.length} nó(s) copiado(s).`);
+  }
+
+  function pasteClipboard() {
+    let clipboard = state.clipboard;
+    try { clipboard = JSON.parse(localStorage.getItem(CLIPBOARD_KEY) || "null") || clipboard; } catch { /* usa o da memória */ }
+    if (!clipboard?.nodes?.length) { toast("Nada para colar."); return; }
+    const center = toGraphPoint(canvas.getBoundingClientRect().left + canvas.clientWidth / 2, canvas.getBoundingClientRect().top + canvas.clientHeight / 2);
+    const minX = Math.min(...clipboard.nodes.map((node) => node.x));
+    const minY = Math.min(...clipboard.nodes.map((node) => node.y));
+    pushHistory();
+    const copied = cloneNodes(clipboard.nodes, clipboard.edges, { x: Math.round(center.x - minX - NODE_WIDTH / 2), y: Math.round(center.y - minY - 60) });
+    state.graph.nodes.push(...copied.nodes);
+    state.graph.edges.push(...copied.edges);
+    state.selection = new Set(copied.nodes.map((node) => node.key));
+    render();
+    renderPanel();
+    toast(`${copied.nodes.length} nó(s) colado(s).`);
+  }
+
+  function alignSelection(axis) {
+    const nodes = [...state.selection].map(nodeByKey).filter(Boolean);
+    if (nodes.length < 2) return;
+    pushHistory();
+    const value = Math.min(...nodes.map((node) => node[axis]));
+    for (const node of nodes) node[axis] = value;
+    render();
+  }
+
+  function distributeSelection() {
+    const nodes = [...state.selection].map(nodeByKey).filter(Boolean).sort((a, b) => a.y - b.y);
+    if (nodes.length < 3) return;
+    pushHistory();
+    const first = nodes[0].y;
+    const last = nodes.at(-1).y;
+    const step = (last - first) / (nodes.length - 1);
+    nodes.forEach((node, index) => { node.y = Math.round(first + step * index); });
+    render();
+  }
+
+  // Auto organizar: camadas pela distância (BFS) a partir do Início, na
+  // ordem das saídas de cada nó; nós soltos vão para uma coluna à direita.
+  function autoLayout() {
+    const start = state.graph.nodes.find((node) => node.type === "start");
+    if (!start) return;
+    pushHistory();
+    const depth = new Map([[start.key, 0]]);
+    const queue = [start.key];
+    const order = [];
+    while (queue.length) {
+      const key = queue.shift();
+      order.push(key);
+      const node = nodeByKey(key);
+      const handles = outputsFor(node).map((output) => output.handle);
+      const outgoing = state.graph.edges.filter((edge) => edge.source === key)
+        .sort((a, b) => handles.indexOf(a.sourceHandle) - handles.indexOf(b.sourceHandle));
+      for (const edge of outgoing) {
+        if (!depth.has(edge.target)) { depth.set(edge.target, depth.get(key) + 1); queue.push(edge.target); }
+      }
+    }
+    const maxDepth = Math.max(0, ...depth.values());
+    for (const node of state.graph.nodes) if (!depth.has(node.key)) { depth.set(node.key, maxDepth + 1); order.push(node.key); }
+    const rows = new Map();
+    for (const key of order) {
+      const column = depth.get(key);
+      const row = rows.get(column) || 0;
+      rows.set(column, row + 1);
+      const node = nodeByKey(key);
+      node.x = 80 + column * 300;
+      node.y = 80 + row * 200;
+    }
+    render();
+    requestAnimationFrame(fitView);
+  }
+
+  $("#fb-copy").addEventListener("click", copySelection);
+  $("#fb-paste").addEventListener("click", pasteClipboard);
+  $("#fb-align-left").addEventListener("click", () => alignSelection("x"));
+  $("#fb-align-top").addEventListener("click", () => alignSelection("y"));
+  $("#fb-distribute").addEventListener("click", distributeSelection);
+  $("#fb-auto-layout").addEventListener("click", () => {
+    if (window.confirm("Reorganizar automaticamente todos os nós a partir do Início? (Dá para desfazer com Ctrl+Z.)")) autoLayout();
+  });
 
   function deleteEdge(id) {
     pushHistory();
@@ -434,45 +659,43 @@
   }
 
   function selectNode(key) {
-    if (state.selectedNode === key) return;
-    state.selectedNode = key;
-    state.selectedEdge = null;
-    renderNodes();
-    renderEdges();
-    showPanel("props");
-    renderPanel();
+    setSelection([key]);
   }
 
   document.addEventListener("keydown", (event) => {
     const typing = event.target.closest("input, textarea, select");
     const mod = event.ctrlKey || event.metaKey;
-    if (mod && event.key.toLowerCase() === "s") { event.preventDefault(); saveDraft(); return; }
+    const key = event.key.toLowerCase();
+    if (mod && key === "s") { event.preventDefault(); saveDraft(); return; }
     if (typing) return;
-    if (mod && event.key.toLowerCase() === "z" && !event.shiftKey) { event.preventDefault(); restoreFrom(state.undo, state.redo); }
-    else if (mod && (event.key.toLowerCase() === "y" || (event.key.toLowerCase() === "z" && event.shiftKey))) { event.preventDefault(); restoreFrom(state.redo, state.undo); }
-    else if (mod && event.key.toLowerCase() === "d" && state.selectedNode) { event.preventDefault(); duplicateNode(state.selectedNode); }
+    if (mod && key === "z" && !event.shiftKey) { event.preventDefault(); restoreFrom(state.undo, state.redo); }
+    else if (mod && (key === "y" || (key === "z" && event.shiftKey))) { event.preventDefault(); restoreFrom(state.redo, state.undo); }
+    else if (mod && key === "d" && state.selection.size) { event.preventDefault(); duplicateNodes([...state.selection]); }
+    else if (mod && key === "c" && state.selection.size) { event.preventDefault(); copySelection(); }
+    else if (mod && key === "v") { event.preventDefault(); pasteClipboard(); }
+    else if (mod && key === "a") { event.preventDefault(); setSelection(state.graph.nodes.map((node) => node.key)); }
+    else if (event.key === "Escape") setSelection([]);
     else if (event.key === "Delete" || event.key === "Backspace") {
       if (state.selectedEdge) deleteEdge(state.selectedEdge);
-      else if (state.selectedNode) deleteNode(state.selectedNode);
+      else if (state.selection.size) deleteNodes([...state.selection]);
     }
   });
   $("#fb-undo").addEventListener("click", () => restoreFrom(state.undo, state.redo));
   $("#fb-redo").addEventListener("click", () => restoreFrom(state.redo, state.undo));
 
-  // ---------- biblioteca ---------------------------------------------------------
+  // ---------- biblioteca de blocos ---------------------------------------------------
   function renderLibrary() {
     const term = $("#fb-library-search").value.trim().toLowerCase();
-    const groups = new Map();
+    const groups = new Map(GROUP_ORDER.map((group) => [group, []]));
     for (const item of state.options.nodeTypes) {
       if (item.type === "start") continue;
       if (term && !item.label.toLowerCase().includes(term)) continue;
       if (!groups.has(item.group)) groups.set(item.group, []);
       groups.get(item.group).push(item);
     }
-    $("#fb-library-list").innerHTML = [...groups].map(([group, items]) => `
+    $("#fb-library-list").innerHTML = [...groups].filter(([, items]) => items.length).map(([group, items]) => `
       <div class="fb-lib-group"><h4>${escapeHtml(group)}</h4>
-        ${items.map((item) => `<div class="fb-lib-item ${item.available ? "" : "soon"}" draggable="${item.available}" data-type="${item.type}" role="button" tabindex="0">
-          <i>${item.icon}</i>${escapeHtml(item.label)}${item.available ? "" : "<small>EM BREVE</small>"}</div>`).join("")}
+        ${items.map((item) => `<div class="fb-lib-item" draggable="true" data-type="${item.type}" role="button" tabindex="0"><i>${item.icon}</i>${escapeHtml(item.label)}</div>`).join("")}
       </div>`).join("");
   }
   $("#fb-library-search").addEventListener("input", renderLibrary);
@@ -485,7 +708,7 @@
   $("#fb-library-list").addEventListener("click", (event) => {
     const item = event.target.closest(".fb-lib-item");
     if (!item) return;
-    const center = toGraphPoint(canvas.getBoundingClientRect().left + canvas.clientWidth / 2 - 112, canvas.getBoundingClientRect().top + canvas.clientHeight / 2 - 50);
+    const center = toGraphPoint(canvas.getBoundingClientRect().left + canvas.clientWidth / 2 - NODE_WIDTH / 2, canvas.getBoundingClientRect().top + canvas.clientHeight / 2 - 50);
     addNode(item.dataset.type, center);
   });
   canvas.addEventListener("dragover", (event) => { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; });
@@ -494,7 +717,7 @@
     const type = event.dataTransfer.getData("text/fb-node-type");
     if (!type) return;
     const point = toGraphPoint(event.clientX, event.clientY);
-    addNode(type, { x: point.x - 112, y: point.y - 20 });
+    addNode(type, { x: point.x - NODE_WIDTH / 2, y: point.y - 20 });
   });
 
   // ---------- painel de propriedades -------------------------------------------
@@ -510,50 +733,83 @@
     if (button) showPanel(button.dataset.panel);
   });
 
-  const categoryOptions = (selected, allowEmpty = true) => `${allowEmpty ? '<option value="">— nenhum —</option>' : '<option value="">Selecione o setor</option>'}${
+  const categoryOptions = (selected, emptyLabel = "— nenhum —") => `<option value="">${emptyLabel}</option>${
     state.options.categories.map((category) => {
       const parent = state.options.categories.find((item) => item.id === category.parentId);
       return `<option value="${category.id}" ${category.id === selected ? "selected" : ""}>${escapeHtml(parent ? `${parent.name}: ${category.name}` : category.name)}</option>`;
     }).join("")}`;
   const select = (field, options, value) => `<select data-field="${field}">${Object.entries(options).map(([key, label]) => `<option value="${key}" ${key === value ? "selected" : ""}>${escapeHtml(label)}</option>`).join("")}</select>`;
-  const variableChips = () => `<div class="fb-chips">${state.options.variables.slice(0, 12).map((variable) => `<button type="button" data-insert="{{${variable}}}">${variable}</button>`).join("")}</div>`;
+  const variableChips = () => `<div class="fb-chips">${state.options.variables.filter((variable) => !variable.startsWith("custom.")).slice(0, 14).map((variable) => `<button type="button" data-insert="{{${variable}}}">${variable}</button>`).join("")}</div>`;
   const variablesDatalist = () => `<datalist id="fb-vars">${state.options.variables.map((variable) => `<option value="${variable}"></option>`).join("")}</datalist>`;
+  const kvRows = (list, prefix, placeholders) => (list || []).map((item, index) => `
+    <div class="fb-rule" data-index="${index}" style="grid-template-columns:1fr 1fr 24px">
+      <input data-${prefix}-field="key" ${prefix === "assign" ? 'list="fb-vars"' : ""} value="${escapeHtml(item.key)}" placeholder="${placeholders[0]}">
+      <input data-${prefix}-field="value" value="${escapeHtml(item.value)}" placeholder="${placeholders[1]}">
+      <button type="button" class="fb-mini danger" data-${prefix}-remove>✕</button>
+    </div>`).join("");
+
+  function responseSelect(selected) {
+    const groups = new Map();
+    for (const item of state.options.responses) { if (!groups.has(item.category)) groups.set(item.category, []); groups.get(item.category).push(item); }
+    return `<select data-field="responseKey"><option value="">Selecione a resposta</option>${[...groups].map(([group, items]) => `<optgroup label="${escapeHtml(group)}">${items.map((item) => `<option value="${escapeHtml(item.key)}" ${item.key === selected ? "selected" : ""}>${escapeHtml(item.key)} — ${escapeHtml(item.title)}</option>`).join("")}</optgroup>`).join("")}</select>`;
+  }
+
+  function mediaPreview(c) {
+    if (!c.storageKey) return '<p class="fb-note">Nenhum arquivo enviado.</p>';
+    const url = botUrl(`/flow-media/${encodeURIComponent(c.storageKey)}`);
+    if (c.kind === "IMAGE") return `<img class="fb-media-preview" src="${url}" alt="${escapeHtml(c.fileName)}">`;
+    if (c.kind === "AUDIO") return `<audio class="fb-media-preview" controls src="${url}"></audio>`;
+    if (c.kind === "VIDEO") return `<video class="fb-media-preview" controls src="${url}"></video>`;
+    return `<a class="fb-ghost" href="${url}" target="_blank" rel="noopener">📄 ${escapeHtml(c.fileName || "documento")}</a>`;
+  }
 
   function nodeForm(node) {
     const c = node.config;
     switch (node.type) {
       case "start": return `
         <label>Quando iniciar ${select("trigger", { NEW_CONVERSATION: "Nova conversa (uma vez por sessão)", ANY_MESSAGE: "Nova conversa (sempre que voltar à fila sem setor)" }, c.trigger)}</label>
-        <label>Mensagem inicial (opcional)<textarea data-field="initialMessage" placeholder="Olá {{contact.firstName}}!">${escapeHtml(c.initialMessage)}</textarea></label>
+        <label>Mensagem inicial (opcional)<textarea data-field="initialMessage" placeholder="{{contact.greeting}}! Bem-vindo(a)!">${escapeHtml(c.initialMessage)}</textarea></label>
         ${variableChips()}
-        <label>Categoria inicial (usada como setor padrão de handoff)<select data-field="categoryId">${categoryOptions(c.categoryId)}</select></label>
+        <label>Setor inicial (usado como setor padrão de handoff)<select data-field="categoryId">${categoryOptions(c.categoryId)}</select></label>
         <div><label>Canais (vazio = todos os canais do Bot)</label><div class="fb-list">${Object.entries(START_CHANNELS).map(([key, label]) => `<label class="fb-check"><input type="checkbox" data-channel="${key}" ${(c.channels || []).includes(key) ? "checked" : ""}> ${label}</label>`).join("")}</div></div>`;
       case "message": return `
-        <label>Texto<textarea data-field="text" placeholder="Olá {{contact.firstName}}, como podemos ajudar?">${escapeHtml(c.text)}</textarea></label>
-        ${variableChips()}
-        <div><span class="fb-kicker">PRÉ-VISUALIZAÇÃO</span><div class="fb-preview" id="fb-preview">${escapeHtml(renderTemplate(c.text) || "…")}</div></div>`;
+        <label>Conteúdo ${select("source", { TEXT: "Texto manual", LIBRARY: "Resposta da biblioteca" }, c.source)}</label>
+        ${c.source === "LIBRARY" ? `
+          <label>Resposta do Bot${responseSelect(c.responseKey)}</label>
+          <p class="fb-note">Editar a resposta em <a href="/bots" target="_blank">Bots → Respostas do Bot</a> atualiza todos os fluxos que a usam.</p>
+          <div><span class="fb-kicker">PRÉ-VISUALIZAÇÃO</span><div class="fb-preview" id="fb-preview">${escapeHtml(renderTemplate(libraryText(c.responseKey) || "…"))}</div></div>`
+    : `
+          <label>Texto<textarea data-field="text" placeholder="Olá {{contact.firstName}}, como podemos ajudar? 😊">${escapeHtml(c.text)}</textarea></label>
+          ${variableChips()}
+          <div><span class="fb-kicker">PRÉ-VISUALIZAÇÃO</span><div class="fb-preview" id="fb-preview">${escapeHtml(renderTemplate(c.text) || "…")}</div></div>`}`;
+      case "media": return `
+        <label>Tipo ${select("kind", MEDIA_KINDS, c.kind)}</label>
+        <label class="fb-upload">Arquivo<input type="file" id="fb-media-file" accept="${MEDIA_ACCEPT[c.kind] || ""}"></label>
+        <div id="fb-media-preview">${mediaPreview(c)}</div>
+        <label>Legenda (opcional)<textarea data-field="caption">${escapeHtml(c.caption)}</textarea></label>
+        <p class="fb-note">Imagem JPG/PNG até 5 MB; áudio/vídeo até 16 MB; documentos até 100 MB.</p>`;
       case "question": return `
-        <label>Pergunta<textarea data-field="text" placeholder="Qual modelo do seu Mibro?">${escapeHtml(c.text)}</textarea></label>
+        <label>Pergunta<textarea data-field="text" placeholder="Qual o número do seu pedido?">${escapeHtml(c.text)}</textarea></label>
         ${variableChips()}
         <div class="fb-row">
-          <label>Salvar em<input data-field="variable" list="fb-vars" value="${escapeHtml(c.variable)}" placeholder="customer.watchModel"></label>
+          <label>Salvar em<input data-field="variable" list="fb-vars" value="${escapeHtml(c.variable)}" placeholder="customer.orderNumber"></label>
           <label>Tipo de resposta ${select("answerType", ANSWER_TYPES, c.answerType)}</label>
         </div>
-        <div class="fb-row">
-          <label>Tentativas<input data-field="maxAttempts" type="number" min="1" max="10" value="${c.maxAttempts}"></label>
-        </div>
+        <div class="fb-row"><label>Tentativas<input data-field="maxAttempts" type="number" min="1" max="10" value="${c.maxAttempts}"></label></div>
         <label>Mensagem quando a resposta for inválida<input data-field="invalidMessage" value="${escapeHtml(c.invalidMessage)}" placeholder="Não consegui entender sua resposta..."></label>
-        <p class="fb-note">Sem a saída "Resposta inválida" conectada, após as tentativas a conversa vai para atendimento humano.</p>`;
+        <p class="fb-note">${c.answerType === "YES_NO" ? "Sim/Não salva <code>true</code>/<code>false</code> — use uma Condição (ex.: <code>flow.lastAnswer == true</code>). " : ""}Sem a saída "Resposta inválida" conectada, após as tentativas a conversa vai para atendimento humano.</p>`;
       case "menu": return `
         <label>Texto do menu<textarea data-field="text">${escapeHtml(c.text)}</textarea></label>
-        <div><span class="fb-kicker">OPÇÕES</span><div class="fb-list" id="fb-menu-options">${(c.options || []).map((option, index) => `
+        <div class="fb-row"><label>Exibir como ${select("display", { TEXT: "Texto numerado", LIST: "Lista do WhatsApp (até 10)" }, c.display)}</label>
+          ${c.display === "LIST" ? `<label>Botão da lista<input data-field="buttonLabel" maxlength="20" value="${escapeHtml(c.buttonLabel)}"></label>` : ""}</div>
+        <div><span class="fb-kicker">OPÇÕES (${(c.options || []).length})</span><div class="fb-list" id="fb-menu-options">${(c.options || []).map((option, index) => `
           <div class="fb-list-item" data-index="${index}">
             <div class="fb-list-top"><b>${index + 1}</b><input data-option-field="label" value="${escapeHtml(option.label)}" placeholder="Nome da opção">
               <button type="button" class="fb-mini" data-option-move="-1" title="Subir">↑</button><button type="button" class="fb-mini" data-option-move="1" title="Descer">↓</button><button type="button" class="fb-mini danger" data-option-remove title="Remover">✕</button></div>
-            <input data-option-field="keywords" value="${escapeHtml((option.keywords || []).join(", "))}" placeholder="Palavras-chave extras (opcional, separadas por vírgula)">
+            <input data-option-field="keywords" value="${escapeHtml((option.keywords || []).join(", "))}" placeholder="Sinônimos: problema, ajuda, defeito, não funciona">
           </div>`).join("")}</div>
           <button type="button" class="fb-add" data-option-add>+ opção</button></div>
-        <p class="fb-note">O cliente pode responder com o número, o nome da opção ou uma frase com ele ("quero suporte"). Cada opção tem sua própria saída no card.</p>
+        <p class="fb-note">O cliente pode responder com o número, o nome, uma frase com ele ("quero suporte") ou um sinônimo cadastrado. Só escolhe quando exatamente uma opção bate — sem IA, sem chute. Cada opção tem sua própria saída.${c.display === "LIST" && (c.options || []).length > 10 ? " <b>Mais de 10 opções: o WhatsApp recebe o texto numerado.</b>" : ""}</p>
         <div class="fb-row"><label>Salvar escolha em<input data-field="variable" list="fb-vars" value="${escapeHtml(c.variable)}"></label>
           <label>Tentativas<input data-field="maxAttempts" type="number" min="1" max="10" value="${c.maxAttempts}"></label></div>
         <label>Mensagem para opção não reconhecida<input data-field="invalidMessage" value="${escapeHtml(c.invalidMessage)}"></label>`;
@@ -561,53 +817,51 @@
         <label>Combinar regras ${select("match", { ALL: "Todas verdadeiras (E)", ANY: "Qualquer uma (OU)" }, c.match)}</label>
         <div class="fb-list" id="fb-rules">${(c.rules || []).map((rule, index) => `
           <div class="fb-rule" data-index="${index}">
-            <input data-rule-field="left" list="fb-vars" value="${escapeHtml(rule.left)}" placeholder="bot.intent">
+            <input data-rule-field="left" list="fb-vars" value="${escapeHtml(rule.left)}" placeholder="flow.selectedOption">
             <select data-rule-field="operator">${OPERATORS.map((op) => `<option ${op === rule.operator ? "selected" : ""}>${op}</option>`).join("")}</select>
             <input data-rule-field="right" value="${escapeHtml(rule.right)}" placeholder="valor" ${["exists", "not_exists"].includes(rule.operator) ? "disabled" : ""}>
             <button type="button" class="fb-mini danger" data-rule-remove>✕</button>
           </div>`).join("")}</div>
         <button type="button" class="fb-add" data-rule-add>+ regra</button>
-        <p class="fb-note">Exemplos: <code>intent == wholesale</code>, <code>customer.cnpj != null</code>, <code>channel == META</code>. Saídas: Verdadeiro e Falso.</p>`;
+        <p class="fb-note">Exemplos: <code>customer.hasOrder == true</code>, <code>bot.withinBusinessHours == true</code>, <code>flow.selectedOption == Suporte</code>, <code>customer.cnpj exists</code>. Saídas: Verdadeiro e Falso.</p>`;
       case "delay": return `
         <div class="fb-row"><label>Quanto<input data-field="amount" type="number" min="1" value="${c.amount}"></label>
           <label>Unidade ${select("unit", { SECONDS: "segundos", MINUTES: "minutos", HOURS: "horas" }, c.unit)}</label></div>
         <p class="fb-note">O servidor não fica esperando: a execução é agendada e retomada automaticamente. Máximo de 24 horas.</p>`;
       case "variable": return `
-        <div class="fb-list" id="fb-assignments">${(c.assignments || []).map((item, index) => `
-          <div class="fb-rule" data-index="${index}" style="grid-template-columns:1fr 1fr 24px">
-            <input data-assign-field="key" list="fb-vars" value="${escapeHtml(item.key)}" placeholder="vars.origem">
-            <input data-assign-field="value" value="${escapeHtml(item.value)}" placeholder="valor ou {{variavel}}">
-            <button type="button" class="fb-mini danger" data-assign-remove>✕</button>
-          </div>`).join("")}</div>
+        <div class="fb-list" id="fb-assignments">${kvRows(c.assignments, "assign", ["custom.origem", "valor ou {{variavel}}"])}</div>
         <button type="button" class="fb-add" data-assign-add>+ variável</button>
-        <p class="fb-note">Só é possível escrever em <code>customer.*</code>, <code>flow.*</code> e <code>vars.*</code>.</p>`;
-      case "ai": return `
-        <label>Modo ${select("mode", AI_MODES, c.mode)}</label>
-        <div class="fb-row"><label>Provedor ${select("provider", Object.fromEntries(state.options.aiProviders.map((item) => [item.id, item.label])), c.provider)}</label>
-          <label>Modelo (opcional)<input data-field="model" value="${escapeHtml(c.model)}" placeholder="padrão do Bot"></label></div>
-        <label>Entrada<input data-field="input" value="${escapeHtml(c.input)}"></label>
-        <label class="fb-check"><input type="checkbox" data-field="sendAnswer" ${c.sendAnswer ? "checked" : ""}> Enviar a resposta da IA ao cliente (modo Responder)</label>
-        <p class="fb-note warn">A resposta passa pelos mesmos guards e gate de envio da IA atual. Nesta versão o envio de respostas de IA continua em <b>dry-run</b>: nada gerado pela IA sai para o cliente.</p>
-        <p class="fb-note">Saídas disponíveis para os próximos nós: <code>bot.answer</code>, <code>bot.action</code>, <code>bot.intent</code>, <code>bot.product</code>, <code>bot.confidence</code>, <code>bot.needsHuman</code>, <code>bot.reason</code>. A base de conhecimento usada é a do RAG da IA local.</p>`;
-      case "knowledge": return `
-        <label>Pergunta<input data-field="query" value="${escapeHtml(c.query)}"></label>
-        <div class="fb-row"><label>Produto (opcional)<input data-field="product" value="${escapeHtml(c.product)}" placeholder="{{bot.product}}"></label>
-          <label>Máx. resultados<input data-field="limit" type="number" min="1" max="10" value="${c.limit}"></label></div>
-        <p class="fb-note">Usa a Base de Conhecimento já existente. Resultado em <code>knowledge.result</code>, <code>knowledge.sources</code> e <code>knowledge.confidence</code>.</p>`;
+        <p class="fb-note">Só é possível escrever em <code>customer.*</code>, <code>flow.*</code>, <code>vars.*</code> e <code>custom.*</code>.</p>`;
       case "transfer_category": return `
-        <label>Setor de destino<select data-field="categoryId">${categoryOptions(c.categoryId, false)}</select></label>
+        <label>Setor de destino<select data-field="categoryId">${categoryOptions(c.categoryId, "Selecione o setor")}</select></label>
         <label>Mensagem ao cliente (opcional)<textarea data-field="message">${escapeHtml(c.message)}</textarea></label>
         <label>Motivo (histórico/auditoria)<input data-field="reason" value="${escapeHtml(c.reason)}"></label>
-        <p class="fb-note">A conversa sai do Bot, entra na fila do setor sem responsável e a transferência fica registrada no histórico.</p>`;
+        <p class="fb-note">A conversa sai do Bot, entra na fila do setor sem responsável e a transferência fica no histórico — mesmo sistema de categorias/visibilidade da Central.</p>`;
+      case "transfer_user": return `
+        <label>Atendente<select data-field="userId"><option value="">Selecione o atendente</option>${state.options.users.map((user) => `<option value="${user.id}" ${user.id === c.userId ? "selected" : ""}>${escapeHtml(user.name)} (${escapeHtml(user.role)})</option>`).join("")}</select></label>
+        <label>Setor (opcional — padrão: setor atual/inicial)<select data-field="categoryId">${categoryOptions(c.categoryId)}</select></label>
+        <label>Mensagem ao cliente (opcional)<textarea data-field="message">${escapeHtml(c.message)}</textarea></label>
+        <label>Motivo (histórico/auditoria)<input data-field="reason" value="${escapeHtml(c.reason)}"></label>
+        <p class="fb-note">O atendente precisa ter acesso ao setor. A conversa fica com ele em "Em atendimento".</p>`;
       case "human_handoff": return `
-        <label>Motivo do handoff<input data-field="reason" value="${escapeHtml(c.reason)}" placeholder="{{bot.reason}}"></label>
+        <label>Motivo<input data-field="reason" value="${escapeHtml(c.reason)}" placeholder="Cliente pediu atendente"></label>
         <label>Setor (opcional)<select data-field="categoryId">${categoryOptions(c.categoryId)}</select></label>
         <label>Mensagem ao cliente (opcional)<textarea data-field="message">${escapeHtml(c.message)}</textarea></label>`;
       case "end": return `
         <label>Mensagem final (opcional)<textarea data-field="message">${escapeHtml(c.message)}</textarea></label>
         <label class="fb-check"><input type="checkbox" data-field="finalizeConversation" ${c.finalizeConversation !== false ? "checked" : ""}> Finalizar a conversa</label>
         <p class="fb-note">Desmarcado: o Bot encerra e a conversa fica visível para a equipe.</p>`;
-      default: return `<p class="fb-note warn">Este elemento estará disponível em uma próxima versão. Fluxos com ele não podem ser publicados.</p>`;
+      case "goto_flow": return `
+        <label>Fluxo de destino<select data-field="flowId"><option value="">Selecione o fluxo</option>${state.options.flows.filter((flow) => flow.id !== state.flow?.id).map((flow) => `<option value="${flow.id}" ${flow.id === c.flowId ? "selected" : ""}>${escapeHtml(flow.name)}${flow.published ? "" : " (nunca publicado)"}</option>`).join("")}</select></label>
+        <p class="fb-note">Continua no Início do outro fluxo (Triagem → Suporte, Comercial...), com as mesmas variáveis. Em produção o fluxo de destino precisa estar <b>publicado e ativo</b>.</p>`;
+      case "webhook": return `
+        <label>Endpoint${state.options.webhooks.length ? `<select data-field="endpointKey"><option value="">Selecione</option>${state.options.webhooks.map((item) => `<option value="${escapeHtml(item.key)}" ${item.key === c.endpointKey ? "selected" : ""}>${escapeHtml(item.key)} — ${escapeHtml(item.name)} (${item.method})</option>`).join("")}</select>` : '<p class="fb-note warn">Nenhum endpoint cadastrado. Cadastre em <a href="/bots" target="_blank">Bots → Webhooks/API</a>.</p>'}</label>
+        <div><span class="fb-kicker">CAMPOS ENVIADOS</span><div class="fb-list" id="fb-fields">${kvRows(c.fields, "field", ["pedido", "{{customer.orderNumber}}"])}</div>
+          <button type="button" class="fb-add" data-field-add>+ campo</button></div>
+        <label>Salvar resposta em<input data-field="resultVariable" list="fb-vars" value="${escapeHtml(c.resultVariable)}"></label>
+        <p class="fb-note">Resultado: <code>${escapeHtml(c.resultVariable)}.ok</code>, <code>.status</code> e <code>.data</code> (ex.: <code>${escapeHtml(c.resultVariable)}.data.status</code> numa Condição). Falha sem saída "Erro" conectada vai para atendimento humano.</p>`;
+      case "removed": return `<p class="fb-note warn">Este nó (${escapeHtml(c.originalType || "antigo")}) usava IA/conhecimento e não existe mais. O Bot agora é 100% determinístico: exclua o nó e use Mensagem, Menu, Condição ou Respostas do Bot.</p>`;
+      default: return "";
     }
   }
 
@@ -618,16 +872,24 @@
       $("#fb-delete-edge").addEventListener("click", () => deleteEdge(state.selectedEdge));
       return;
     }
-    const node = nodeByKey(state.selectedNode);
+    if (state.selection.size > 1) {
+      panel.innerHTML = `<span class="fb-kicker">SELEÇÃO</span><h3>${state.selection.size} nós selecionados</h3>
+        <p class="fb-note">Arraste qualquer um para mover todos. Use a barra do canvas para alinhar/distribuir.</p>
+        <div class="fb-panel-actions"><button type="button" class="fb-ghost" data-panel-action="copy">Copiar</button><button type="button" class="fb-ghost" data-panel-action="duplicate">Duplicar</button><button type="button" class="fb-ghost" data-panel-action="delete">Excluir</button></div>`;
+      return;
+    }
+    const node = nodeByKey(primaryKey());
     if (!node) {
-      panel.innerHTML = `<div class="fb-empty">Selecione um nó para configurar.<br><br>Arraste da biblioteca para o canvas, conecte a saída (○) de um nó na entrada de outro e clique em uma conexão para excluí-la.<br><br><b>Atalhos:</b> Ctrl+S salvar • Ctrl+Z/Y desfazer/refazer • Ctrl+D duplicar • Delete excluir</div>`;
+      panel.innerHTML = `<div class="fb-empty">Selecione um nó para configurar.<br><br>Arraste da biblioteca para o canvas, conecte a saída (○) de um nó na entrada de outro e clique em uma conexão para excluí-la.<br><br><b>Atalhos:</b> Ctrl+S salvar • Ctrl+Z/Y desfazer/refazer • Ctrl+C/V copiar/colar • Ctrl+D duplicar • Ctrl+A selecionar tudo • Shift+clique ou Shift+arrastar multi-seleção • Delete excluir</div>`;
       return;
     }
     const meta = typeMeta(node.type);
     const errors = state.errors.filter((error) => error.nodeKey === node.key);
+    const warnings = state.warnings.filter((warning) => warning.nodeKey === node.key);
     panel.innerHTML = `
       <span class="fb-kicker">${escapeHtml(meta.label.toUpperCase())}</span><h3>${escapeHtml(node.name)}</h3>
       ${errors.length ? `<div class="fb-node-errors"><b>Corrija antes de publicar:</b><ul>${errors.map((error) => `<li>${escapeHtml(error.message)}</li>`).join("")}</ul></div>` : ""}
+      ${warnings.length ? `<div class="fb-node-errors warn"><b>Atenção:</b><ul>${warnings.map((warning) => `<li>${escapeHtml(warning.message)}</li>`).join("")}</ul></div>` : ""}
       <div class="fb-form">
         <label>Nome do nó<input data-name value="${escapeHtml(node.name)}" maxlength="120"></label>
         ${nodeForm(node)}
@@ -651,11 +913,15 @@
     renderEdges();
   }
 
+  // Campos que mudam o próprio formulário (mostram/escondem outros campos).
+  const RERENDER_FIELDS = new Set(["source", "display", "kind", "answerType", "responseKey"]);
+
   panelProps.addEventListener("input", (event) => {
-    const node = nodeByKey(state.selectedNode);
+    const node = nodeByKey(primaryKey());
     if (!node) return;
     const target = event.target;
     const c = node.config;
+    if (target.type === "file") return;
     if (target.matches("[data-name]")) { beginEdit(); node.name = target.value; refreshNodeCard(); return; }
     if (target.matches("[data-field]")) {
       beginEdit();
@@ -665,7 +931,9 @@
       else if (field === "categoryId") c[field] = target.value || (node.type === "start" ? null : "");
       else c[field] = target.value;
       if (field === "text" && $("#fb-preview")) $("#fb-preview").textContent = renderTemplate(c.text) || "…";
+      if (field === "kind") Object.assign(c, { storageKey: "", mimeType: "", fileName: "" });
       refreshNodeCard();
+      if (RERENDER_FIELDS.has(field)) { state.editSnapshotTaken = false; renderPanel(); }
       return;
     }
     if (target.matches("[data-channel]")) {
@@ -696,18 +964,47 @@
       beginEdit();
       c.assignments[Number(assignRow.dataset.index)][target.dataset.assignField] = target.value;
       refreshNodeCard();
+      return;
+    }
+    const fieldRow = target.closest("#fb-fields .fb-rule");
+    if (fieldRow && target.dataset.fieldField) {
+      beginEdit();
+      c.fields[Number(fieldRow.dataset.index)][target.dataset.fieldField] = target.value;
+      refreshNodeCard();
     }
   });
-  panelProps.addEventListener("change", (event) => {
+  panelProps.addEventListener("change", async (event) => {
     if (event.target.matches("select[data-field], select[data-rule-field]")) state.editSnapshotTaken = false;
+    if (event.target.id !== "fb-media-file") return;
+    const node = nodeByKey(primaryKey());
+    const file = event.target.files?.[0];
+    if (!node || !file) return;
+    const form = new FormData();
+    form.append("kind", node.config.kind);
+    form.append("file", file);
+    try {
+      $("#fb-media-preview").innerHTML = '<p class="fb-note">Enviando...</p>';
+      const uploaded = await api(botUrl("/flow-media"), { method: "POST", body: form });
+      pushHistory();
+      Object.assign(node.config, { storageKey: uploaded.storageKey, mimeType: uploaded.mimeType, fileName: uploaded.fileName });
+      refreshNodeCard();
+      renderPanel();
+      toast("Arquivo enviado. Salve o rascunho para manter.");
+    } catch (error) {
+      $("#fb-media-preview").innerHTML = mediaPreview(node.config);
+      toast(error.message, true);
+    }
   });
 
   panelProps.addEventListener("click", (event) => {
-    const node = nodeByKey(state.selectedNode);
-    if (!node) return;
-    const c = node.config;
     const button = event.target.closest("button");
     if (!button) return;
+    if (button.dataset.panelAction === "copy") return copySelection();
+    if (button.dataset.panelAction === "delete") return deleteNodes([...state.selection]);
+    if (button.dataset.panelAction === "duplicate") return duplicateNodes([...state.selection]);
+    const node = nodeByKey(primaryKey());
+    if (!node) return;
+    const c = node.config;
     const structural = (fn) => { pushHistory(); fn(); state.editSnapshotTaken = false; render(); renderPanel(); };
     if (button.dataset.insert) {
       const field = panelProps.querySelector("textarea[data-field]");
@@ -721,8 +1018,6 @@
       field.focus();
       return;
     }
-    if (button.dataset.panelAction === "delete") return deleteNode(node.key);
-    if (button.dataset.panelAction === "duplicate") return duplicateNode(node.key);
     if (button.hasAttribute("data-option-add")) return structural(() => c.options.push({ id: uid("o"), label: `Opção ${c.options.length + 1}`, keywords: [] }));
     const optionRow = button.closest("#fb-menu-options .fb-list-item");
     if (optionRow) {
@@ -743,13 +1038,16 @@
     if (button.hasAttribute("data-rule-remove")) return structural(() => c.rules.splice(Number(button.closest(".fb-rule").dataset.index), 1));
     if (button.hasAttribute("data-assign-add")) return structural(() => c.assignments.push({ key: "vars.", value: "" }));
     if (button.hasAttribute("data-assign-remove")) return structural(() => c.assignments.splice(Number(button.closest(".fb-rule").dataset.index), 1));
+    if (button.hasAttribute("data-field-add")) return structural(() => { c.fields ||= []; c.fields.push({ key: "", value: "" }); });
+    if (button.hasAttribute("data-field-remove")) return structural(() => c.fields.splice(Number(button.closest(".fb-rule").dataset.index), 1));
   });
 
   // ---------- salvar / validar / publicar --------------------------------------
   function renderHeader() {
     const flow = state.flow;
     $("#fb-bot-name").textContent = state.bot ? `Bot • ${state.bot.name}` : "";
-    $("#back-to-bot").href = "/bots";
+    $("#back-to-bot").href = `/bots?botId=${encodeURIComponent(botId)}`;
+    $("#fb-bot-settings").href = `/bots?botId=${encodeURIComponent(botId)}`;
     $("#fb-flow-select").innerHTML = state.flows.map((item) => `<option value="${item.id}" ${item.id === flow?.id ? "selected" : ""}>${escapeHtml(item.name)}${item.isDefault ? " (padrão)" : ""}</option>`).join("");
     $("#fb-flow-name").value = flow?.name || "";
     $("#fb-status").textContent = STATUS_LABELS[flow?.status] || "—";
@@ -758,9 +1056,12 @@
     $("#fb-toggle-status").textContent = flow?.status === "ACTIVE" ? "Desativar" : "Ativar";
     $("#fb-toggle-status").disabled = !flow?.activeVersion;
     $("#fb-dirty").hidden = !state.dirty;
-    const usingFlow = state.bot?.executionMode === "FLOW_BUILDER";
-    $("#fb-mode-text").textContent = usingFlow ? "Este Bot executa o fluxo padrão do Editor Visual." : "Este Bot usa o motor atual (intenções/triagem).";
-    $("#fb-mode-toggle").textContent = usingFlow ? "Voltar ao motor atual" : "Usar Editor Visual";
+    const bot = state.bot;
+    const responding = bot?.status === "ACTIVE" && bot?.autoReplyEnabled;
+    $("#fb-mode-text").innerHTML = [
+      flow?.isDefault ? "Este é o <b>fluxo padrão</b>: começa as conversas novas." : "Fluxo auxiliar: chamado por <b>Ir para fluxo</b>.",
+      responding ? "Bot respondendo clientes." : "Resposta automática <b>desligada</b> — nada é enviado a clientes.",
+    ].join(" ");
   }
 
   async function saveDraft({ quiet = false } = {}) {
@@ -781,18 +1082,20 @@
     }
   }
 
-  function showValidation(errors, { ok = false } = {}) {
+  function showValidation(errors, warnings = [], { ok = false } = {}) {
     state.errors = errors;
+    state.warnings = warnings;
     const box = $("#fb-validation");
-    if (ok) {
+    const item = (entry) => `<li><button type="button" data-goto="${escapeHtml(entry.nodeKey || "")}">${escapeHtml(entry.nodeKey ? `${nodeByKey(entry.nodeKey)?.name || entry.nodeKey}: ` : "")}${escapeHtml(entry.message)}</button></li>`;
+    if (ok && !warnings.length) {
       box.hidden = false;
       box.className = "fb-validation ok";
       box.innerHTML = "<b>✓ Fluxo válido</b>Nenhum problema encontrado.";
       setTimeout(() => { box.hidden = true; }, 3500);
-    } else if (errors.length) {
+    } else if (errors.length || warnings.length) {
       box.hidden = false;
-      box.className = "fb-validation";
-      box.innerHTML = `<b>${errors.length} problema(s) para publicar</b><ul>${errors.map((error) => `<li><button type="button" data-goto="${escapeHtml(error.nodeKey || "")}">${escapeHtml(error.nodeKey ? `${nodeByKey(error.nodeKey)?.name || error.nodeKey}: ` : "")}${escapeHtml(error.message)}</button></li>`).join("")}</ul>`;
+      box.className = `fb-validation${errors.length ? "" : " ok"}`;
+      box.innerHTML = `${errors.length ? `<b>${errors.length} problema(s) para publicar</b><ul>${errors.map(item).join("")}</ul>` : "<b>✓ Fluxo válido</b>"}${warnings.length ? `<b class="warn">${warnings.length} aviso(s)</b><ul>${warnings.map(item).join("")}</ul>` : ""}`;
     } else {
       box.hidden = true;
     }
@@ -804,7 +1107,7 @@
     if (!key || !nodeByKey(key)) return;
     selectNode(key);
     const node = nodeByKey(key);
-    state.graph.viewport.x = canvas.clientWidth / 2 - (node.x + 112) * state.graph.viewport.zoom;
+    state.graph.viewport.x = canvas.clientWidth / 2 - (node.x + NODE_WIDTH / 2) * state.graph.viewport.zoom;
     state.graph.viewport.y = canvas.clientHeight / 2 - (node.y + 50) * state.graph.viewport.zoom;
     applyViewport();
   });
@@ -812,7 +1115,7 @@
   async function validate() {
     try {
       const result = await api(flowUrl("/validate"), { method: "POST", body: JSON.stringify({ graph: state.graph }) });
-      showValidation(result.errors, { ok: result.valid });
+      showValidation(result.errors, result.warnings || [], { ok: result.valid });
       return result.valid;
     } catch (error) { toast(error.message, true); return false; }
   }
@@ -822,11 +1125,12 @@
     try {
       const published = await api(flowUrl("/publish"), { method: "POST", body: "{}" });
       applyFlow(published, { keepView: true });
-      showValidation([], { ok: true });
+      showValidation([], [], { ok: true });
       await loadFlowList();
       toast(`Versão v${published.activeVersion} publicada. A versão anterior continua disponível para rollback.`);
     } catch (error) {
-      if (error.body?.errors) showValidation(error.body.errors);
+      if (error.body?.details?.errors) showValidation(error.body.details.errors, error.body.details.warnings || []);
+      else if (error.body?.errors) showValidation(error.body.errors);
       toast(error.message, true);
     }
   }
@@ -840,25 +1144,10 @@
     } catch (error) { toast(error.message, true); }
   }
 
-  async function toggleExecutionMode() {
-    const toFlow = state.bot.executionMode !== "FLOW_BUILDER";
-    const question = toFlow
-      ? "Usar o fluxo padrão publicado como motor deste Bot?\n\nEle só responde clientes quando o Bot estiver ATIVO e com a auto-resposta ligada. Respostas geradas por IA continuam em dry-run."
-      : "Voltar este Bot para o motor atual? O fluxo continua salvo.";
-    if (!window.confirm(question)) return;
-    try {
-      const result = await api(`/api/bots/${encodeURIComponent(botId)}/execution-mode`, { method: "PATCH", body: JSON.stringify({ executionMode: toFlow ? "FLOW_BUILDER" : "LEGACY" }) });
-      state.bot.executionMode = result.executionMode;
-      renderHeader();
-      toast(toFlow ? "Bot agora usa o Editor Visual." : "Bot voltou ao motor atual.");
-    } catch (error) { toast(error.message, true); }
-  }
-
   $("#fb-save").addEventListener("click", () => saveDraft());
   $("#fb-validate").addEventListener("click", validate);
   $("#fb-publish").addEventListener("click", publish);
   $("#fb-toggle-status").addEventListener("click", toggleStatus);
-  $("#fb-mode-toggle").addEventListener("click", toggleExecutionMode);
   $("#fb-flow-name").addEventListener("input", markDirty);
   $("#fb-test").addEventListener("click", () => { showPanel("test"); resetTest(); $("#fb-test-input").focus(); });
 
@@ -867,7 +1156,7 @@
     const panel = $("#fb-panel-versions");
     const versions = state.flow?.versions || [];
     panel.innerHTML = `<span class="fb-kicker">VERSÕES PUBLICADAS</span><h3>Histórico</h3>
-      <p class="fb-note">Salvar altera só o rascunho. Publicar cria uma nova versão; as anteriores ficam guardadas para rollback. Conversas em andamento terminam na versão em que começaram.</p>
+      <p class="fb-note">Salvar altera só o rascunho (a versão em uso nunca muda sozinha). Publicar cria uma nova versão; as anteriores ficam guardadas para rollback. Conversas em andamento terminam na versão em que começaram.</p>
       <div style="margin-top:10px">${versions.length ? versions.map((version) => `
         <div class="fb-version-item ${version.version === state.flow.activeVersion ? "active" : ""}">
           <b>v${version.version}${version.label ? ` • ${escapeHtml(version.label)}` : ""}${version.version === state.flow.activeVersion ? " • em uso" : ""}</b>
@@ -914,33 +1203,39 @@
   $("#fb-test-reset").addEventListener("click", resetTest);
   $("#fb-test-source").addEventListener("change", resetTest);
 
-  function bubble(type, text) {
-    $("#fb-test-transcript").insertAdjacentHTML("beforeend", `<div class="fb-bubble ${type}">${escapeHtml(text)}</div>`);
+  function bubble(type, text, options = []) {
+    const buttons = options.length ? `<div class="fb-bubble-options">${options.map((option) => `<button type="button" data-reply-id="${escapeHtml(option.replyId)}" data-reply-label="${escapeHtml(option.label)}">${escapeHtml(option.label)}</button>`).join("")}</div>` : "";
+    $("#fb-test-transcript").insertAdjacentHTML("beforeend", `<div class="fb-bubble ${type}">${escapeHtml(text)}${buttons}</div>`);
     $("#fb-test-transcript").scrollTop = $("#fb-test-transcript").scrollHeight;
   }
+  $("#fb-test-transcript").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-reply-id]");
+    if (button) sendTest(button.dataset.replyLabel, button.dataset.replyId);
+  });
 
-  $("#fb-test-form").addEventListener("submit", async (event) => {
-    event.preventDefault();
+  async function sendTest(message, replyId = null) {
     if (!state.test) resetTest();
-    const input = $("#fb-test-input");
-    const message = input.value.trim();
     const finished = state.test.simState && ["HANDED_OFF", "COMPLETED", "FAILED"].includes(state.test.simState.status);
     if (finished) { toast("A simulação terminou. Clique em Reiniciar para testar de novo."); return; }
     if (!message && state.test.simState) return;
-    input.value = "";
     if (message) bubble("customer", message);
     try {
       const source = $("#fb-test-source").value;
-      const body = { message, state: state.test.simState, source, ...(source === "DRAFT" ? { graph: state.graph } : {}) };
+      const body = {
+        message, replyId, state: state.test.simState, source, callWebhooks: $("#fb-test-webhooks").checked,
+        ...(source === "DRAFT" && (!state.test.simState?.flow?.flowId || state.test.simState.flow.flowId === state.flow.id) ? { graph: state.graph } : {}),
+      };
       const result = await api(flowUrl("/simulate"), { method: "POST", body: JSON.stringify(body) });
       state.test.simState = result.state;
-      for (const output of result.outputs) bubble(output.type === "ai" ? "ai" : output.type === "event" ? "event" : "bot", output.type === "ai" ? `IA: ${output.text}\n(${output.wouldSend ? "enviaria" : "não enviaria"} • ${output.sendMode})` : output.text);
+      for (const output of result.outputs) bubble(output.type === "event" ? "event" : "bot", output.text, output.options || []);
       for (const entry of result.trace) {
+        if (entry.flowId && entry.flowId !== state.flow.id) continue; // nó de outro fluxo (Ir para fluxo)
         state.test.visited.add(entry.nodeKey);
         if (entry.result === "ERROR") state.test.errored.add(entry.nodeKey);
         if (entry.branch) state.test.takenEdges.add(`${entry.nodeKey}::${entry.branch}`);
       }
-      state.test.current = ["WAITING_CUSTOMER", "WAITING_TIMER"].includes(result.status) ? result.currentNodeKey : null;
+      const sameFlow = !result.currentFlowId || result.currentFlowId === state.flow.id;
+      state.test.current = sameFlow && ["WAITING_CUSTOMER", "WAITING_TIMER"].includes(result.status) ? result.currentNodeKey : null;
       state.test.turns.push({ message, trace: result.trace, status: result.status });
       renderTrace();
       if (!["WAITING_CUSTOMER", "WAITING_TIMER", "RUNNING"].includes(result.status)) bubble("event", `Fluxo ${EXEC_STATUS_LABELS[result.status] || result.status}`);
@@ -948,16 +1243,27 @@
     } catch (error) {
       bubble("event", `Erro: ${error.message}`);
     }
+  }
+
+  $("#fb-test-form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    const input = $("#fb-test-input");
+    const message = input.value.trim();
+    input.value = "";
+    sendTest(message);
   });
 
+  // Rastro: mensagem do cliente -> nó executado -> resultado -> saída -> próximo nó.
   function renderTrace() {
     $("#fb-test-trace").innerHTML = state.test.turns.map((turn, index) => `
       <div class="fb-trace-turn">${index === 0 ? "INÍCIO" : `CLIENTE: "${escapeHtml(turn.message)}"`}</div>
       ${turn.trace.map((entry) => {
-        const next = entry.nextNodeKey ? nodeByKey(entry.nextNodeKey)?.name || entry.nextNodeKey : "";
-        const branch = entry.branch ? (entry.branch.startsWith("opt:") ? outputsFor(nodeByKey(entry.nodeKey) || { type: "", config: {} }).find((output) => output.handle === entry.branch)?.label || entry.branch : OUTPUT_LABELS[entry.branch] || entry.branch) : "";
+        const otherFlow = entry.flowId && entry.flowId !== state.flow.id;
+        const node = otherFlow ? null : nodeByKey(entry.nodeKey);
+        const next = entry.nextNodeKey ? (otherFlow ? entry.nextNodeKey : nodeByKey(entry.nextNodeKey)?.name || entry.nextNodeKey) : "";
+        const branch = entry.branch ? (entry.branch.startsWith("opt:") && node ? outputsFor(node).find((output) => output.handle === entry.branch)?.label || entry.branch : OUTPUT_LABELS[entry.branch] || entry.branch) : "";
         return `<div class="fb-trace-item"><span class="res ${entry.result}">${RESULT_LABELS[entry.result] || entry.result}</span>
-          <div><b>${escapeHtml(entry.nodeName || entry.nodeKey)}</b><br><small>${escapeHtml([branch && `saída: ${branch}`, next && `→ ${next}`, entry.error].filter(Boolean).join(" "))}</small></div>
+          <div><b>${escapeHtml(entry.nodeName || entry.nodeKey)}</b>${otherFlow ? ` <small>(fluxo ${escapeHtml(entry.flowName || "")})</small>` : ""}<br><small>${escapeHtml([branch && `saída: ${branch}`, next && `→ ${next}`, entry.error].filter(Boolean).join(" "))}</small></div>
           <small>${entry.durationMs}ms</small></div>`;
       }).join("")}`).join("");
   }
@@ -979,21 +1285,21 @@
       if (keepView) state.graph.viewport = viewport;
     }
     if (flow.bot) state.bot = flow.bot;
-    if (state.selectedNode && !nodeByKey(state.selectedNode)) state.selectedNode = null;
+    for (const key of [...state.selection]) if (!nodeByKey(key)) state.selection.delete(key);
     renderHeader();
     render();
     renderPanel();
   }
 
   async function loadFlowList() {
-    state.flows = await api(`/api/bots/${encodeURIComponent(botId)}/visual-flows`);
+    state.flows = await api(botUrl("/visual-flows"));
     renderHeader();
   }
 
   async function openFlow(flowId) {
     if (state.dirty && !window.confirm("Existem alterações não salvas. Descartar?")) { renderHeader(); return; }
-    const flow = await api(`/api/bots/${encodeURIComponent(botId)}/visual-flows/${encodeURIComponent(flowId)}`);
-    state.dirty = false; state.undo = []; state.redo = []; state.errors = []; state.selectedNode = null;
+    const flow = await api(botUrl(`/visual-flows/${encodeURIComponent(flowId)}`));
+    state.dirty = false; state.undo = []; state.redo = []; state.errors = []; state.warnings = []; state.selection = new Set();
     $("#fb-validation").hidden = true;
     if (state.test) stopTest();
     showPanel("props");
@@ -1005,10 +1311,11 @@
 
   $("#fb-flow-select").addEventListener("change", (event) => openFlow(event.target.value).catch((error) => toast(error.message, true)));
   $("#fb-new-flow").addEventListener("click", async () => {
-    const name = window.prompt("Nome do novo fluxo:", "Novo fluxo");
+    const name = window.prompt("Nome do novo fluxo (ex.: Suporte, Comercial, Garantia):", "Novo fluxo");
     if (!name?.trim()) return;
     try {
-      const created = await api(`/api/bots/${encodeURIComponent(botId)}/visual-flows`, { method: "POST", body: JSON.stringify({ name }) });
+      const created = await api(botUrl("/visual-flows"), { method: "POST", body: JSON.stringify({ name }) });
+      state.options = await api(botUrl("/visual-flow-options"));
       await loadFlowList();
       await openFlow(created.id);
     } catch (error) { toast(error.message, true); }
@@ -1017,7 +1324,7 @@
   window.addEventListener("beforeunload", (event) => {
     if (state.dirty) { event.preventDefault(); event.returnValue = ""; }
   });
-  window.addEventListener("resize", () => renderEdges());
+  window.addEventListener("resize", () => { renderEdges(); renderMinimap(); });
 
   $("#theme-toggle").addEventListener("click", () => {
     const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
@@ -1028,19 +1335,18 @@
   async function init() {
     if (!botId) { location.replace("/bots"); return; }
     try {
-      state.options = await api(`/api/bots/${encodeURIComponent(botId)}/visual-flow-options`);
+      state.options = await api(botUrl("/visual-flow-options"));
       renderLibrary();
       await loadFlowList();
       let flowId = params.get("flowId");
-      if (!flowId || !state.flows.some((flow) => flow.id === flowId)) {
-        flowId = state.flows[0]?.id;
-        if (!flowId) {
-          const created = await api(`/api/bots/${encodeURIComponent(botId)}/visual-flows`, { method: "POST", body: JSON.stringify({ name: "Fluxo principal" }) });
-          await loadFlowList();
-          flowId = created.id;
-        }
+      if (!flowId || !state.flows.some((flow) => flow.id === flowId)) flowId = state.flows.find((flow) => flow.isDefault)?.id || state.flows[0]?.id;
+      if (!flowId) {
+        const created = await api(botUrl("/visual-flows"), { method: "POST", body: JSON.stringify({ name: "Fluxo principal" }) });
+        await loadFlowList();
+        flowId = created.id;
       }
       await openFlow(flowId);
+      updateSelectionInfo();
     } catch (error) {
       toast(error.message, true);
       $("#fb-bot-name").textContent = "Não foi possível abrir o editor";

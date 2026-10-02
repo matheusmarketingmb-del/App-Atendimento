@@ -1,4 +1,5 @@
 // Flow Builder — motor de execução do grafo visual (BotFlowVersion.graph).
+// 100% determinístico: nenhum nó chama IA.
 //
 // Executa nó a nó a partir do estado salvo, nunca o fluxo inteiro de uma
 // vez: roda até encontrar um nó que ESPERA (Pergunta/Menu = cliente,
@@ -6,16 +7,25 @@
 // devolve o novo estado para ser persistido. Uma nova mensagem (ou o
 // worker do timer) chama runTurn de novo com o estado salvo.
 //
-// Todo efeito colateral (enviar texto, transferir, IA, conhecimento) passa
-// pelo `adapter` — o motor em si é puro. Dois adapters existem em
-// bot-visual-flow-service.js: o real (conversa de verdade) e o de simulação
-// (dry-run, nunca envia nada nem altera Conversation).
+// "Ir para fluxo" troca o grafo em execução no mesmo turno (o contexto/
+// variáveis seguem junto) — o estado devolvido carrega o fluxo atual em
+// `state.flow` para o serviço persistir.
+//
+// Todo efeito colateral (enviar texto/mídia/menu, transferir, finalizar,
+// carregar outro fluxo, chamar webhook) passa pelo `adapter` — o motor em si
+// é puro. Dois adapters existem em bot-visual-flow-service.js: o real
+// (conversa de verdade) e o de simulação (dry-run, nunca envia nada).
 
-const { normalizeText } = require("./bot-simulator-service");
-const { DELAY_UNITS, NODE_TYPES, isWritablePath, menuOptionHandle, normalizeGraph } = require("./bot-visual-flow-graph");
+const { normalizeText } = require("./bot-schedule-utils");
+const {
+  DELAY_UNITS, NODE_TYPES, PATH_ALIASES, isWritablePath, menuOptionHandle, normalizeGraph,
+} = require("./bot-visual-flow-graph");
 
 const MAX_STEPS_PER_TURN = 50;
+const MAX_FLOW_JUMPS_PER_TURN = 5;
+const MENU_REPLY_PREFIX = "flow_opt:";
 const DEFAULT_INVALID_MESSAGE = "Não consegui entender sua resposta. Pode tentar de novo?";
+const DEFAULT_YES_NO_INVALID_MESSAGE = "Responda com SIM ou NÃO, por favor.";
 const DEFAULT_MENU_INVALID_MESSAGE = "Não reconheci a opção. Responda com o número ou o nome de uma das opções:";
 
 const STATUS = Object.freeze({
@@ -23,12 +33,6 @@ const STATUS = Object.freeze({
   HANDED_OFF: "HANDED_OFF", COMPLETED: "COMPLETED", FAILED: "FAILED",
 });
 const FINISHED_STATUSES = new Set([STATUS.HANDED_OFF, STATUS.COMPLETED, STATUS.FAILED]);
-
-// Atalhos aceitos em Condições (item "intent == wholesale", "channel == WHATSAPP").
-const PATH_ALIASES = {
-  intent: "bot.intent", product: "bot.product", confidence: "bot.confidence",
-  needsHuman: "bot.needsHuman", action: "bot.action", channel: "conversation.channel",
-};
 
 // ---- contexto / variáveis --------------------------------------------------
 
@@ -67,7 +71,8 @@ function baseContext(seed = {}) {
   return {
     contact: { ...(seed.contact || {}) },
     conversation: { ...(seed.conversation || {}) },
-    bot: {}, flow: {}, customer: {}, vars: {}, knowledge: {},
+    bot: { ...(seed.bot || {}) },
+    flow: {}, customer: {}, vars: {}, custom: {},
     _engine: { attempts: {}, visited: [] },
   };
 }
@@ -122,8 +127,11 @@ function evaluateCondition(config, context) {
 
 // ---- respostas do cliente --------------------------------------------------
 
-// Arquitetura pronta para validações mais completas (dígito verificador de
-// CPF/CNPJ etc.) — por ora só formato.
+const YES_WORDS = new Set(["sim", "s", "yes", "y", "claro", "ok", "pode", "isso", "positivo", "certo", "resolveu", "funcionou", "1"]);
+const NO_WORDS = new Set(["nao", "n", "no", "negativo", "nunca", "nao resolveu", "nao funcionou", "2"]);
+
+// Validação por formato (dígito verificador de CPF/CNPJ pode entrar depois
+// sem mudar a interface).
 const ANSWER_VALIDATORS = {
   TEXT: (value) => (value.trim() ? value.trim() : null),
   NUMBER: (value) => {
@@ -139,18 +147,29 @@ const ANSWER_VALIDATORS = {
     const digits = value.replace(/\D/g, "");
     return digits.length >= 10 && digits.length <= 13 ? digits : null;
   },
+  YES_NO: (value) => {
+    const normalized = normalizeText(value).replace(/[!?.,;:]+/g, " ").replace(/\s+/g, " ").trim();
+    if (YES_WORDS.has(normalized) || YES_WORDS.has(normalized.split(" ")[0])) return true;
+    if (NO_WORDS.has(normalized) || NO_WORDS.has(normalized.split(" ")[0])) return false;
+    return null;
+  },
 };
 
 function validateAnswer(answerType, value) {
   return (ANSWER_VALIDATORS[answerType] || ANSWER_VALIDATORS.TEXT)(String(value || ""));
 }
 
-// Aceita "2", "opção 2", "suporte", "quero suporte" — nunca chama IA. Só
-// escolhe por conteúdo quando exatamente UMA opção bate (evita chute).
-function matchMenuOption(options, input) {
+// Aceita clique na lista do WhatsApp (replyId), "2", "opção 2", "suporte",
+// "quero suporte" ou um sinônimo cadastrado — nunca chama IA. Só escolhe por
+// conteúdo quando exatamente UMA opção bate (evita chute).
+function matchMenuOption(options, input, replyId = null) {
+  if (replyId && String(replyId).startsWith(MENU_REPLY_PREFIX)) {
+    const byReply = options.find((option) => option.id === String(replyId).slice(MENU_REPLY_PREFIX.length));
+    if (byReply) return byReply;
+  }
   const normalized = normalizeText(input).replace(/[!?.,;:]+/g, " ").replace(/\s+/g, " ").trim();
   if (!normalized) return null;
-  const numberMatch = normalized.match(/^(?:opcao|opção|op|numero|n)?\s*(\d{1,2})(?:\s|$)/);
+  const numberMatch = normalized.match(/^(?:opcao|op|numero|n)?\s*(\d{1,2})(?:\s|$)/);
   if (numberMatch) {
     const option = options[Number(numberMatch[1]) - 1];
     if (option) return option;
@@ -184,16 +203,13 @@ function sanitizeForLog(value, depth = 0) {
 }
 
 // ---- handlers por tipo ---------------------------------------------------------
-// execute(node, run) -> { branch } | { wait: "CUSTOMER" } | { wait: "TIMER", resumeAt } | { terminal: STATUS }
-// resume(node, run, input) (só nós que esperam o cliente) -> { branch } | { stay: true }
-
-function attemptsFor(context, nodeKey) {
-  return context._engine.attempts[nodeKey] || 0;
-}
+// execute(node, run) -> { branch } | { wait: "CUSTOMER" } | { wait: "TIMER", resumeAt }
+//                       | { terminal: STATUS } | { goto: flowId }
+// resume(node, run, input) (só nós que esperam o cliente) -> { branch } | { stay: true } | { terminal }
 
 async function retryOrFail(node, run, invalidText, repeatText) {
   const { context } = run;
-  const attempts = attemptsFor(context, node.key) + 1;
+  const attempts = (context._engine.attempts[node.key] || 0) + 1;
   context._engine.attempts[node.key] = attempts;
   if (attempts >= node.config.maxAttempts) {
     delete context._engine.attempts[node.key];
@@ -207,6 +223,18 @@ async function retryOrFail(node, run, invalidText, repeatText) {
   return { stay: true, output: { attempts } };
 }
 
+async function sendMenu(node, run) {
+  const textToSend = renderMenuText(node.config, run.context);
+  if (node.config.display === "LIST" && run.adapter.sendMenu) {
+    await run.adapter.sendMenu({
+      text: renderTemplate(node.config.text, run.context), fallbackText: textToSend, buttonLabel: node.config.buttonLabel,
+      options: node.config.options.map((option) => ({ replyId: `${MENU_REPLY_PREFIX}${option.id}`, label: option.label })),
+    });
+  } else {
+    await run.adapter.send(textToSend);
+  }
+}
+
 const HANDLERS = {
   async start(node, run) {
     const { config } = node;
@@ -216,9 +244,21 @@ const HANDLERS = {
   },
 
   async message(node, run) {
-    const textToSend = renderTemplate(node.config.text, run.context);
+    let template = node.config.text;
+    if (node.config.source === "LIBRARY") {
+      template = run.responses?.get(node.config.responseKey);
+      if (template === undefined) throw new Error(`Resposta da biblioteca "${node.config.responseKey}" não encontrada ou inativa.`);
+    }
+    const textToSend = renderTemplate(template, run.context);
     await run.adapter.send(textToSend);
-    return { branch: "next", output: { text: textToSend } };
+    return { branch: "next", output: { text: textToSend, ...(node.config.source === "LIBRARY" ? { responseKey: node.config.responseKey } : {}) } };
+  },
+
+  async media(node, run) {
+    const { config } = node;
+    const caption = renderTemplate(config.caption, run.context);
+    await run.adapter.sendMedia({ kind: config.kind, storageKey: config.storageKey, mimeType: config.mimeType, fileName: config.fileName, caption });
+    return { branch: "next", output: { kind: config.kind, fileName: config.fileName } };
   },
 
   async question(node, run) {
@@ -228,7 +268,8 @@ const HANDLERS = {
   async resumeQuestion(node, run, input) {
     const value = validateAnswer(node.config.answerType, input.text);
     if (value === null) {
-      return retryOrFail(node, run, node.config.invalidMessage || DEFAULT_INVALID_MESSAGE, renderTemplate(node.config.text, run.context));
+      const fallback = node.config.answerType === "YES_NO" ? DEFAULT_YES_NO_INVALID_MESSAGE : DEFAULT_INVALID_MESSAGE;
+      return retryOrFail(node, run, node.config.invalidMessage || fallback, renderTemplate(node.config.text, run.context));
     }
     delete run.context._engine.attempts[node.key];
     setPath(run.context, node.config.variable, value);
@@ -237,11 +278,11 @@ const HANDLERS = {
   },
 
   async menu(node, run) {
-    await run.adapter.send(renderMenuText(node.config, run.context));
+    await sendMenu(node, run);
     return { wait: "CUSTOMER" };
   },
   async resumeMenu(node, run, input) {
-    const option = matchMenuOption(node.config.options || [], input.text);
+    const option = matchMenuOption(node.config.options || [], input.text, input.replyId);
     if (!option) {
       return retryOrFail(node, run, node.config.invalidMessage || DEFAULT_MENU_INVALID_MESSAGE, renderMenuText(node.config, run.context));
     }
@@ -273,51 +314,36 @@ const HANDLERS = {
     return { branch: "next", output: assigned };
   },
 
-  async ai(node, run) {
-    const { config } = node;
-    const message = renderTemplate(config.input, run.context) || run.context.flow.lastMessage || "";
-    const result = await run.adapter.ai({ mode: config.mode, provider: config.provider, model: config.model, message });
+  async webhook(node, run) {
+    const fields = Object.fromEntries((node.config.fields || []).filter((field) => field.key)
+      .map((field) => [field.key, renderTemplate(field.value, run.context)]));
+    const result = await run.adapter.callWebhook({ endpointKey: node.config.endpointKey, fields });
+    setPath(run.context, node.config.resultVariable, { ok: Boolean(result?.ok), status: result?.status ?? null, data: result?.data ?? null });
     if (!result?.ok) {
-      run.context.bot.error = result?.errorCode || "AI_UNAVAILABLE";
-      const branch = run.hasEdge(node.key, "error") ? "error" : (run.hasEdge(node.key, "handoff") ? "handoff" : "next");
-      return { branch, output: { ok: false, errorCode: run.context.bot.error } };
+      if (run.hasEdge(node.key, "error")) return { branch: "error", output: { ok: false, errorCode: result?.errorCode || null } };
+      throw new Error(`Webhook "${node.config.endpointKey}" falhou (${result?.errorCode || "erro"}).`);
     }
-    const fields = ["answer", "action", "intent", "product", "confidence", "needsHuman", "reason"];
-    for (const field of fields) run.context.bot[field] = result[field] ?? null;
-    delete run.context.bot.error;
-    let sent = null;
-    if (config.mode === "RESPOND" && config.sendAnswer && result.answer) {
-      // Nunca envia direto: passa pelo mesmo gate/sender da IA atual
-      // (bot-ai-gate + send-mode). Hoje o sender é DRY_RUN.
-      sent = await run.adapter.sendAiAnswer(result);
-    }
-    const branch = result.needsHuman && run.hasEdge(node.key, "handoff") ? "handoff" : "next";
-    return { branch, output: { ...Object.fromEntries(fields.map((field) => [field, result[field] ?? null])), sent } };
-  },
-
-  async knowledge(node, run) {
-    const query = renderTemplate(node.config.query, run.context) || run.context.flow.lastMessage || "";
-    const product = renderTemplate(node.config.product, run.context) || run.context.bot.product || null;
-    const found = await run.adapter.searchKnowledge({ query, product, limit: node.config.limit });
-    const results = found?.results || [];
-    run.context.knowledge = {
-      result: results.map((item) => item.excerpt || item.title).join("\n\n").slice(0, 4000),
-      sources: results.map((item) => item.title),
-      confidence: results.length ? Math.round((results[0].score || 0) * 100) / 100 : 0,
-    };
-    const branch = results.length || !run.hasEdge(node.key, "not_found") ? "found" : "not_found";
-    return { branch, output: { query, sources: run.context.knowledge.sources, confidence: run.context.knowledge.confidence } };
+    return { branch: "next", output: { ok: true, status: result.status, simulated: Boolean(result.simulated) } };
   },
 
   async transfer_category(node, run) {
     const message = renderTemplate(node.config.message, run.context);
-    const outcome = await run.adapter.transferToCategory({ categoryId: node.config.categoryId, message, reason: node.config.reason || `Fluxo "${run.flowName}"` });
+    const outcome = await run.adapter.transferToCategory({ categoryId: node.config.categoryId, message, reason: renderTemplate(node.config.reason, run.context) || `Fluxo "${run.flow.name}"` });
+    return { terminal: STATUS.HANDED_OFF, output: outcome };
+  },
+
+  async transfer_user(node, run) {
+    const message = renderTemplate(node.config.message, run.context);
+    const outcome = await run.adapter.transferToUser({
+      userId: node.config.userId, categoryId: node.config.categoryId || run.context.flow.initialCategoryId || null,
+      message, reason: renderTemplate(node.config.reason, run.context) || `Fluxo "${run.flow.name}"`,
+    });
     return { terminal: STATUS.HANDED_OFF, output: outcome };
   },
 
   async human_handoff(node, run) {
     const message = renderTemplate(node.config.message, run.context);
-    const reason = renderTemplate(node.config.reason, run.context) || run.context.bot.reason || "Solicitado pelo fluxo";
+    const reason = renderTemplate(node.config.reason, run.context) || "Solicitado pelo fluxo";
     const outcome = await run.adapter.handoff({ reason, message, categoryId: node.config.categoryId || run.context.flow.initialCategoryId || null });
     return { terminal: STATUS.HANDED_OFF, output: { reason, ...outcome } };
   },
@@ -326,6 +352,10 @@ const HANDLERS = {
     if (node.config.message?.trim()) await run.adapter.send(renderTemplate(node.config.message, run.context));
     await run.adapter.finish({ finalizeConversation: node.config.finalizeConversation });
     return { terminal: STATUS.COMPLETED, output: { finalizeConversation: node.config.finalizeConversation } };
+  },
+
+  async goto_flow(node) {
+    return { goto: node.config.flowId };
   },
 };
 
@@ -345,31 +375,41 @@ function cloneState(state) {
   return state ? JSON.parse(JSON.stringify(state)) : null;
 }
 
-// input: { type: "START", text? } | { type: "MESSAGE", text } | { type: "TIMER" }
-// state: null (início) ou { currentNodeKey, status, context, resumeAt }
-async function runTurn({ graph, state, input, adapter, seed = {}, flowName = "", now = new Date(), maxSteps = MAX_STEPS_PER_TURN }) {
-  const indexed = indexGraph(graph);
+// input: { type: "START", text? } | { type: "MESSAGE", text, replyId? } | { type: "TIMER" }
+// state: null (início) ou { currentNodeKey, status, context, resumeAt, flow }
+// flow: { flowId, versionId, version, name } do grafo recebido (o estado
+// devolvido traz o fluxo em que a execução terminou o turno).
+// responses: Map key -> texto da biblioteca "Respostas do Bot".
+async function runTurn({
+  graph, flow = {}, state, input, adapter, seed = {}, flowName = "", responses = new Map(),
+  now = new Date(), maxSteps = MAX_STEPS_PER_TURN,
+}) {
+  let indexed = indexGraph(graph);
   const trace = [];
   const next = cloneState(state) || { currentNodeKey: null, status: STATUS.RUNNING, context: baseContext(seed), resumeAt: null };
+  next.flow = { ...(next.flow || {}), ...flow, name: flow.name || flowName || next.flow?.name || "" };
   next.context._engine ||= { attempts: {}, visited: [] };
   next.context._engine.attempts ||= {};
   next.context._engine.visited ||= [];
+  next.context.custom ||= {};
   const run = {
-    adapter, now, flowName, context: next.context,
+    adapter, now, responses, flow: next.flow, context: next.context,
     hasEdge: (nodeKey, handle) => indexed.edges.has(`${nodeKey}::${handle}`),
   };
   if (input?.text !== undefined && input.type !== "TIMER") run.context.flow.lastMessage = String(input.text || "");
 
+  const visitedKey = (nodeKey) => (next.flow.flowId ? `${next.flow.flowId}:${nodeKey}` : nodeKey);
   const record = (node, result, startedAt, extra = {}) => {
     const entry = {
       nodeKey: node.key, nodeType: node.type, nodeName: node.name,
+      flowId: next.flow.flowId || null, flowName: next.flow.name || null, version: next.flow.version ?? null,
       result, branch: extra.branch || null,
       input: sanitizeForLog(extra.input ?? null), output: sanitizeForLog(extra.output ?? null),
       error: extra.error || null, durationMs: Date.now() - startedAt,
       nextNodeKey: extra.nextNodeKey || null, timestamp: new Date().toISOString(),
     };
     trace.push(entry);
-    if (!run.context._engine.visited.includes(node.key)) run.context._engine.visited.push(node.key);
+    if (!run.context._engine.visited.includes(visitedKey(node.key))) run.context._engine.visited.push(visitedKey(node.key));
     return entry;
   };
 
@@ -430,6 +470,7 @@ async function runTurn({ graph, state, input, adapter, seed = {}, flowName = "",
   }
 
   next.status = STATUS.RUNNING;
+  let jumps = 0;
   for (let steps = 0; steps < maxSteps; steps += 1) {
     if (pendingBranch !== null) {
       const targetKey = indexed.edges.get(`${current.key}::${pendingBranch}`);
@@ -446,8 +487,8 @@ async function runTurn({ graph, state, input, adapter, seed = {}, flowName = "",
     next.currentNodeKey = current.key;
     const startedAt = Date.now();
     const handler = HANDLERS[current.type];
-    if (!handler || !NODE_TYPES[current.type].available) {
-      return fail(current, new Error(`Tipo de nó "${current.type}" ainda não é executável.`), startedAt);
+    if (!handler || !NODE_TYPES[current.type] || current.type === "removed") {
+      return fail(current, new Error(`O nó "${current.name}" não é executável nesta versão (remova-o do fluxo).`), startedAt);
     }
     let result;
     try {
@@ -459,6 +500,22 @@ async function runTurn({ graph, state, input, adapter, seed = {}, flowName = "",
         continue;
       }
       return fail(current, error, startedAt);
+    }
+    if (result.goto) {
+      jumps += 1;
+      if (jumps > MAX_FLOW_JUMPS_PER_TURN) return fail(current, new Error(`Mais de ${MAX_FLOW_JUMPS_PER_TURN} trocas de fluxo na mesma mensagem (possível loop entre fluxos).`), startedAt);
+      let target;
+      try { target = await adapter.loadFlow(result.goto); }
+      catch (error) { return fail(current, error, startedAt); }
+      if (!target?.graph) return fail(current, new Error("O fluxo de destino não existe ou não tem versão publicada."), startedAt);
+      const targetIndex = indexGraph(target.graph);
+      if (!targetIndex.start) return fail(current, new Error(`O fluxo "${target.name}" não tem nó Início.`), startedAt);
+      record(current, "OK", startedAt, { output: { toFlowId: target.flowId, toFlowName: target.name }, nextNodeKey: targetIndex.start.key });
+      indexed = targetIndex;
+      next.flow = { flowId: target.flowId, versionId: target.versionId || null, version: target.version ?? null, name: target.name || "" };
+      run.flow = next.flow;
+      current = targetIndex.start;
+      continue;
     }
     if (result.wait === "CUSTOMER") {
       record(current, "WAITING", startedAt, { output: result.output });
@@ -483,6 +540,6 @@ async function runTurn({ graph, state, input, adapter, seed = {}, flowName = "",
 }
 
 module.exports = {
-  FINISHED_STATUSES, MAX_STEPS_PER_TURN, STATUS,
+  FINISHED_STATUSES, MAX_FLOW_JUMPS_PER_TURN, MAX_STEPS_PER_TURN, MENU_REPLY_PREFIX, STATUS,
   baseContext, evaluateCondition, getPath, matchMenuOption, renderTemplate, runTurn, sanitizeForLog, setPath, validateAnswer,
 };

@@ -3,7 +3,7 @@ const MARKETPLACE_UI_ENABLED = window.MIBRO_FEATURES?.marketplaces !== false;
 const isMarketplaceChannel = (channel) => window.isMarketplaceFeatureChannel?.(channel) === true;
 const visibleChannelEntries = () => Object.entries(CHANNEL_LABELS).filter(([channel]) => MARKETPLACE_UI_ENABLED || !isMarketplaceChannel(channel));
 const escapeHtml = (value = "") => String(value).replace(/[&<>'"]/g, (char) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", "'":"&#39;", '"':"&quot;" })[char]);
-const state = { quickReplies: [], categories: [], intents: [], selected: null };
+const state = { quickReplies: [], categories: [], selected: null };
 
 const CHANNEL_LABELS = {
   META: "WhatsApp (Meta)", INSTAGRAM_DIRECT: "Instagram Direct", INSTAGRAM_COMMENTS: "Instagram Comentários",
@@ -77,16 +77,6 @@ function renderChannelsChecklist(selected = []) {
   `).join("");
 }
 
-function renderIntentsChecklist(selected = []) {
-  if (!state.intents.length) {
-    $("#qr-intents-checklist").innerHTML = '<p class="card-help">Nenhuma intenção de Bot cadastrada ainda.</p>';
-    return;
-  }
-  $("#qr-intents-checklist").innerHTML = state.intents.map((intent) => `
-    <label class="checkbox"><input type="checkbox" value="${escapeHtml(intent.id)}" ${selected.includes(intent.id) ? "checked" : ""}><span>${escapeHtml(intent.botName)} — ${escapeHtml(intent.name)}</span></label>
-  `).join("");
-}
-
 function fillForm(item = null) {
   $("#qr-name").value = item?.name || "";
   $("#qr-shortcut").value = item?.shortcut || "";
@@ -94,9 +84,7 @@ function fillForm(item = null) {
   $("#qr-type").value = item?.type || "QUICK_REPLY";
   $("#qr-text").value = item?.text || "";
   $("#qr-available-agents").checked = item ? item.availableToAgents : true;
-  $("#qr-available-bots").checked = item ? item.availableToBots : false;
   renderChannelsChecklist(item?.channels || []);
-  renderIntentsChecklist(item?.intentIds || []);
   renderPreview();
   $("#qr-usage-count").textContent = item?.usageCount ?? 0;
   $("#qr-favorite-count").textContent = item?.favoriteCount ?? 0;
@@ -154,8 +142,6 @@ function formPayload() {
     text: $("#qr-text").value,
     channels: Array.from(document.querySelectorAll("#qr-channels-checklist input:checked")).map((input) => input.value),
     availableToAgents: $("#qr-available-agents").checked,
-    availableToBots: $("#qr-available-bots").checked,
-    intentIds: Array.from(document.querySelectorAll("#qr-intents-checklist input:checked")).map((input) => input.value),
   };
 }
 
@@ -221,7 +207,6 @@ $("#logout").addEventListener("click", async () => {
     if (!status.authenticated || !status.user.isMaster) return location.replace("/");
     $("#current-user").textContent = status.user.name;
     state.categories = (await api("/api/categories")).filter((category) => category.active !== false);
-    state.intents = await api("/api/bots/intents");
     renderFilterOptions();
     $("#qr-category").innerHTML = categoryOptions();
     await loadList();

@@ -43,10 +43,10 @@
       <input id="fb-library-search" type="search" placeholder="Buscar elemento" aria-label="Buscar elemento">
       <div id="fb-library-list"></div>
       <div class="fb-mode-card">
-        <b>Motor do Bot</b>
-        <p id="fb-mode-text">Este Bot usa o motor atual.</p>
-        <button id="fb-mode-toggle" class="fb-ghost" type="button">Usar Editor Visual</button>
-        <small>Mesmo em uso, o fluxo só responde clientes com o Bot ativo e a auto-resposta ligada. Respostas geradas por IA continuam em modo dry-run.</small>
+        <b>Como o Bot responde</b>
+        <p id="fb-mode-text">Carregando...</p>
+        <a id="fb-bot-settings" class="fb-ghost" href="/bots">Configurar Bot</a>
+        <small>Sem IA: o fluxo é 100% previsível. Só responde clientes com o Bot ativo, o fluxo padrão publicado e a resposta automática ligada.</small>
       </div>
     </aside>
 
@@ -55,6 +55,16 @@
         <svg id="fb-edges" class="fb-edges" aria-hidden="true"></svg>
         <div id="fb-nodes"></div>
       </div>
+      <div class="fb-toolbar" role="toolbar" aria-label="Ferramentas do canvas">
+        <button id="fb-copy" type="button" title="Copiar seleção (Ctrl+C)">⧉ Copiar</button>
+        <button id="fb-paste" type="button" title="Colar (Ctrl+V)">📋 Colar</button>
+        <button id="fb-align-left" type="button" title="Alinhar à esquerda (2+ nós)">⇤</button>
+        <button id="fb-align-top" type="button" title="Alinhar no topo (2+ nós)">⤒</button>
+        <button id="fb-distribute" type="button" title="Distribuir verticalmente (3+ nós)">☰</button>
+        <button id="fb-auto-layout" type="button" title="Organizar automaticamente a partir do Início">⚙ Auto organizar</button>
+        <span id="fb-selection-info" class="fb-selection-info"></span>
+      </div>
+      <svg id="fb-minimap" class="fb-minimap" aria-label="Minimapa — clique para navegar"></svg>
       <div class="fb-zoom">
         <button id="fb-zoom-in" type="button" title="Aproximar">+</button>
         <span id="fb-zoom-label">100%</span>
@@ -79,7 +89,8 @@
           <label>Testar a partir do
             <select id="fb-test-source"><option value="DRAFT">rascunho atual</option><option value="ACTIVE">versão publicada</option></select>
           </label>
-          <p class="fb-note">Simulação: nenhuma mensagem é enviada e nenhuma conversa é alterada.</p>
+          <label class="fb-check"><input id="fb-test-webhooks" type="checkbox"> Chamar webhooks de verdade neste teste</label>
+          <p class="fb-note">Simulação: nenhuma mensagem é enviada e nenhuma conversa é alterada. Sem IA — o resultado é sempre o mesmo para a mesma resposta.</p>
         </div>
         <div id="fb-test-transcript" class="fb-transcript"></div>
         <form id="fb-test-form" class="fb-test-form">

@@ -7,10 +7,6 @@ const { rateLimit } = require("express-rate-limit");
 const prisma = require("./database/prisma");
 const MetaCloudChannel = require("./channels/meta-cloud-channel");
 const { saveIncoming, updateStatus, sendTextToPhone } = require("./services/message-service");
-const { handleIncomingTriage } = require("./services/triage-bot-service");
-const { observeIncomingMessage } = require("./services/bot-observation-service");
-const { shadowIncomingMessage } = require("./services/bot-ai-shadow-service");
-const localAiController = require("./controllers/local-ai-controller");
 const { createInboxController } = require("./controllers/inbox-controller");
 const authController = require("./controllers/auth-controller");
 const {
@@ -97,6 +93,12 @@ const documentUpload = multer({
     return callback(null, true);
   },
 }).single("document");
+// Mídia dos nós do Flow Builder (imagem/áudio/vídeo/documento): o tipo real
+// é validado por conteúdo em media-storage-service.js conforme o `kind`.
+const botFlowMediaUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 100 * 1024 * 1024, files: 1 },
+}).single("file");
 const internalFileUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 100 * 1024 * 1024, files: 1 },
@@ -193,23 +195,15 @@ function createApp({ channel = new MetaCloudChannel() } = {}) {
                 if (flood.throttled) {
                   console.warn(`[SECURITY] limite de mensagens por contato excedido (${flood.count} na janela) — processamento automático pulado para este turno. key=${floodKey}`);
                 } else {
-                  // Flow Builder (Editor Visual): só age para Bot em modo
-                  // FLOW_BUILDER + ativo + auto-resposta ligada. Qualquer
-                  // outro caso (todos os Bots atuais) devolve false e a
-                  // triagem legada segue exatamente como antes. Falha no
-                  // Flow Builder nunca impede a triagem.
-                  let handledByVisualFlow = false;
+                  // Bots = Flow Builder (único motor, sem IA): só age para
+                  // Bot ativo + auto-resposta ligada + automação global
+                  // ligada. Sem fluxo aplicável, a mensagem (já salva) segue
+                  // para a equipe. Falha no fluxo nunca derruba o webhook.
                   try {
-                    handledByVisualFlow = await handleIncomingVisualFlow(event, result.message, channel);
+                    await handleIncomingVisualFlow(event, result.message, channel);
                   } catch (flowError) {
-                    console.error("[BOT_FLOW] falha no Flow Builder (triagem legada segue):", flowError.message);
+                    console.error("[BOT_FLOW] falha no Flow Builder (mensagem segue para a equipe):", flowError.message);
                   }
-                  if (!handledByVisualFlow) await handleIncomingTriage(event, result.message, channel);
-                  observeIncomingMessage(event, result.message).catch(() => {});
-                  // Modo shadow (IA local): nunca envia nada ao cliente, só
-                  // registra o que teria respondido — nunca pode afetar o
-                  // webhook (mesmo padrão .catch(() => {}) do observador).
-                  shadowIncomingMessage(event, result.message).catch(() => {});
                   pushService.notifyIncomingMessage(result.message).catch(() => {});
                   // Campanhas (itens 9/13): nunca bloqueia o atendimento normal —
                   // só reage em paralelo (opt-out por palavra-chave, resposta
@@ -281,12 +275,9 @@ function createApp({ channel = new MetaCloudChannel() } = {}) {
         try {
           const persisted = await omnichannelMessageService.persistInboundMessage(normalized);
           await externalEventService.markProcessed(event.id);
-          // Paridade com o WhatsApp (item 26/33 do plano Social): observação
-          // do Bot (só sugestão, nunca envia nada sozinho) e push notification
-          // para o atendente responsável. Nunca pode derrubar o webhook —
-          // mesmo padrão de .catch silencioso usado no handler do WhatsApp.
+          // Push notification para o atendente responsável. Nunca pode
+          // derrubar o webhook — mesmo padrão de .catch silencioso do WhatsApp.
           if (!persisted.duplicate && normalized.direction === "RECEBIDA") {
-            observeIncomingMessage(normalized, persisted.message, { channel: normalized.channel }).catch(() => {});
             pushService.notifyIncomingMessage(persisted.message).catch(() => {});
           }
           inboxEvents.publish();
@@ -355,9 +346,6 @@ function createApp({ channel = new MetaCloudChannel() } = {}) {
   ));
   app.get(["/flow-builder", "/flow-builder.html"], requireMasterPage, (_req, res) => (
     res.sendFile(path.join(process.cwd(), "public", "flow-builder.html"))
-  ));
-  app.get(["/knowledge-base", "/knowledge-base.html"], requireMasterPage, (_req, res) => (
-    res.sendFile(path.join(process.cwd(), "public", "knowledge-base.html"))
   ));
   app.get(["/campaigns", "/campaigns.html"], requireCampaignsPage, (_req, res) => (
     res.sendFile(path.join(process.cwd(), "public", "campaigns.html"))
@@ -479,7 +467,6 @@ app.post(
   app.post("/api/conversations/:id/documents", documentUpload, inbox.replyDocument);
   app.post("/api/conversations/:id/audios", audioUpload, inbox.replyAudio);
   app.post("/api/conversations/:id/finalize", inbox.finalize);
-  app.post("/api/conversations/:id/bot-feedback", inbox.botFeedback);
   app.get("/api/messages/:messageId/media", inbox.media);
   app.post("/api/messages/:messageId/moderate", inbox.moderateComment);
   app.get("/api/categories", inbox.categories);
@@ -502,97 +489,45 @@ app.post(
   app.post("/api/admin/users", userManagementController.create);
   app.patch("/api/admin/users/:id", userManagementController.update);
   app.get("/api/team/users", userManagementController.activity);
+  // Bots = Flow Builder (único modelo). Permissão (só Master) validada nos
+  // serviços. Rotas do modelo antigo (intenções, IA, Knowledge, observação,
+  // aprendizado, avaliações, personalidade, versões de Bot) removidas —
+  // ver _archive/bot-legacy/BOT_LEGACY_ARCHIVE.md.
   app.get("/api/bots", botController.list);
-  app.get("/api/bots/intents", botController.allIntents);
   app.post("/api/bots", botController.create);
+  app.get("/api/bots-legacy", botController.legacyBots);
   app.get("/api/bots/:botId", botController.detail);
   app.patch("/api/bots/:botId", botController.update);
   app.patch("/api/bots/:botId/status", botController.status);
+  app.patch("/api/bots/:botId/auto-reply", botController.autoReply);
   app.delete("/api/bots/:botId", botController.archive);
   app.put("/api/bots/:botId/schedules", botController.schedules);
   app.put("/api/bots/:botId/holidays", botController.holidays);
-  app.put("/api/bots/:botId/triage-options", botController.triageOptions);
-  app.get("/api/local-ai/status", localAiController.getStatus);
-  app.get("/api/local-ai/settings", localAiController.getSettings);
-  app.put("/api/local-ai/settings", localAiController.updateSettings);
-  app.post("/api/local-ai/check", localAiController.checkNow);
-  app.post("/api/bots/:botId/intents", botController.createIntent);
-  app.patch("/api/bots/:botId/intents/:intentId", botController.updateIntent);
-  app.delete("/api/bots/:botId/intents/:intentId", botController.deleteIntent);
-  app.get("/api/bots/:botId/intents/:intentId/flow-steps", botController.listFlowSteps);
-  app.post("/api/bots/:botId/intents/:intentId/flow-steps", botController.createFlowStep);
-  app.patch("/api/bots/:botId/intents/:intentId/flow-steps/:stepId", botController.updateFlowStep);
-  app.delete("/api/bots/:botId/intents/:intentId/flow-steps/:stepId", botController.deleteFlowStep);
-  app.put("/api/bots/:botId/intents/:intentId/flow-steps/reorder", botController.reorderFlowSteps);
-  app.post("/api/bots/:botId/simulate", botController.simulate);
-  app.get("/api/bot-observations", botController.observations);
-  app.get("/api/bot-observations/metrics", botController.observationMetrics);
-  app.post("/api/bot-observations/:observationId/feedback", botController.observationFeedback);
-  app.get("/api/bot-learning/suggestions", botController.learningSuggestions);
-  app.get("/api/bot-learning/metrics", botController.learningMetrics);
-  app.post("/api/bot-learning/suggestions/:suggestionId/approve", botController.approveLearningSuggestion);
-  app.post("/api/bot-learning/suggestions/:suggestionId/reject", botController.rejectLearningSuggestion);
-  app.patch("/api/bot-learning/suggestions/:suggestionId", botController.editLearningSuggestion);
-  app.post("/api/bot-learning/conversations/:conversationId/analyze", botController.analyzeConversationForLearning);
-  app.get("/api/bots/:botId/intent-conflicts", botController.intentConflicts);
-  app.get("/api/bots/:botId/intent-metrics", botController.intentMetrics);
 
   app.get("/api/bot-settings", botController.globalSettings);
-  app.patch("/api/bot-settings", botController.updateGlobalSettings);
   app.post("/api/bot-settings/kill-switch/activate", botController.activateKillSwitch);
   app.post("/api/bot-settings/kill-switch/deactivate", botController.deactivateKillSwitch);
 
-  app.get("/api/bots/:botId/versions", botController.listVersions);
-  app.post("/api/bots/:botId/versions", botController.createVersion);
-  app.get("/api/bots/:botId/versions/:version/preview-restore", botController.previewRestoreVersion);
-  app.post("/api/bots/:botId/versions/:version/restore", botController.restoreVersion);
-
-  app.post("/api/bot-ratings", botController.submitRating);
-  app.get("/api/bot-ratings", botController.listRatings);
-  app.get("/api/bots/:botId/rating-metrics", botController.ratingMetrics);
-  app.get("/api/bots/:botId/rating-timeseries", botController.ratingTimeSeries);
-  app.get("/api/bots/:botId/observation-timeseries", botController.observationTimeSeries);
-  app.patch("/api/bots/:botId/rating-config", botController.updateRatingConfig);
-  app.get("/api/bot-ranking", botController.ranking);
-
-  app.get("/api/knowledge-sources", botController.listKnowledgeSources);
-  app.post("/api/knowledge-sources", botController.createKnowledgeSource);
-  app.patch("/api/knowledge-sources/:sourceId", botController.updateKnowledgeSource);
-  app.delete("/api/knowledge-sources/:sourceId", botController.deleteKnowledgeSource);
-
-  // Biblioteca Global de Intenções (item 1).
-  app.get("/api/global-intents", botController.listGlobalIntents);
-  app.post("/api/global-intents", botController.createGlobalIntent);
-  app.patch("/api/global-intents/:globalIntentId", botController.updateGlobalIntent);
-  app.post("/api/bots/:botId/global-intents/:globalIntentId", botController.associateGlobalIntent);
-  app.delete("/api/bots/:botId/intent-associations/:botIntentId", botController.disassociateGlobalIntent);
-
-  // Handoff humano (item 2).
-  app.get("/api/conversations/:conversationId/bot-handoff", botController.listHandoffContexts);
+  // "Cancelar Bot"/"Retomar Bot" na Central de Atendimento.
   app.post("/api/conversations/:conversationId/bot-handoff/pause", botController.pauseBot);
   app.post("/api/conversations/:conversationId/bot-handoff/resume", botController.resumeBot);
 
-  // Sugestão de resposta para o atendente + feedback (itens 7/8).
-  app.get("/api/conversations/:conversationId/bot-suggestion", botController.latestSuggestion);
-  app.post("/api/bot-suggestion-feedback", botController.suggestionFeedback);
+  // Biblioteca "Respostas do Bot" e endpoints do nó Webhook/API.
+  app.get("/api/bot-responses", botController.listResponses);
+  app.post("/api/bot-responses", botController.createResponse);
+  app.patch("/api/bot-responses/:responseId", botController.updateResponse);
+  app.delete("/api/bot-responses/:responseId", botController.deleteResponse);
+  app.get("/api/bot-webhooks", botController.listWebhooks);
+  app.post("/api/bot-webhooks", botController.createWebhook);
+  app.patch("/api/bot-webhooks/:endpointId", botController.updateWebhook);
+  app.delete("/api/bot-webhooks/:endpointId", botController.deleteWebhook);
 
-  // Métricas/alertas de qualidade (itens 11/12).
-  app.get("/api/bots/:botId/quality-metrics", botController.qualityMetrics);
-  app.get("/api/bots/:botId/quality-alerts", botController.qualityAlerts);
-
-  // Personalidade configurável por Bot ("Bot -> Personalidade"). Preview/
-  // teste reaproveita POST /api/bots/:botId/simulate (já registrado acima).
-  app.get("/api/bot-personality-presets", botController.listPersonalityPresets);
-  app.get("/api/bots/:botId/personality", botController.getPersonality);
-  app.put("/api/bots/:botId/personality", botController.updatePersonality);
-  app.post("/api/bots/:botId/personality/preset", botController.applyPersonalityPreset);
-  app.post("/api/bots/:botId/personality/copy", botController.copyPersonality);
-
-  // Flow Builder (Editor Visual). Permissão (só Master) validada no serviço.
+  // Flow Builder (Editor Visual).
   app.get("/api/bots/:botId/visual-flows", visualFlowController.list);
   app.post("/api/bots/:botId/visual-flows", visualFlowController.create);
   app.get("/api/bots/:botId/visual-flow-options", visualFlowController.options);
-  app.patch("/api/bots/:botId/execution-mode", visualFlowController.executionMode);
+  app.post("/api/bots/:botId/flow-media", botFlowMediaUpload, visualFlowController.uploadMedia);
+  app.get("/api/bots/:botId/flow-media/:storageKey", visualFlowController.media);
   app.get("/api/bots/:botId/visual-flows/:flowId", visualFlowController.detail);
   app.put("/api/bots/:botId/visual-flows/:flowId/draft", visualFlowController.saveDraft);
   app.post("/api/bots/:botId/visual-flows/:flowId/validate", visualFlowController.validate);
@@ -606,21 +541,6 @@ app.post(
   app.post("/api/bots/:botId/visual-flows/:flowId/simulate", visualFlowController.simulate);
   app.get("/api/bots/:botId/visual-flows/:flowId/executions", visualFlowController.executions);
   app.get("/api/bots/:botId/visual-flows/:flowId/executions/:executionId/logs", visualFlowController.executionLogs);
-
-  // Tools (itens 5-7): listagem só de leitura.
-  app.get("/api/bot-tools", botController.listTools);
-
-  // Motor de IA / Fallback externo (itens 12-15).
-  app.get("/api/bot-ai-providers", botController.listAiProviders);
-  app.get("/api/bot-ai-provider-status", botController.aiProviderStatus);
-  app.post("/api/bot-ai-provider-status/test", botController.testAiProvider);
-  app.get("/api/bot-ai-usage", botController.aiUsageSummary);
-
-  // Cofre de credenciais de IA (GEMINI/ANTHROPIC/OPENAI) — RBAC Admin-only
-  // dentro dos próprios services (ver ai-credential-service.js).
-  app.get("/api/bot-ai-credentials", botController.listAiCredentials);
-  app.put("/api/bot-ai-credentials/:provider", botController.saveAiCredential);
-  app.delete("/api/bot-ai-credentials/:provider", botController.removeAiCredential);
 
   // Campanhas / envio em massa (WhatsApp).
   app.get("/api/campaign-templates", campaignController.listTemplates);

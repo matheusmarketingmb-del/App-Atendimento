@@ -5,7 +5,7 @@ const prisma = require("../src/database/prisma");
 const { finalizeInactiveConversations } = require("../src/services/conversation-inactivity-service");
 const { saveIncoming } = require("../src/services/message-service");
 
-const testContacts = ["inactive-outgoing-test", "inactive-incoming-test", "inactive-routing-test"];
+const testContacts = ["inactive-outgoing-test", "inactive-incoming-test", "inactive-routing-test", "inactive-flow-handoff-test"];
 
 const lastAgentEmail = "inactive-last-agent@mibro.test";
 
@@ -28,6 +28,9 @@ test("finaliza após 24 horas somente quando a equipe aguarda o cliente", async 
   const routingContact = await prisma.contact.create({
     data: { externalId: testContacts[2], phone: "5511977770003", name: "Cliente recém-encaminhado" },
   });
+  const flowContact = await prisma.contact.create({
+    data: { externalId: testContacts[3], phone: "5511977770004", name: "Cliente transferido pelo fluxo" },
+  });
   await prisma.user.deleteMany({ where: { email: lastAgentEmail } });
   const lastAgent = await prisma.user.create({ data: { name: "Último atendente", email: lastAgentEmail, role: "ATENDENTE" } });
   const outgoingConversation = await prisma.conversation.create({
@@ -39,7 +42,11 @@ test("finaliza após 24 horas somente quando a equipe aguarda o cliente", async 
   const routingConversation = await prisma.conversation.create({
     data: { contactId: routingContact.id, categoryId: support.id, status: "NOVO", lastMessageAt: old },
   });
+  const flowConversation = await prisma.conversation.create({
+    data: { contactId: flowContact.id, categoryId: support.id, status: "NOVO", lastMessageAt: old },
+  });
   await prisma.message.createMany({ data: [
+    { conversationId: flowConversation.id, direction: "ENVIADA", status: "ENVIADA", type: "text", text: "Vou te passar para o Suporte", occurredAt: old, rawPayload: { system: "visual_flow", flowHandoff: true } },
     { conversationId: outgoingConversation.id, direction: "ENVIADA", status: "ENVIADA", type: "text", text: "Pode confirmar?", occurredAt: old },
     { conversationId: incomingConversation.id, direction: "RECEBIDA", status: "RECEBIDA", type: "text", text: "Preciso de ajuda", occurredAt: old },
     { conversationId: routingConversation.id, direction: "ENVIADA", status: "ENVIADA", type: "text", text: "Encaminhamos seu atendimento", occurredAt: old, rawPayload: { system: "triage_confirmation" } },
@@ -54,18 +61,13 @@ test("finaliza após 24 horas somente quando a equipe aguarda o cliente", async 
   assert.ok(finalized.finalizedAt);
   assert.equal((await prisma.conversation.findUnique({ where: { id: incomingConversation.id } })).status, "AGUARDANDO_EQUIPE");
   assert.equal((await prisma.conversation.findUnique({ where: { id: routingConversation.id } })).status, "NOVO");
+  assert.equal((await prisma.conversation.findUnique({ where: { id: flowConversation.id } })).status, "NOVO");
   assert.equal(await prisma.conversationActivity.count({
     where: { conversationId: outgoingConversation.id, action: "AUTO_FINALIZED_INACTIVITY" },
   }), 1);
 
-  // O disparo do aprendizado é fire-and-forget: aguarda a análise assíncrona
-  // terminar (ou o teste falha por timeout do runner, nunca trava para sempre).
-  let learningState = null;
-  for (let attempt = 0; attempt < 20 && !learningState; attempt += 1) {
-    learningState = await prisma.conversationLearningState.findUnique({ where: { conversationId: outgoingConversation.id } });
-    if (!learningState) await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-  assert.ok(learningState, "a finalização automática por inatividade deveria disparar a análise de aprendizado");
+  // Sem IA/aprendizado: finalizar por inatividade nunca dispara análise.
+  assert.equal(await prisma.conversationLearningState.count({ where: { conversationId: outgoingConversation.id } }), 0);
 });
 
 test("nova mensagem em conversa finalizada remove setor para reiniciar a triagem", async () => {

@@ -31,7 +31,6 @@
     const all = [
       { id: "nav-bots", label: "Abrir Bots", icon: "🤖", enabled: user.isMaster, run: () => { location.href = "/bots"; } },
       { id: "nav-quick-replies", label: "Abrir Respostas rápidas", icon: "⚡", enabled: user.isMaster, run: () => { location.href = "/quick-replies"; } },
-      { id: "nav-knowledge", label: "Abrir Base de conhecimento", icon: "📚", enabled: user.isMaster, run: () => { location.href = "/knowledge-base"; } },
       { id: "nav-integrations", label: "Abrir Integrações", icon: "🔌", enabled: user.isMaster, run: () => { location.href = "/integrations"; } },
       { id: "nav-campaigns", label: "Abrir Campanhas", icon: "📣", enabled: user.canManageCampaigns, run: () => { location.href = "/campaigns"; } },
       { id: "nav-settings", label: "Abrir Configurações", icon: "⚙", enabled: user.isMaster || user.role === "SUPERVISOR", run: () => { location.href = "/configuracoes"; } },

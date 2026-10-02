@@ -9,7 +9,7 @@ const { startSlaMonitor } = require("./src/services/conversation-sla-service");
 const { startCampaignWorker } = require("./src/services/campaign-worker-service");
 const { startGmailSyncWorker } = require("./src/services/channels/gmail-sync-service");
 const { startVisualFlowWorker } = require("./src/services/bot-visual-flow-service");
-const localAiStatusService = require("./src/services/local-ai-status-service");
+const { ensureTriageFlow } = require("./src/services/flow-builder-migration-service");
 const inboxEvents = require("./src/realtime/inbox-events");
 
 const PORT = process.env.PORT || 3000;
@@ -28,13 +28,11 @@ const stopSlaMonitor = startSlaMonitor({ onChange: () => inboxEvents.publish() }
 const stopCampaignWorker = startCampaignWorker({ channel, onChange: () => inboxEvents.publish() });
 const stopGmailSyncWorker = startGmailSyncWorker();
 // Flow Builder: retoma execuções em WAITING_TIMER (nó Intervalo) — mesmo
-// padrão de monitor em processo; só age em Bot FLOW_BUILDER ativo.
+// padrão de monitor em processo; só age em Bot ativo com auto-resposta.
 const stopVisualFlowWorker = startVisualFlowWorker({ channel, onChange: () => inboxEvents.publish() });
-// IA local (LOCAL_QWEN): monitor de disponibilidade em processo, mesmo
-// padrão dos demais workers acima. Nunca bloqueia o boot: sem
-// LocalAiProviderSettings.enabled/baseUrl configurado, fica OFFLINE sem
-// tentar rede nenhuma.
-localAiStatusService.start();
+// Migração única e idempotente: converte o antigo Bot de Triagem em fluxo
+// visual (publicado, resposta automática DESLIGADA). Nunca bloqueia o boot.
+ensureTriageFlow().catch((error) => console.error("[BOT_FLOW] conversão da triagem falhou (tenta no próximo boot):", error.message));
 
 async function shutdown(signal) {
   console.log(`${signal} recebido. Encerrando servidor...`);
@@ -43,7 +41,6 @@ async function shutdown(signal) {
   stopCampaignWorker();
   stopGmailSyncWorker();
   stopVisualFlowWorker();
-  localAiStatusService.stop();
   server.close(async () => {
     await prisma.$disconnect();
     process.exit(0);

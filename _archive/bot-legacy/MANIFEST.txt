@@ -137,6 +137,7 @@ d1ef47a4930684c9  code/test/bot-social-behavior.test.js
 aa79a8e96fc2405e  code/test/bot-version-service.test.js
 a58fa8fb83136c97  code/test/bot-visual-flow-engine.test.js
 5d53c29eaeb2a956  code/test/bot-visual-flow-service.test.js
+301ef08267f7963e  code/test/conversation-id-profile.test.js
 7ba319b1afae2133  code/test/gemini-provider.test.js
 4eeb50ad9ceec4dd  code/test/global-intent-library.test.js
 53e7938055392794  code/test/knowledge-base-access.test.js

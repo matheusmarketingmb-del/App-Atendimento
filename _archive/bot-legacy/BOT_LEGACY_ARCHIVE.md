@@ -225,6 +225,9 @@ Jobs em processo (`server.js`): `localAiStatusService.start()` (monitor da IA lo
 
 ## 7. Arquivos removidos do runtime
 
-Preenchido ao final da migração — ver seção **"Removidos do runtime"** em
-`docs/BOT_FLOW_BUILDER_MIGRATION.md`. Todos os arquivos removidos estão
-listados em `MANIFEST.txt` e têm cópia em `code/`.
+A lista completa (serviços, controller, telas, rotas, testes, scripts) e o estado do
+banco (o que ficou deprecated) estão em `docs/BOT_FLOW_BUILDER_MIGRATION.md`, seção
+"Removidos do runtime". Todo arquivo removido tem cópia literal em `code/` (ver
+`MANIFEST.txt`). Arquivos que só tiveram trechos removidos (Central de Atendimento,
+Respostas Rápidas, monitor de inatividade, seed, testes de layout) podem ser vistos na
+versão original com `git show 47617a4:<caminho>`.
