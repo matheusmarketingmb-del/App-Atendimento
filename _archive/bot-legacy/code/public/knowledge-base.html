@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#ef5b2a">
+  <link rel="icon" type="image/png" sizes="192x192" href="/assets/app-icon-192.png">
+  <title>Base de conhecimento &bull; Central de Atendimento</title>
+  <script>try{const saved=localStorage.getItem("mibro-theme");document.documentElement.dataset.theme=saved||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light")}catch{}</script>
+  <link rel="stylesheet" href="/css/skeleton.css">
+  <link rel="stylesheet" href="/css/bots.css">
+  <link rel="stylesheet" href="/css/knowledge-base.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/"><img src="/assets/mibro-logo.png" alt="Mibro"><span></span><small>Base de conhecimento</small></a>
+    <div class="phase-badge">CONTEÚDO CONTROLADO &bull; ACESSO POR BOT</div>
+    <a class="back-link" href="/bots">&larr; Bots</a>
+    <a class="back-link" href="/">&larr; Central</a>
+    <button id="theme-toggle" class="round-button" type="button" title="Alternar tema">&#9790;</button>
+    <button id="logout" class="user-button" type="button"><span id="current-user">Master</span> &bull; Sair</button>
+  </header>
+
+  <main class="bots-shell knowledge-shell">
+    <aside class="bots-sidebar">
+      <div class="sidebar-heading">
+        <div><span>INFORMAÇÕES DOS PRODUTOS</span><h1>Conhecimento</h1><p id="knowledge-count">Carregando...</p></div>
+        <button id="new-knowledge" type="button">+ Novo</button>
+      </div>
+      <label class="knowledge-search"><input id="knowledge-search" type="search" placeholder="Buscar título, conteúdo, produto ou tag"></label>
+      <div class="knowledge-filters">
+        <select id="knowledge-filter-type"><option value="">Todos os tipos</option></select>
+        <select id="knowledge-filter-bot"><option value="">Acesso de todos os Bots</option></select>
+        <select id="knowledge-filter-active"><option value="">Ativos e inativos</option><option value="true">Somente ativos</option><option value="false">Somente inativos</option></select>
+      </div>
+      <div id="knowledge-list" class="bot-list"><div class="skeleton-list"><div class="skeleton skeleton-card"></div><div class="skeleton skeleton-card"></div><div class="skeleton skeleton-card"></div></div></div>
+      <div class="safety-note"><b>Uso controlado</b><p>O conteúdo só é usado por Bots que tenham a Base de conhecimento ativada. Fontes inativas ou vencidas nunca são consultadas.</p></div>
+    </aside>
+
+    <section class="bots-workspace">
+      <div id="empty-state" class="empty-state">
+        <div>i</div><h2>Centralize o conhecimento dos produtos</h2>
+        <p>Cadastre relógios, especificações, garantias, procedimentos e respostas gerais. Depois escolha quais Bots podem acessar cada informação.</p>
+        <button id="empty-new-knowledge" type="button">Criar primeira informação</button>
+      </div>
+
+      <div id="editor" hidden>
+        <header class="editor-heading">
+          <div><span id="editor-eyebrow">INFORMAÇÃO SELECIONADA</span><h2 id="editor-title">Nova informação</h2><p id="editor-description">Conteúdo rastreável e controlado por Bot.</p></div>
+          <div id="status-actions" class="status-actions" hidden>
+            <span id="status-badge" class="status-badge"></span>
+            <button id="delete-knowledge" type="button" class="danger">Excluir</button>
+          </div>
+        </header>
+
+        <div class="editor-grid">
+          <form id="knowledge-form" class="card basic-card">
+            <div class="card-heading"><div><span>CONTEÚDO</span><h3>Informação e rastreabilidade</h3></div><button type="submit">Salvar</button></div>
+            <div class="fields two-columns">
+              <label class="full"><span>Título *</span><input id="knowledge-title" maxlength="200" required placeholder="Ex.: Especificações do relógio Mibro GS Pro 2"></label>
+              <label><span>Tipo *</span><select id="knowledge-type" required></select></label>
+              <label><span>Origem da informação *</span><input id="knowledge-source" maxlength="500" required placeholder="Ex.: Manual oficial, catálogo 2026"></label>
+              <label><span>Produto</span><input id="knowledge-product" maxlength="200" placeholder="Ex.: Mibro GS Pro 2"></label>
+              <label><span>Categoria</span><input id="knowledge-category" maxlength="200" placeholder="Ex.: Relógios esportivos"></label>
+              <label class="full"><span>Tags — separadas por vírgula</span><input id="knowledge-tags" maxlength="1000" placeholder="gps, bateria, resistência à água"></label>
+              <label class="full"><span>Conteúdo *</span><textarea id="knowledge-content" maxlength="8000" required placeholder="Cadastre aqui as informações que o Bot poderá usar para responder."></textarea></label>
+              <label><span>Válido a partir de</span><input id="knowledge-valid-from" type="datetime-local"></label>
+              <label><span>Válido até</span><input id="knowledge-valid-until" type="datetime-local"></label>
+              <label class="checkbox full"><input id="knowledge-active" type="checkbox" checked><span>Informação ativa</span></label>
+            </div>
+          </form>
+
+          <section class="card access-card">
+            <div class="card-heading"><div><span>ACESSO</span><h3>Quais Bots podem consultar?</h3></div></div>
+            <label class="access-mode-label"><span>Regra de acesso</span><select id="knowledge-access-mode"><option value="ALL">Todos os Bots</option><option value="SELECTED">Somente Bots selecionados</option></select></label>
+            <p id="access-help" class="card-help access-help">Todos os Bots poderão consultar esta informação quando a Base de conhecimento estiver ativada neles.</p>
+            <div id="knowledge-bots-checklist" class="bot-access-checklist"></div>
+            <p class="activation-note"><b>Atenção:</b> conceder acesso não ativa o recurso. Em cada Bot, habilite “Base de conhecimento” quando quiser que ele use estas informações.</p>
+          </section>
+
+          <section class="card">
+            <div class="card-heading"><div><span>STATUS</span><h3>Controle da informação</h3></div></div>
+            <div class="knowledge-summary">
+              <span>Versão<strong id="knowledge-version">1</strong></span>
+              <span>Acesso<strong id="knowledge-access-summary">Todos</strong></span>
+              <span>Disponibilidade<strong id="knowledge-availability">Ativa</strong></span>
+            </div>
+            <p class="card-help summary-help">Cada edição incrementa a versão. Conteúdo fora da validade ou inativo não é usado.</p>
+          </section>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast"></div>
+  <script src="/js/knowledge-base.js"></script>
+</body>
+</html>

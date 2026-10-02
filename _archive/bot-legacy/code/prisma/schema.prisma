@@ -1,0 +1,2160 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// META = WhatsApp via Meta Cloud API (nome histórico preservado de propósito
+// — é o canal produtivo real; ver docs/integrations/architecture.md). Os
+// demais valores já cobrem a lista de canais da fase omnichannel (item 4 do
+// pedido): Amazon = AMAZON_MARKETPLACE, Instagram/Facebook comentários já no
+// plural. SHEIN mantido só para não quebrar o enum — sem integração nesta fase.
+enum Channel {
+  META
+  INSTAGRAM_DIRECT
+  INSTAGRAM_COMMENTS
+  FACEBOOK_MESSENGER
+  FACEBOOK_COMMENTS
+  EMAIL
+  MERCADO_LIVRE
+  TIKTOK_SHOP
+  AMAZON_MARKETPLACE
+  SHOPEE
+  SHEIN_MARKETPLACE
+  GOOGLE_REVIEWS
+  RECLAME_AQUI
+  // Mantido apenas para compatibilidade com registros históricos.
+  // Não é oferecido na interface de gerenciamento de Bots.
+  ZENVIA
+}
+
+// Tipo de conversa (item 24) — distingue conversa privada de pergunta
+// pública/avaliação/reclamação sem precisar de modelos separados.
+enum ConversationKind {
+  PRIVATE_CONVERSATION
+  PUBLIC_QUESTION
+  REVIEW
+  COMPLAINT
+  EMAIL_THREAD
+}
+
+// Estados claros de integração (item 11) — nunca um boolean genérico.
+enum ChannelAccountStatus {
+  DISABLED
+  NOT_CONFIGURED
+  CONFIGURED
+  AUTH_PENDING
+  CONNECTED
+  DEGRADED
+  ERROR
+  NOT_SUPPORTED
+  // API existe mas o acesso/escopo ainda não foi aprovado pela plataforma
+  // (ex.: TikTok Shop Customer Service antes da aprovação do app).
+  NEEDS_APPROVAL
+  // Exige contrato/credencial comercial que ainda não existe (ex.: Reclame
+  // Aqui sem contrato oficial de API).
+  NEEDS_CONTRACT
+  RECONNECT_REQUIRED
+}
+
+enum ExternalEventStatus {
+  RECEIVED
+  PROCESSED
+  DUPLICATE
+  ERROR
+}
+
+// Status operacionais claros (gestão de SLA/prioridade, item 6/7). Renomeado
+// de AGUARDANDO_RESPOSTA (nome ambíguo, não dizia de quem era a vez) para
+// AGUARDANDO_EQUIPE — mesmo significado exato de antes (última mensagem
+// válida foi do cliente), nenhum dado histórico muda de sentido. Dois
+// valores novos: AGUARDANDO_CLIENTE (última mensagem válida foi da
+// empresa/Bot — antes ficava misturado em EM_ATENDIMENTO) e HANDOFF_BOT
+// (Bot decidiu transferir para humano e aguarda a equipe assumir).
+enum ConversationStatus {
+  NOVO
+  EM_ATENDIMENTO
+  AGUARDANDO_EQUIPE
+  AGUARDANDO_CLIENTE
+  HANDOFF_BOT
+  BOT
+  FINALIZADO
+}
+
+// Prioridade manual opcional (item 5) — nunca calculada automaticamente,
+// só o atendente/supervisor/admin autorizado altera. Default NORMAL.
+enum ConversationPriority {
+  NORMAL
+  ALTA
+  URGENTE
+}
+
+enum MessageDirection {
+  RECEBIDA
+  ENVIADA
+}
+
+enum MessageStatus {
+  RECEBIDA
+  PENDENTE
+  ENVIADA
+  ENTREGUE
+  LIDA
+  FALHOU
+}
+
+enum UserRole {
+  ADMIN
+  SUPERVISOR
+  ATENDENTE
+  BOT
+}
+
+enum InternalChatType {
+  GENERAL
+  SECTOR
+  DIRECT
+  // Grupo criado por um usuário (chat interno com grupos): nome livre,
+  // membros escolhidos pelo criador, papel ADMIN/MEMBER em
+  // InternalChatMember. Reaproveita InternalMessage/lastReadAt/SSE.
+  GROUP
+}
+
+enum InternalChatMemberRole {
+  MEMBER
+  ADMIN
+}
+
+enum InternalMessageType {
+  USER
+  TRANSFER
+  SYSTEM
+}
+
+enum BotStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+}
+
+// STANDARD = Bot comum (IA/intenções). SYSTEM_TRIAGE = o Bot de Triagem
+// Inicial (item "Integrar Bot de Triagem ao sistema de Bots") — sempre no
+// máximo um Bot ativo com esse tipo (validado em bot-service.js), nunca
+// criado pela API (só via migration de seed), identificado na UI como
+// "Bot do sistema" e protegido contra exclusão (Bot.isSystem).
+enum BotType {
+  STANDARD
+  SYSTEM_TRIAGE
+}
+
+enum BotFallbackAction {
+  USE_BOT_FALLBACK
+  TRANSFER_TO_CATEGORY
+  TRANSFER_TO_HUMAN
+}
+
+enum BotAction {
+  RESPOND
+  ASK_CLARIFICATION
+  HANDOFF_HUMAN
+  SWITCH_BOT
+  QUERY_TOOL
+  NO_ACTION
+}
+
+enum BotSocialBehavior {
+  GREETING
+  THANKS
+  GOODBYE
+  SMALL_TALK
+  CONFIRMATION
+  NEGATION
+  HUMAN_REQUEST
+  BUSINESS_INTENT
+}
+
+enum BotObservationFeedback {
+  UNREVIEWED
+  CORRECT
+  INCORRECT
+}
+
+enum BotLearningSuggestionType {
+  INTENT_EXAMPLE
+  NEW_INTENT
+  RESPONSE
+  CLARIFICATION
+  KNOWLEDGE
+  ENTITY_PATTERN
+  // Item 16 (Aprendizado Supervisionado x Flow Engine): conversa em que o
+  // fluxo terminou em HANDOFF_HUMAN (não resolvido) — sugere revisão manual
+  // da etapa/conhecimento, nunca altera o fluxo sozinho.
+  FLOW_REVIEW
+  // Item 1 desta fase: resposta de um atendente humano que resolveu bem o
+  // caso e não corresponde a nenhuma Resposta Rápida existente — sugere
+  // cadastrar uma nova (revisão humana continua obrigatória).
+  QUICK_REPLY
+}
+
+enum BotLearningSuggestionStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  EDITED
+}
+
+// QUICK_REPLY é a única modalidade ativa nesta fase. SUGGESTED_REPLY fica
+// preparada/experimental (Observação/IA podem sugerir, nunca enviar).
+// AUTOMATED_REPLY existe só como vocabulário controlado para o futuro — sem
+// nenhum caminho de código que envie automaticamente nesta fase.
+enum QuickReplyType {
+  QUICK_REPLY
+  SUGGESTED_REPLY
+  AUTOMATED_REPLY
+}
+
+// Escopo da resposta rápida: GLOBAL (gerida pelo Master, visível conforme
+// canal/setor) ou PERSONAL (biblioteca do próprio atendente — só o dono vê).
+enum QuickReplyScope {
+  GLOBAL
+  PERSONAL
+}
+
+// Conteúdo da resposta rápida: TEXT (texto com variáveis) ou AUDIO
+// (arquivo no storage de mídia — no banco só a referência/metadados).
+enum QuickReplyContentType {
+  TEXT
+  AUDIO
+}
+
+enum QuickReplyUsageSource {
+  AGENT
+  BOT_SUGGESTION
+  OBSERVATION
+}
+
+enum KnowledgeSourceType {
+  FAQ
+  MANUAL
+  PRODUCT
+  POLICY
+  WARRANTY
+  PROCEDURE
+  GENERAL
+  OTHER
+}
+
+// READ_ONLY = pode ser implementada e executada nesta fase (consulta).
+// SAFE_ACTION = reservado para fase futura (ação reversível/de baixo risco).
+// SENSITIVE_ACTION = nunca executável nesta fase (cancelamento, reembolso,
+// troca de endereço/cobrança, alteração de pedido) — ver bot-tools/bot-tool.js.
+enum ToolRiskLevel {
+  READ_ONLY
+  SAFE_ACTION
+  SENSITIVE_ACTION
+}
+
+model Contact {
+  id               String            @id @default(cuid())
+  channel          Channel           @default(META)
+  externalId       String
+  // Opcional: nem todo canal tem telefone (Mercado Livre = buyerId, e-mail =
+  // endereço, Google Review = reviewer). WhatsApp continua sempre populando.
+  phone            String?
+  email            String?
+  name             String?
+  customName       String?
+  identityId       String?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  conversations    Conversation[]
+  notes            ContactNote[]
+  campaignContacts CampaignContact[]
+  identity         ContactIdentity?  @relation(fields: [identityId], references: [id], onDelete: SetNull)
+
+  @@unique([channel, externalId])
+  @@index([phone])
+  @@index([email])
+  @@index([identityId])
+}
+
+model ContactIdentity {
+  id          String    @id @default(cuid())
+  displayName String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  contacts    Contact[]
+}
+
+model ContactNote {
+  id        String   @id @default(cuid())
+  contactId String
+  authorId  String?
+  content   String
+  pinned    Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  contact   Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  author    User?    @relation("ContactNotes", fields: [authorId], references: [id], onDelete: SetNull)
+
+  @@index([contactId, createdAt])
+  @@index([authorId])
+}
+
+model Conversation {
+  id                       String                     @id @default(cuid())
+  contactId                String
+  channel                  Channel                    @default(META)
+  channelScope             String                     @default("LEGACY")
+  // Conta específica do canal que originou esta conversa (multi-conta por
+  // plataforma — item 5). Null para conversas do canal Meta já existentes.
+  channelAccountId         String?
+  // ID da conversa/thread na plataforma externa — nunca é usado como chave
+  // primária interna (item 19). Null para WhatsApp (Contact+channel já basta).
+  externalConversationId   String?
+  kind                     ConversationKind           @default(PRIVATE_CONVERSATION)
+  categoryId               String?
+  assignedUserId           String?
+  status                   ConversationStatus         @default(NOVO)
+  unreadCount              Int                        @default(0)
+  lastMessageAt            DateTime?
+  finalizedAt              DateTime?
+  // SLA de primeira resposta (Configurações → Conversas, item 1): true
+  // enquanto o cliente aguarda a primeira resposta da empresa além do prazo
+  // configurado. Não afeta `status`/máquina de estados — é só um indicador.
+  firstResponseSlaBreached Boolean                    @default(false)
+  // SLA de resposta durante atendimento (item 2): true enquanto a última
+  // mensagem válida é do cliente (status AGUARDANDO_EQUIPE/HANDOFF_BOT) além
+  // do prazo configurado. Também não afeta status — resetado assim que a
+  // empresa/Bot responde (updateConversationAfterSending).
+  responseSlaBreached      Boolean                    @default(false)
+  // Prioridade manual (item 5) — nunca calculada automaticamente.
+  priority                 ConversationPriority       @default(NORMAL)
+  // Campanhas (item 15): quando a conversa nasceu de uma resposta a uma
+  // campanha de envio em massa — `originSource = "OUTBOUND_CAMPAIGN"` é o
+  // vocabulário controlado citado no pedido; nunca preenchido para conversas
+  // que chegaram por qualquer outro caminho.
+  originSource             String?
+  originCampaignId         String?
+  originCampaignContactId  String?
+  createdAt                DateTime                   @default(now())
+  updatedAt                DateTime                   @updatedAt
+  contact                  Contact                    @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  category                 Category?                  @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  assignedUser             User?                      @relation("AssignedConversations", fields: [assignedUserId], references: [id], onDelete: SetNull)
+  messages                 Message[]
+  activities               ConversationActivity[]
+  pins                     ConversationPin[]
+  masterReads              ConversationMasterRead[]
+  internalMessages         InternalMessage[]
+  botObservations          BotObservation[]
+  botState                 ConversationBotState?
+  learningSuggestions      BotLearningSuggestion[]
+  learningState            ConversationLearningState?
+  rating                   BotRating?
+  agentFeedback            BotAgentFeedback[]
+  handoffContexts          BotHandoffContext[]
+  quickReplyUsages         QuickReplyUsage[]
+  suggestionFeedback       BotSuggestionFeedback[]
+  botFlowExecutions        BotFlowExecution[]
+  channelAccount           ChannelAccount?            @relation(fields: [channelAccountId], references: [id], onDelete: SetNull)
+  originCampaign           Campaign?                  @relation(fields: [originCampaignId], references: [id], onDelete: SetNull)
+  originCampaignContact    CampaignContact?           @relation(fields: [originCampaignContactId], references: [id], onDelete: SetNull)
+
+  @@unique([contactId, channel, channelScope])
+  @@index([status, lastMessageAt])
+  @@index([priority])
+  @@index([firstResponseSlaBreached])
+  @@index([responseSlaBreached])
+  @@index([originCampaignId])
+  @@index([categoryId, lastMessageAt])
+  @@index([assignedUserId])
+  @@index([channelAccountId])
+  @@index([channel, externalConversationId])
+}
+
+model Message {
+  id               String           @id @default(cuid())
+  conversationId   String
+  externalId       String?          @unique
+  channel          Channel          @default(META)
+  channelAccountId String?
+  direction        MessageDirection
+  status           MessageStatus
+  type             String
+  text             String?
+  mediaStorageKey  String?
+  mediaMimeType    String?
+  mediaFileName    String?
+  mediaSize        Int?
+  mediaDurationMs  Int?
+  // Item de segurança (file-risk-service.js#assessFileRisk): mídia recebida
+  // de canais sem allowlist estrito de MIME (chat interno + canais além do
+  // WhatsApp/Meta — ver media-storage-service.js#validateInternalFile) que
+  // não foi bloqueada, mas merece atenção antes de confiar no conteúdo (ex.:
+  // JSON, planilha com macro, tipo não identificado). Nunca marca mídia do
+  // WhatsApp/Meta (essa já passa por um allowlist estrito por assinatura
+  // binária, nunca fica "suspeita").
+  mediaSuspicious       Boolean @default(false)
+  mediaSuspiciousReason String? @db.Text
+  occurredAt       DateTime
+  sentByUserId     String?
+  rawPayload       Json?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+  conversation     Conversation     @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sentByUser       User?            @relation("SentMessages", fields: [sentByUserId], references: [id], onDelete: SetNull)
+  botObservation   BotObservation?
+
+  @@index([conversationId, occurredAt])
+  @@index([sentByUserId])
+}
+
+model User {
+  id                           String                   @id @default(cuid())
+  name                         String
+  email                        String                   @unique
+  passwordHash                 String?
+  role                         UserRole                 @default(ATENDENTE)
+  active                       Boolean                  @default(true)
+  sessionVersion               Int                      @default(0)
+  canViewUncategorized         Boolean                  @default(false)
+  canManageCategories          Boolean                  @default(false)
+  canTransferConversations     Boolean                  @default(false)
+  canViewTeamActivity          Boolean                  @default(false)
+  canViewConversationHistory   Boolean                  @default(false)
+  canViewPreviousMessages      Boolean                  @default(false)
+  hideUncategorized            Boolean                  @default(false)
+  // Campanhas/prospecção (item 27): Admin sempre pode gerenciar; Supervisor
+  // ganha por padrão (auth-service.js concede a quem é ADMIN/SUPERVISOR);
+  // este flag permite liberar um Atendente específico sem mudar o cargo.
+  canManageCampaigns           Boolean                  @default(false)
+  // Prioridade manual de conversa (item 16): Admin/Supervisor sempre podem;
+  // este flag libera um Atendente específico sem mudar o cargo (mesmo
+  // padrão de canManageCampaigns/canTransferConversations).
+  canSetConversationPriority   Boolean                  @default(false)
+  canStartConversations        Boolean                  @default(false)
+  canMergeContacts             Boolean                  @default(false)
+  createdAt                    DateTime                 @default(now())
+  updatedAt                    DateTime                 @updatedAt
+  assignedConversations        Conversation[]           @relation("AssignedConversations")
+  sentMessages                 Message[]                @relation("SentMessages")
+  contactNotes                 ContactNote[]            @relation("ContactNotes")
+  categoryAccess               UserCategoryAccess[]
+  hiddenCategories             UserHiddenCategory[]
+  conversationPins             ConversationPin[]
+  conversationMasterReads      ConversationMasterRead[]
+  conversationActivities       ConversationActivity[]   @relation("ConversationActivityActor")
+  auditLogs                    AuditLog[]               @relation("AuditLogActor")
+  internalChatMemberships      InternalChatMember[]
+  internalChatsCreated         InternalChat[]           @relation("InternalChatCreatedBy")
+  internalMessages             InternalMessage[]
+  observationFeedback          BotObservation[]         @relation("ObservationFeedbackUser")
+  reviewedLearningSuggestions  BotLearningSuggestion[]  @relation("LearningSuggestionReviewer")
+  botVersions                  BotVersion[]             @relation("BotVersionAuthor")
+  agentFeedback                BotAgentFeedback[]
+  handoffContextsResumed       BotHandoffContext[]      @relation("HandoffResumedByUser")
+  quickRepliesCreated          QuickReply[]             @relation("QuickReplyCreatedBy")
+  quickRepliesOwned            QuickReply[]             @relation("QuickReplyOwner")
+  quickReplyFavorites          QuickReplyFavorite[]     @relation("QuickReplyFavoriteUser")
+  quickReplyUsages             QuickReplyUsage[]        @relation("QuickReplyUsageUser")
+  suggestionFeedbackGiven      BotSuggestionFeedback[]  @relation("SuggestionFeedbackUser")
+  pushSubscriptions            PushSubscription[]       @relation("UserPushSubscriptions")
+  campaignsCreated             Campaign[]               @relation("CampaignCreatedBy")
+  channelAccountAccess         ChannelAccountUserAccess[]
+  campaignsResponsible         Campaign[]               @relation("CampaignResponsible")
+  campaignImports              CampaignImport[]         @relation("CampaignImportedBy")
+  optOutsRemoved               OptOut[]                 @relation("OptOutRemovedBy")
+  aiProviderCredentialsUpdated AiProviderCredential[]   @relation("AiProviderCredentialUpdatedBy")
+  localAiProviderSettingsUpdated LocalAiProviderSettings[] @relation("LocalAiProviderSettingsUpdatedBy")
+  socialContentMappingsCreated SocialContentMapping[]
+}
+
+model PushSubscription {
+  id          String   @id @default(cuid())
+  userId      String
+  endpoint    String   @unique
+  p256dh      String
+  auth        String
+  deviceLabel String?
+  userAgent   String?
+  enabled     Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  lastSeenAt  DateTime @default(now())
+  user        User     @relation("UserPushSubscriptions", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  actorUserId String?
+  actorName   String?
+  actorEmail  String?
+  action      String
+  entityType  String
+  entityId    String?
+  summary     String
+  details     Json?
+  createdAt   DateTime @default(now())
+  actorUser   User?    @relation("AuditLogActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@index([action, createdAt])
+  @@index([entityType, entityId])
+  @@index([actorUserId, createdAt])
+}
+
+model ConversationPin {
+  userId         String
+  conversationId String
+  createdAt      DateTime     @default(now())
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@id([userId, conversationId])
+  @@index([conversationId])
+}
+
+model ConversationMasterRead {
+  userId         String
+  conversationId String
+  readAt         DateTime     @default(now())
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@id([userId, conversationId])
+  @@index([conversationId])
+}
+
+model ConversationActivity {
+  id             String       @id @default(cuid())
+  conversationId String
+  actorUserId    String?
+  action         String
+  details        Json?
+  createdAt      DateTime     @default(now())
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  actorUser      User?        @relation("ConversationActivityActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([conversationId, createdAt])
+  @@index([actorUserId])
+}
+
+model Category {
+  id              String               @id @default(cuid())
+  parentId        String?
+  code            String               @unique
+  name            String
+  color           String?
+  active          Boolean              @default(true)
+  displayOrder    Int                  @default(0)
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+  conversations   Conversation[]
+  parent          Category?            @relation("CategoryHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  children        Category[]           @relation("CategoryHierarchy")
+  userAccess      UserCategoryAccess[]
+  hiddenByUsers   UserHiddenCategory[]
+  internalChats   InternalChat[]
+  defaultForBots  Bot[]
+  botIntents      BotIntent[]
+  botObservations BotObservation[]
+  quickReplies    QuickReply[]
+  campaigns       Campaign[]
+  triageOptions   BotTriageOption[]
+
+  @@index([parentId, displayOrder])
+}
+
+model Bot {
+  id                      String    @id @default(cuid())
+  name                    String
+  description             String?
+  status                  BotStatus @default(DRAFT)
+  // Ver enum BotType. `isSystem` bloqueia arquivamento/exclusão acidental
+  // (item "Bot de Sistema") — a ativação/desativação normal (status) continua
+  // liberada mesmo para um Bot de sistema, é o próprio controle pedido.
+  type                    BotType   @default(STANDARD)
+  isSystem                Boolean   @default(false)
+  channel                 Channel
+  // Multi-canal (item 22): lista adicional de canais compatíveis, aditiva ao
+  // `channel` legado (nunca removido, para não quebrar Bots existentes nem o
+  // código que ainda lê `bot.channel`). Vazio = Bot segue single-channel.
+  channels                Channel[] @default([])
+  initialMessage          String    @db.Text
+  outsideHoursMessage     String    @db.Text
+  fallbackMessage         String    @db.Text
+  // Mensagem enviada após o encaminhamento (handoff) para o setor escolhido
+  // — usada hoje só pelo Bot de Triagem (routingText original de
+  // triage-bot-service.js). Nula em Bots comuns, que não têm esse conceito.
+  handoffMessage          String?   @db.Text
+  timezone                String    @default("America/Sao_Paulo")
+  defaultCategoryId       String?
+  highConfidenceThreshold Float     @default(0.8)
+  lowConfidenceThreshold  Float     @default(0.55)
+
+  // Item 5/6 (Nova conversa / Conversa finalizada) — só têm efeito prático
+  // hoje no Bot de Triagem (triage-bot-service.js), mas ficam no Bot em geral
+  // porque descrevem "quando este Bot deve iniciar sozinho", aplicável a
+  // qualquer Bot que venha a rodar no fluxo real de mensagens no futuro.
+  runOnNewConversation Boolean @default(true)
+  runAfterReopen       Boolean @default(true)
+
+  // Identidade (fase de governança) — ver bot-governance-service.js.
+  introduceWithName       Boolean @default(false)
+  presentationMessage     String? @db.Text
+  reintroduceOnNewSession Boolean @default(true)
+
+  // Toggles críticos (nunca ligar sozinho num Bot já existente): ficam como
+  // colunas dedicadas para leitura rápida no kill switch e nas queries do
+  // ranking/dashboard. Os demais recursos (menos arriscados) ficam validados
+  // dentro de featureFlags/toolPermissions — ver bot-governance-service.js.
+  autoReplyEnabled Boolean @default(false)
+  toolsEnabled     Boolean @default(false)
+  ratingEnabled    Boolean @default(false)
+  featureFlags     Json    @default("{}")
+  toolPermissions  Json    @default("{}")
+
+  // Avaliação do atendimento (BotRating) — ver bot-rating-service.js.
+  ratingMessage         String? @db.Text
+  ratingFollowupMessage String? @db.Text
+  requestRatingOn       String  @default("BOT_COMPLETED")
+  requestRatingComment  Boolean @default(false)
+
+  archivedAt              DateTime?
+  // Flow Builder (Editor Visual): LEGACY = motor atual (intenções/etapas
+  // lineares/triagem), FLOW_BUILDER = executa o BotFlow ativo deste Bot
+  // (bot-visual-flow-engine.js). Padrão LEGACY: nenhum Bot existente muda.
+  executionMode           BotExecutionMode @default(LEGACY)
+  createdAt               DateTime                @default(now())
+  updatedAt               DateTime                @updatedAt
+  defaultCategory         Category?               @relation(fields: [defaultCategoryId], references: [id], onDelete: SetNull)
+  schedules               BotSchedule[]
+  holidays                BotHoliday[]
+  intents                 BotIntent[]
+  observations            BotObservation[]
+  conversationStates      ConversationBotState[]
+  learningSuggestions     BotLearningSuggestion[]
+  versions                BotVersion[]
+  ratings                 BotRating[]
+  agentFeedback           BotAgentFeedback[]
+  knowledgeSources        KnowledgeSource[]
+  knowledgeSourceAccesses KnowledgeSourceBot[]
+  handoffContexts         BotHandoffContext[]
+  suggestionFeedback      BotSuggestionFeedback[]
+  campaigns               Campaign[]
+  triageOptions           BotTriageOption[]
+  personality             BotPersonality?
+  visualFlows             BotFlow[]
+
+  @@index([status, channel])
+  @@index([defaultCategoryId])
+  @@index([type])
+}
+
+// Personalidade configurável por Bot ("Bot → Personalidade"). Define só
+// COMO o Bot responde (tom, estilo, comportamentos, tamanho preferido) —
+// nunca O QUE ele responde: isso continua vindo de KnowledgeSource
+// (Base de Conhecimento), Tools, Flow Engine e das respostas configuradas da
+// intenção (ver bot-response-service.js/bot-personality-service.js). Um Bot
+// sem este registro usa o preset padrão da Mibro Brasil (ver
+// DEFAULT_PERSONALITY em bot-personality-constants.js) — nunca fica "sem
+// personalidade nenhuma".
+enum BotPersonalityPreset {
+  TRIAGEM
+  SUPORTE
+  COMERCIAL
+  POS_VENDA
+  PERSONALIZADO
+}
+
+enum BotResponseLength {
+  SHORT
+  MEDIUM
+  LONG
+}
+
+model BotPersonality {
+  id     String @id @default(cuid())
+  botId  String @unique
+  bot    Bot    @relation(fields: [botId], references: [id], onDelete: Cascade)
+
+  // Preset usado como ponto de partida (item "Adicionar presets"). Continua
+  // editável depois de aplicado — vira PERSONALIZADO assim que um campo é
+  // alterado manualmente na tela (ver bot-personality-service.js), mas o
+  // valor aqui é só rótulo/rastreio, nunca reaplicado sozinho.
+  preset BotPersonalityPreset @default(PERSONALIZADO)
+
+  assistantName          String?
+  roleDescription        String?           @db.Text
+  tone                   String[]          @default([])
+  responseStyle          String[]          @default([])
+  mandatoryBehaviors     String[]          @default([])
+  forbiddenBehaviors     String[]          @default([])
+  additionalInstructions String?           @db.Text
+  responseLength         BotResponseLength @default(MEDIUM)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([preset])
+}
+
+// Opções/setores da lista interativa do Bot de Triagem (item "Fluxo /
+// Opções"). Cada linha é um item do menu do WhatsApp: rótulo + setor de
+// destino. `categoryId` usa onDelete: Restrict de propósito — nunca deixa
+// uma opção apontar para uma categoria apagada ("não permitir destino
+// inválido"); a categoria só pode ser removida depois de desvincular a
+// opção. Hoje só o Bot SYSTEM_TRIAGE usa este modelo, mas nada aqui é
+// exclusivo dele.
+model BotTriageOption {
+  id          String   @id @default(cuid())
+  botId       String
+  categoryId  String
+  label       String
+  description String?
+  enabled     Boolean  @default(true)
+  order       Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  bot         Bot      @relation(fields: [botId], references: [id], onDelete: Cascade)
+  category    Category @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+
+  @@unique([botId, categoryId])
+  @@index([botId, order])
+}
+
+model BotSchedule {
+  id        String   @id @default(cuid())
+  botId     String
+  dayOfWeek Int
+  enabled   Boolean  @default(true)
+  startTime String   @db.VarChar(5)
+  endTime   String   @db.VarChar(5)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  bot       Bot      @relation(fields: [botId], references: [id], onDelete: Cascade)
+
+  @@unique([botId, dayOfWeek])
+  @@index([botId])
+}
+
+model BotHoliday {
+  id        String   @id @default(cuid())
+  botId     String
+  date      String   @db.VarChar(10)
+  name      String
+  enabled   Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  bot       Bot      @relation(fields: [botId], references: [id], onDelete: Cascade)
+
+  @@unique([botId, date])
+  @@index([botId, date])
+}
+
+// BotIntent é, ao mesmo tempo, a "intenção" que o motor de interpretação já
+// usa (interpreter/decision/response) E a associação Bot<->GlobalIntent
+// (item 1 do plano de conhecimento/tools): quando globalIntentId está
+// preenchido, name/description/examples desta linha são a config
+// bot-específica (prioridade, resposta, categoria, ação) em cima do
+// significado/exemplos compartilhados em GlobalIntent. Bots antigos (sem
+// globalIntentId) continuam funcionando exatamente como antes — nada no
+// pipeline de interpretação foi alterado por este campo.
+model BotIntent {
+  id                   String                  @id @default(cuid())
+  botId                String
+  globalIntentId       String?
+  name                 String
+  description          String?
+  responseMessage      String?                 @db.Text
+  priority             Int                     @default(0)
+  active               Boolean                 @default(true)
+  fallbackAction       BotFallbackAction       @default(USE_BOT_FALLBACK)
+  categoryId           String?
+  // Nome de uma Tool (bot-tools/tool-registry.js) associada a esta intenção
+  // (item 8: "onde está meu pedido?" -> ACOMPANHAR_PEDIDO -> OrderTool). Só é
+  // efetivamente chamada se a Tool existir, estiver habilitada no registry E
+  // permitida em Bot.toolPermissions — ver bot-tool-orchestrator-service.js.
+  toolName             String?
+  createdAt            DateTime                @default(now())
+  updatedAt            DateTime                @updatedAt
+  bot                  Bot                     @relation(fields: [botId], references: [id], onDelete: Cascade)
+  globalIntent         GlobalIntent?           @relation(fields: [globalIntentId], references: [id], onDelete: SetNull)
+  category             Category?               @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  examples             BotIntentExample[]
+  conversationStates   ConversationBotState[]
+  activeInFlowStates   ConversationBotState[]  @relation("ConversationActiveFlowIntent")
+  feedbackObservations BotObservation[]        @relation("ObservationFeedbackIntent")
+  learningSuggestions  BotLearningSuggestion[]
+  ratings              BotRating[]
+  quickReplyLinks      QuickReplyIntent[]
+  knowledgeSources     KnowledgeSource[]
+  botHandoffContexts   BotHandoffContext[]
+  flowSteps            BotFlowStep[]
+
+  @@index([botId, active, priority])
+  @@index([categoryId])
+  @@index([globalIntentId])
+}
+
+// Flow Engine: conduz uma intenção por várias etapas em vez de responder uma
+// única vez (item "evoluir o Bot para conduzir atendimentos em múltiplas
+// etapas"). Uma BotIntent sem nenhuma etapa continua se comportando exatamente
+// como antes (responseMessage/toolName/Base de Conhecimento de intenção,
+// single-shot) — o motor só assume quando existem etapas ativas.
+//
+// `nextStepId`/`onSuccessStepId`/`onFailureStepId`/`gotoStepId` são
+// referências por id a outra BotFlowStep da MESMA intenção, guardadas como
+// String simples (sem FK/@relation) de propósito: evita ambiguidade de
+// múltiplas self-relations e cascade ao apagar uma etapa; a validade é
+// checada no serviço (bot-flow-service.js) na escrita e defensivamente na
+// execução (etapa-alvo ausente/inativa => encaminha para humano, nunca trava).
+model BotFlowStep {
+  id       String            @id @default(cuid())
+  intentId String
+  name     String
+  order    Int
+  action   BotFlowStepAction
+
+  // ASK_QUESTION
+  question  String? @db.Text
+  entityKey String?
+  required  Boolean @default(true)
+
+  // USE_KNOWLEDGE (associação direta; se vazio, cai para busca por
+  // intenção/palavra-chave via KnowledgeSourceProvider, igual ao fluxo atual)
+  knowledgeSourceId String?
+
+  // QUERY_TOOL (nome de uma Tool do registry — bot-tools/tool-registry.js;
+  // continua bloqueada se desativada/sem permissão, ver bot-tool-orchestrator-service.js)
+  toolName String?
+
+  // RESPOND (e mensagem de fechamento opcional para RESOLVED/HANDOFF_HUMAN)
+  responseMessage String? @db.Text
+
+  // Roteamento
+  nextStepId      String?
+  onSuccessStepId String?
+  onFailureStepId String?
+  gotoStepId      String?
+  maxAttempts     Int     @default(3)
+
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  intent          BotIntent        @relation(fields: [intentId], references: [id], onDelete: Cascade)
+  knowledgeSource KnowledgeSource? @relation(fields: [knowledgeSourceId], references: [id], onDelete: SetNull)
+
+  @@unique([intentId, order])
+  @@index([intentId, active])
+  @@index([knowledgeSourceId])
+}
+
+enum BotFlowStepAction {
+  ASK_QUESTION
+  USE_KNOWLEDGE
+  QUERY_TOOL
+  RESPOND
+  RESOLVED
+  HANDOFF_HUMAN
+  GOTO_STEP
+}
+
+enum FlowResolutionStatus {
+  IN_PROGRESS
+  RESOLVED
+  HANDED_OFF
+  ABANDONED
+}
+
+// Biblioteca Global de Intenções (item 1): significado + exemplos
+// compartilhados entre Bots. Cada BotIntent associada (via globalIntentId)
+// guarda a config bot-específica (prioridade/resposta/categoria/ação).
+// Remover a associação de um Bot (deletar a BotIntent) nunca apaga a
+// GlobalIntent nem os exemplos globais.
+model GlobalIntent {
+  id          String   @id @default(cuid())
+  name        String
+  description String?  @db.Text
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  examples         GlobalIntentExample[]
+  botIntents       BotIntent[]
+  knowledgeSources KnowledgeSource[]
+
+  @@index([active])
+}
+
+// Exemplos de treinamento compartilhados por todos os Bots associados à
+// GlobalIntent. Aprovação de sugestão de aprendizado (bot-learning-service.js)
+// adiciona exemplos aqui (deduplicado por texto normalizado) e propaga para
+// as BotIntentExample de cada Bot associado — ver global-intent-service.js.
+model GlobalIntentExample {
+  id             String       @id @default(cuid())
+  globalIntentId String
+  text           String       @db.Text
+  createdAt      DateTime     @default(now())
+  globalIntent   GlobalIntent @relation(fields: [globalIntentId], references: [id], onDelete: Cascade)
+
+  @@index([globalIntentId])
+}
+
+model BotIntentExample {
+  id        String    @id @default(cuid())
+  intentId  String
+  text      String    @db.Text
+  createdAt DateTime  @default(now())
+  intent    BotIntent @relation(fields: [intentId], references: [id], onDelete: Cascade)
+
+  @@index([intentId])
+}
+
+model BotObservation {
+  id                      String                 @id @default(cuid())
+  conversationId          String
+  messageId               String                 @unique
+  botId                   String?
+  botName                 String
+  channel                 Channel                @default(META)
+  withinHours             Boolean
+  intentId                String?
+  intentName              String?
+  matchedExample          String?
+  categoryId              String?
+  categoryName            String?
+  fallbackAction          BotFallbackAction?
+  confidence              Float?
+  action                  BotAction?
+  socialBehavior          BotSocialBehavior?
+  extractedEntities       Json?
+  // Rastreabilidade de Tools (item 11 - Observação): qual Tool teria sido
+  // chamada e o resultado, sem nunca executar a Tool de verdade quando
+  // mode === "OBSERVATION" — ver bot-tool-orchestrator-service.js.
+  toolName                String?
+  toolResult              Json?
+  // Item 19 (Observação): rastro do que o motor teria usado/decidido sem
+  // executar nada de verdade — mesma regra de "nunca inventar" das outras
+  // colunas acima, só que para conhecimento e IA externa.
+  knowledgeSourceId       String?
+  knowledgeSourceTitle    String?
+  calledExternalAi        Boolean                @default(false)
+  flowStepId              String?
+  flowResolutionStatus    String?
+  // Item 4/7 (troca de assunto / sugestão para o atendente): a resposta que
+  // o motor calcularia para esta mensagem (texto final, já resolvido por
+  // Flow Engine/Knowledge/Tool/fallback) — nunca enviada automaticamente;
+  // só fica disponível para o atendente usar via "Sugestão de resposta"
+  // quando um humano já assumiu a conversa. `topicSwitchDetected` registra
+  // quando a mensagem trocou de intenção no meio de um fluxo em andamento.
+  suggestedResponseText   String?                @db.Text
+  topicSwitchDetected     Boolean                @default(false)
+  provider                String?
+  mode                    String                 @default("OBSERVATION")
+  status                  String                 @default("OK")
+  errorCode               String?
+  feedback                BotObservationFeedback @default(UNREVIEWED)
+  feedbackIntentId        String?
+  feedbackByUserId        String?
+  feedbackAt              DateTime?
+  suggestedQuickReplyId   String?
+  suggestedQuickReplyName String?
+  createdAt               DateTime               @default(now())
+
+  conversation        Conversation            @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  message             Message                 @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  bot                 Bot?                    @relation(fields: [botId], references: [id], onDelete: SetNull)
+  category            Category?               @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  feedbackIntent      BotIntent?              @relation("ObservationFeedbackIntent", fields: [feedbackIntentId], references: [id], onDelete: SetNull)
+  feedbackByUser      User?                   @relation("ObservationFeedbackUser", fields: [feedbackByUserId], references: [id], onDelete: SetNull)
+  suggestedQuickReply QuickReply?             @relation("ObservationSuggestedQuickReply", fields: [suggestedQuickReplyId], references: [id], onDelete: SetNull)
+  suggestionFeedback  BotSuggestionFeedback[]
+
+  @@index([conversationId, createdAt])
+  @@index([botId, createdAt])
+  @@index([categoryId])
+  @@index([createdAt])
+  @@index([feedback])
+}
+
+// Item 8 (feedback do atendente sobre uma sugestão específica — distinto de
+// BotAgentFeedback, que é "o Bot ajudou nesta conversa?" de forma geral).
+// Uma linha por atendente+sugestão (observação); `finalResponseText` é
+// opcional (o que o atendente realmente enviou, quando informado pelo
+// cliente da UI ao dar o feedback) — nunca inferido automaticamente aqui.
+model BotSuggestionFeedback {
+  id                String   @id @default(cuid())
+  observationId     String
+  botId             String?
+  conversationId    String
+  userId            String
+  // `helpful` (👍/👎) e `action` (o que o atendente fez com a sugestão na UI:
+  // USED/EDITED/IGNORED) são sinais independentes — nem sempre os dois
+  // chegam juntos. Pelo menos um dos dois é sempre informado (validado no
+  // service, não aqui).
+  helpful           Boolean?
+  action            String?
+  finalResponseText String?  @db.Text
+  createdAt         DateTime @default(now())
+
+  observation  BotObservation @relation(fields: [observationId], references: [id], onDelete: Cascade)
+  bot          Bot?           @relation(fields: [botId], references: [id], onDelete: SetNull)
+  conversation Conversation   @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user         User           @relation("SuggestionFeedbackUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([observationId, userId])
+  @@index([botId, createdAt])
+  @@index([conversationId])
+}
+
+model ConversationBotState {
+  id                    String  @id @default(cuid())
+  conversationId        String  @unique
+  activeBotId           String?
+  lastIntentId          String?
+  lastConfidence        Float?
+  failedInterpretations Int     @default(0)
+  pendingClarification  Boolean @default(false)
+  extractedEntities     Json?
+
+  // Identidade: já se apresentou nesta sessão operacional?
+  introducedAt DateTime?
+
+  // Proteção contra loop (bot-loop-guard-service.js): mesma resposta
+  // repetida N vezes seguidas.
+  lastResponseHash        String?
+  lastResponseRepeatCount Int     @default(0)
+
+  // Proteção contra ping-pong de SWITCH_BOT numa janela de tempo.
+  switchCount           Int       @default(0)
+  switchWindowStartedAt DateTime?
+
+  // Pausa quando um humano assume a conversa (handoffAutoPause).
+  humanPausedAt DateTime?
+
+  // Flow Engine (item "ESTADO DA CONVERSA"): posição e memória do atendimento
+  // em múltiplas etapas em andamento nesta conversa. `currentFlowStepId` nulo
+  // = nenhum fluxo aguardando resposta agora (nova mensagem volta a ser
+  // interpretada normalmente); `activeFlowIntentId` fica preenchido mesmo
+  // depois de resolvido/encaminhado, só como registro do último fluxo rodado.
+  activeFlowIntentId     String?
+  currentFlowStepId      String?
+  flowCollectedEntities  Json?
+  flowAskedQuestions     Json?
+  flowAttemptedSolutions Json?
+  flowFailedSteps        Json?
+  flowStepAttempts       Json?
+  flowResolutionStatus   FlowResolutionStatus?
+  // Item "ESTADO DA CONVERSA" (fase de contexto/conhecimento/Tools):
+  // `pendingQuestion` guarda o texto exato da pergunta aguardando resposta
+  // (a mesma etapa ASK_QUESTION já identificada por currentFlowStepId — só
+  // evita uma consulta extra para exibir/auditar a pergunta em aberto).
+  // `lastBotAction` é a última ação decidida pelo motor (RESPOND,
+  // ASK_CLARIFICATION, QUERY_TOOL, HANDOFF_HUMAN...), fora ou dentro de um
+  // fluxo — nunca usado para decidir nada sozinho, só auditoria/depuração.
+  pendingQuestion        String?               @db.Text
+  lastBotAction          String?
+
+  // Item 6 (contexto de produto): memória de entidades em nível de
+  // CONVERSA, nunca de uma etapa específica — mescla (nunca sobrescreve) a
+  // cada turno, sobrevive à troca de intenção/fluxo e respeita o mesmo TTL
+  // de contextExpirationMinutes (resetada junto com os campos flow* quando a
+  // sessão expira). "tenho um GS Pro 2" -> "ele tem NFC?" não repergunta o
+  // modelo mesmo em uma intenção nova sem fluxo nenhum.
+  contextEntities Json?
+
+  // Contexto real / "Case State" (plano de Inteligência de Bots, item 4):
+  // memória estruturada do CASO em nível de CONVERSA — sintoma, produto,
+  // aplicativo, sistema operacional, perguntas já feitas, soluções já
+  // tentadas/falhadas, ferramentas usadas, pendências. Diferente de
+  // `contextEntities` (bag chave/valor genérico) e dos campos `flow*`
+  // (memória de UM fluxo específico, descartada quando ele termina): isto
+  // sobrevive à troca de intenção/fluxo, no mesmo ciclo de vida/TTL de
+  // `contextEntities` (resetado junto quando a sessão expira). Shape
+  // validado em bot-case-state-service.js, nunca lido cru por outro módulo.
+  caseState Json?
+
+  // Item 5 (múltiplas intenções): pilha de fluxos PAUSADOS por troca de
+  // assunto (item 4) — cada item é um snapshot igual ao persistido em
+  // flow*/pendingQuestion. Vazio/nulo = nenhum fluxo em espera. Nunca cresce
+  // sem limite: MAX_FLOW_STACK_DEPTH em bot-flow-service.js.
+  flowStack Json?
+
+  // Item 9 (avaliação do cliente): nunca pedir de novo na mesma conversa.
+  // `awaitingRatingScore` faz a PRÓXIMA mensagem do cliente ser interpretada
+  // como nota (1-5) em vez de reclassificada normalmente.
+  ratingRequestedAt   DateTime?
+  awaitingRatingScore Boolean   @default(false)
+
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+
+  conversation     Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  activeBot        Bot?         @relation(fields: [activeBotId], references: [id], onDelete: SetNull)
+  lastIntent       BotIntent?   @relation(fields: [lastIntentId], references: [id], onDelete: SetNull)
+  activeFlowIntent BotIntent?   @relation("ConversationActiveFlowIntent", fields: [activeFlowIntentId], references: [id], onDelete: SetNull)
+
+  @@index([activeBotId])
+  @@index([lastIntentId])
+  @@index([activeFlowIntentId])
+}
+
+// Rastreia se/quando uma conversa já foi analisada pelo motor de
+// aprendizado, para nunca reprocessar a mesma conversa (bot-learning-service.js).
+model ConversationLearningState {
+  id                     String    @id @default(cuid())
+  conversationId         String    @unique
+  lastAnalyzedAt         DateTime?
+  messageCountAtAnalysis Int       @default(0)
+  suggestionCount        Int       @default(0)
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+}
+
+// Sugestão gerada a partir da observação/análise de conversas reais. Nunca é
+// aplicada automaticamente: só passa a valer quando um humano aprova
+// (bot-learning-service.js). Conteúdo sempre sanitizado (sem dados pessoais).
+model BotLearningSuggestion {
+  id               String                      @id @default(cuid())
+  botId            String?
+  conversationId   String?
+  intentId         String?
+  type             BotLearningSuggestionType
+  status           BotLearningSuggestionStatus @default(PENDING)
+  title            String
+  suggestedContent String                      @db.Text
+  sourceCount      Int                         @default(1)
+  confidence       Float?
+  metadata         Json?
+  createdAt        DateTime                    @default(now())
+  updatedAt        DateTime                    @updatedAt
+  reviewedAt       DateTime?
+  reviewedByUserId String?
+
+  bot            Bot?          @relation(fields: [botId], references: [id], onDelete: SetNull)
+  conversation   Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  intent         BotIntent?    @relation(fields: [intentId], references: [id], onDelete: SetNull)
+  reviewedByUser User?         @relation("LearningSuggestionReviewer", fields: [reviewedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt])
+  @@index([botId, status])
+  @@index([type, status])
+}
+
+// Item 15 (Custo/uso de IA externa): um registro por chamada REAL a um
+// provider externo (nunca para o provider local, nunca para o simulador —
+// ver bot-ai-usage-service.js). Sem relação FK para Bot de propósito (mesmo
+// padrão solto de BotObservation.knowledgeSourceId): só estatística, nunca
+// trava a inserção se o Bot for removido depois.
+model BotAiUsage {
+  id           String   @id @default(cuid())
+  botId        String?
+  provider     String
+  reason       String
+  inputTokens  Int?
+  outputTokens Int?
+  createdAt    DateTime @default(now())
+
+  @@index([botId, createdAt])
+  @@index([provider, createdAt])
+}
+
+// Snapshot completo do Bot (campos + intenções + horários + featureFlags) em
+// um ponto no tempo. Criado sob demanda ("Salvar versão"/"Publicar"), nunca a
+// cada edição — ver bot-version-service.js. Restaurar cria uma versão NOVA a
+// partir de uma antiga; nunca apaga histórico.
+model BotVersion {
+  id                  String   @id @default(cuid())
+  botId               String
+  version             Int
+  label               String?
+  description         String?
+  snapshot            Json
+  restoredFromVersion Int?
+  createdAt           DateTime @default(now())
+  createdByUserId     String?
+  createdByName       String?
+
+  bot           Bot   @relation(fields: [botId], references: [id], onDelete: Cascade)
+  createdByUser User? @relation("BotVersionAuthor", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  @@unique([botId, version])
+  @@index([botId, createdAt])
+}
+
+// Avaliação do atendimento feita pelo CLIENTE (customerRating). Nunca gerada
+// pelo modo Observação — só existe quando o Bot realmente atendeu (ver
+// bot-rating-service.js). Uma conversa recebe no máximo uma avaliação.
+model BotRating {
+  id              String   @id @default(cuid())
+  botId           String
+  conversationId  String?  @unique
+  channel         Channel  @default(META)
+  score           Int
+  comment         String?  @db.Text
+  resolvedByBot   Boolean  @default(false)
+  intentId        String?
+  handoffOccurred Boolean  @default(false)
+  metadata        Json?
+  createdAt       DateTime @default(now())
+
+  bot          Bot           @relation(fields: [botId], references: [id], onDelete: Cascade)
+  conversation Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  intent       BotIntent?    @relation(fields: [intentId], references: [id], onDelete: SetNull)
+
+  @@index([botId, createdAt])
+  @@index([botId, score])
+  @@index([intentId])
+}
+
+// Feedback do ATENDENTE ("o bot ajudou?") após um handoff — sinal distinto
+// da avaliação do cliente (BotRating), nunca misturado com ela.
+model BotAgentFeedback {
+  id             String   @id @default(cuid())
+  conversationId String
+  botId          String?
+  userId         String
+  helpful        Boolean
+  comment        String?  @db.Text
+  createdAt      DateTime @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  bot          Bot?         @relation(fields: [botId], references: [id], onDelete: SetNull)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId, userId])
+  @@index([botId])
+}
+
+// Base de Conhecimento (item 3): separa "entender a intenção" (BotIntent/
+// GlobalIntent) de "saber a resposta" (KnowledgeSource). Sem RAG/semântica
+// nesta fase — busca por texto/tags/tipo/categoria/produto/intenção via
+// bot-knowledge/knowledge-provider.js, estruturado para permitir semântica
+// futura sem quebrar a API. Regras: sempre precisa de `source`; conteúdo
+// desativado ou expirado nunca é retornado/usado; nunca guardar segredos.
+model KnowledgeSource {
+  id             String              @id @default(cuid())
+  botId          String?
+  title          String
+  type           KnowledgeSourceType
+  source         String?
+  content        String?             @db.Text
+  // Item 3/4: dimensões de busca estruturada (texto/tags/intenção/produto/
+  // categoria), sem semântica ainda.
+  category       String?
+  product        String?
+  tags           String[]            @default([])
+  globalIntentId String?
+  intentId       String?
+  version        Int                 @default(1)
+  active         Boolean             @default(true)
+  validFrom      DateTime?
+  validUntil     DateTime?
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  bot          Bot?                 @relation(fields: [botId], references: [id], onDelete: SetNull)
+  globalIntent GlobalIntent?        @relation(fields: [globalIntentId], references: [id], onDelete: SetNull)
+  intent       BotIntent?           @relation(fields: [intentId], references: [id], onDelete: SetNull)
+  botAccesses  KnowledgeSourceBot[]
+  flowSteps    BotFlowStep[]
+
+  @@index([botId, active])
+  @@index([type])
+  @@index([globalIntentId])
+  @@index([intentId])
+  @@index([category])
+  @@index([product])
+}
+
+model KnowledgeSourceBot {
+  knowledgeSourceId String
+  botId             String
+  createdAt         DateTime        @default(now())
+  knowledgeSource   KnowledgeSource @relation(fields: [knowledgeSourceId], references: [id], onDelete: Cascade)
+  bot               Bot             @relation(fields: [botId], references: [id], onDelete: Cascade)
+
+  @@id([knowledgeSourceId, botId])
+  @@index([botId])
+}
+
+// Configuração global de automação de Bots — inclui o kill switch
+// ("Automação de Bots"). Registro único (id fixo "singleton").
+model BotGlobalSettings {
+  id                          String    @id @default("singleton")
+  automationEnabled           Boolean   @default(true)
+  observationEnabled          Boolean   @default(true)
+  learningEnabled             Boolean   @default(true)
+  ratingsEnabled              Boolean   @default(false)
+  rankingEnabled              Boolean   @default(false)
+  minimumRatingsForRanking    Int       @default(20)
+  // Item 9: liga/desliga a Biblioteca Global de Intenções como um todo
+  // (associar/reaproveitar GlobalIntent entre Bots). Desligar não apaga
+  // GlobalIntent/associações — só bloqueia novas operações de biblioteca.
+  intentLibraryEnabled        Boolean   @default(true)
+  killSwitchActivatedAt       DateTime?
+  killSwitchActivatedByUserId String?
+  updatedAt                   DateTime  @updatedAt
+  createdAt                   DateTime  @default(now())
+}
+
+// Contexto estruturado capturado no momento do HANDOFF_HUMAN (item 2).
+// Nunca guarda "chain-of-thought" do modelo — só fatos: intenção, confiança,
+// categoria, entidades extraídas, últimas informações relevantes, perguntas
+// já feitas e soluções já tentadas, mais um resumo curto (2-4 frases) gerado
+// de forma determinística a partir desses fatos (sem chamar IA).
+model BotHandoffContext {
+  id                   String    @id @default(cuid())
+  conversationId       String
+  botId                String?
+  botName              String?
+  intentId             String?
+  intentName           String?
+  confidence           Float?
+  category             String?
+  extractedEntities    Json?
+  lastRelevantInfo     String?   @db.Text
+  questionsAsked       Json?
+  solutionsTried       Json?
+  summary              String?   @db.Text
+  // Item 2 (handoff inteligente): quando o handoff aconteceu DENTRO de um
+  // Flow Engine, estes campos vêm do estado estruturado do fluxo (nunca do
+  // heurístico "mensagem termina com ?") — produto coletado, etapa em que
+  // parou, resultado e motivo, para o atendente nunca precisar reler a
+  // conversa inteira.
+  product              String?
+  flowResolutionStatus String?
+  currentStepName      String?
+  handoffReason        String?   @db.Text
+  createdAt            DateTime  @default(now())
+  // Retomada explícita do Bot ("[Retomar Bot]") — nunca automática.
+  resumedAt            DateTime?
+  resumedByUserId      String?
+
+  conversation  Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  bot           Bot?         @relation(fields: [botId], references: [id], onDelete: SetNull)
+  intent        BotIntent?   @relation(fields: [intentId], references: [id], onDelete: SetNull)
+  resumedByUser User?        @relation("HandoffResumedByUser", fields: [resumedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([conversationId, createdAt])
+  @@index([botId, createdAt])
+}
+
+// Conta de um canal externo (item 5) — permite múltiplas contas por
+// plataforma (ex.: duas lojas de Mercado Livre). Segredos NUNCA ficam aqui em
+// texto puro: `encryptedSecrets` guarda um blob cifrado (AES-256-GCM, ver
+// integration-secret-service.js); `secretKeys` só lista QUAIS chaves estão
+// configuradas, para a UI mostrar "Configurado: sim/não" sem decifrar nada.
+model ChannelAccount {
+  id                String               @id @default(cuid())
+  channel           Channel
+  name              String
+  status            ChannelAccountStatus @default(NOT_CONFIGURED)
+  enabled           Boolean              @default(false)
+  externalAccountId String?
+  oauthProvider     String?
+  oauthScopes       String[]             @default([])
+  tokenExpiresAt    DateTime?
+  providerMetadata Json                  @default("{}")
+  config            Json                 @default("{}")
+  secretKeys        String[]             @default([])
+  encryptedSecrets  Bytes?
+  encryptionIv      Bytes?
+  encryptionAuthTag Bytes?
+  lastSyncAt        DateTime?
+  lastErrorAt       DateTime?
+  lastErrorCode     String?
+  lastErrorMessage  String?
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+
+  conversations Conversation[]
+  oauthStates   ChannelOAuthState[]
+  events        ExternalChannelEvent[]
+  campaigns     Campaign[]
+  accessUsers   ChannelAccountUserAccess[]
+
+  @@unique([channel, name])
+  @@index([channel, enabled])
+  @@index([status])
+}
+
+model ChannelAccountUserAccess {
+  channelAccountId String
+  userId           String
+  createdAt        DateTime       @default(now())
+  channelAccount   ChannelAccount @relation(fields: [channelAccountId], references: [id], onDelete: Cascade)
+  user             User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([channelAccountId, userId])
+  @@index([userId])
+}
+// Estado de fluxo OAuth (item 13) — protege contra CSRF/state replay: cada
+// state é de uso único (`consumedAt`) e expira.
+model ChannelOAuthState {
+  id               String    @id @default(cuid())
+  channel          Channel
+  channelAccountId String?
+  state            String    @unique
+  redirectUri      String?
+  metadata         Json?
+  createdAt        DateTime  @default(now())
+  expiresAt        DateTime
+  consumedAt       DateTime?
+
+  channelAccount ChannelAccount? @relation(fields: [channelAccountId], references: [id], onDelete: SetNull)
+
+  @@index([channel, createdAt])
+}
+
+// Mapeamento manual post/reel -> produto (item 10/11 do plano Social) —
+// SEMPRE cadastro manual (Master), nunca inferido automaticamente com baixa
+// confiança. externalPostId é o mediaId/postId cru da Graph API, o mesmo
+// valor gravado em Conversation.externalConversationId para comentários
+// (ver omnichannel-message-service.js#conversationKindFor). `product` é uma
+// String livre (mesmo padrão de KnowledgeSource.product) — não existe
+// catálogo de produto relacional neste sistema, não é o caso de inventar um
+// aqui só para isto.
+model SocialContentMapping {
+  id              String   @id @default(cuid())
+  channel         Channel
+  externalPostId  String
+  title           String?
+  product         String?
+  permalink       String?
+  active          Boolean  @default(true)
+  createdByUserId String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  createdByUser User? @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  @@unique([channel, externalPostId])
+  @@index([channel, active])
+}
+
+// Ledger de idempotência (item 16) — uma notificação repetida da plataforma
+// externa nunca deve gerar conversa/mensagem/resposta duplicada.
+model ExternalChannelEvent {
+  id               String              @id @default(cuid())
+  channel          Channel
+  channelAccountId String?
+  externalEventId  String
+  eventType        String
+  receivedAt       DateTime            @default(now())
+  processedAt      DateTime?
+  status           ExternalEventStatus @default(RECEIVED)
+  errorCode        String?
+  payload          Json?
+
+  channelAccount ChannelAccount? @relation(fields: [channelAccountId], references: [id], onDelete: SetNull)
+
+  @@unique([channel, externalEventId])
+  @@index([channel, status, receivedAt])
+}
+
+// Master switch das integrações NOVAS (item 33) — nunca desliga Meta/WhatsApp,
+// que já é canal produtivo e continua controlado só pelos próprios Bots.
+model IntegrationGlobalSettings {
+  id                 String   @id @default("singleton")
+  newChannelsEnabled Boolean  @default(false)
+  // Flags do módulo Social (Instagram/Facebook) — cada uma controla um tipo
+  // de resposta automática distinto, todas OFF por padrão (item 26 do plano:
+  // primeiro só SUGGESTED_REPLY, nunca auto-envio sem ligar explicitamente).
+  // socialAutoReplyEnabled é a chave-mestra do grupo; as duas específicas só
+  // têm efeito se a chave-mestra também estiver ligada.
+  socialAutoReplyEnabled        Boolean  @default(false)
+  socialCommentAutoReplyEnabled Boolean  @default(false)
+  socialPrivateAutoReplyEnabled Boolean  @default(false)
+  updatedAt          DateTime @updatedAt
+  createdAt          DateTime @default(now())
+}
+
+// Biblioteca única de mensagens reutilizáveis (item "PRINCÍPIO PRINCIPAL"):
+// atendente usa, Bot/IA podem sugerir, automação real só no futuro e com
+// controle explícito (nunca aqui). channels vazio = todos os canais.
+model QuickReply {
+  id                String         @id @default(cuid())
+  name              String
+  shortcut          String
+  text              String         @db.Text
+  categoryId        String?
+  channels          Channel[]      @default([])
+  availableToAgents Boolean        @default(true)
+  availableToBots   Boolean        @default(false)
+  type              QuickReplyType @default(QUICK_REPLY)
+  scope             QuickReplyScope       @default(GLOBAL)
+  contentType       QuickReplyContentType @default(TEXT)
+  // Dono de uma resposta PERSONAL (nulo para GLOBAL).
+  ownerUserId       String?
+  mediaStorageKey   String?
+  mediaMimeType     String?
+  mediaFileName     String?
+  mediaSize         Int?
+  mediaDurationMs   Int?
+  active            Boolean        @default(true)
+  archivedAt        DateTime?
+  createdByUserId   String?
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  category                Category?            @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  createdBy               User?                @relation("QuickReplyCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  owner                   User?                @relation("QuickReplyOwner", fields: [ownerUserId], references: [id], onDelete: Cascade)
+  intents                 QuickReplyIntent[]
+  favorites               QuickReplyFavorite[]
+  usages                  QuickReplyUsage[]
+  suggestedInObservations BotObservation[]     @relation("ObservationSuggestedQuickReply")
+
+  @@index([active, categoryId])
+  @@index([shortcut])
+  @@index([createdAt])
+  @@index([scope, ownerUserId])
+}
+
+// Liga uma resposta rápida a uma ou mais BotIntent existentes (nunca
+// duplica o texto dentro de cada intenção) — usado futuramente para
+// sugestão automática (Observação/IA).
+model QuickReplyIntent {
+  id           String   @id @default(cuid())
+  quickReplyId String
+  botIntentId  String
+  createdAt    DateTime @default(now())
+
+  quickReply QuickReply @relation(fields: [quickReplyId], references: [id], onDelete: Cascade)
+  botIntent  BotIntent  @relation(fields: [botIntentId], references: [id], onDelete: Cascade)
+
+  @@unique([quickReplyId, botIntentId])
+  @@index([botIntentId])
+}
+
+// Favorito é por usuário, nunca global (item 11).
+model QuickReplyFavorite {
+  id           String   @id @default(cuid())
+  quickReplyId String
+  userId       String
+  createdAt    DateTime @default(now())
+
+  quickReply QuickReply @relation(fields: [quickReplyId], references: [id], onDelete: Cascade)
+  user       User       @relation("QuickReplyFavoriteUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([quickReplyId, userId])
+  @@index([userId])
+}
+
+// Registro de uso (item 12) — base para "mais usadas" e métricas futuras,
+// sem dashboard pesado nesta fase.
+model QuickReplyUsage {
+  id             String                @id @default(cuid())
+  quickReplyId   String
+  userId         String?
+  conversationId String?
+  source         QuickReplyUsageSource @default(AGENT)
+  usedAt         DateTime              @default(now())
+
+  quickReply   QuickReply    @relation(fields: [quickReplyId], references: [id], onDelete: Cascade)
+  user         User?         @relation("QuickReplyUsageUser", fields: [userId], references: [id], onDelete: SetNull)
+  conversation Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+
+  @@index([quickReplyId, usedAt])
+  @@index([userId])
+  @@index([conversationId])
+}
+
+model UserCategoryAccess {
+  userId     String
+  categoryId String
+  createdAt  DateTime @default(now())
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category   Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@id([userId, categoryId])
+  @@index([categoryId])
+}
+
+model UserHiddenCategory {
+  userId     String
+  categoryId String
+  createdAt  DateTime @default(now())
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category   Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@id([userId, categoryId])
+  @@index([categoryId])
+}
+
+model InternalChat {
+  id              String           @id @default(cuid())
+  key             String           @unique
+  type            InternalChatType
+  name            String?
+  categoryId      String?
+  // Somente grupos (type GROUP): quem criou e quando foi encerrado. Grupo
+  // encerrado vira somente leitura — o histórico nunca é apagado.
+  createdByUserId String?
+  archivedAt      DateTime?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  category  Category?            @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  createdBy User?                @relation("InternalChatCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  members   InternalChatMember[]
+  messages  InternalMessage[]
+
+  @@index([type])
+  @@index([categoryId])
+  @@index([createdByUserId])
+}
+
+model InternalChatMember {
+  chatId     String
+  userId     String
+  // Só tem efeito em grupos (GENERAL/SECTOR/DIRECT continuam MEMBER).
+  role       InternalChatMemberRole @default(MEMBER)
+  lastReadAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  chat InternalChat @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  user User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([chatId, userId])
+  @@index([userId])
+}
+
+model InternalMessage {
+  id             String              @id @default(cuid())
+  chatId         String
+  senderUserId   String?
+  type           InternalMessageType @default(USER)
+  text           String?
+  conversationId String?
+  metadata       Json?
+  createdAt      DateTime            @default(now())
+
+  chat         InternalChat  @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  senderUser   User?         @relation(fields: [senderUserId], references: [id], onDelete: SetNull)
+  conversation Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+
+  @@index([chatId, createdAt])
+  @@index([senderUserId])
+  @@index([conversationId])
+}
+
+// =============================================================================
+// Campanhas / Envio em massa (WhatsApp) — reaproveita integralmente a
+// integração Meta já existente (meta-template-service.js/MetaCloudChannel):
+// nenhum cliente HTTP novo, nenhuma credencial nova. O motor de envio é uma
+// fila em processo (mesmo padrão de conversation-inactivity-service.js —
+// setInterval, sem dependência de fila externa), nunca dispara tudo direto
+// numa requisição HTTP.
+// =============================================================================
+
+enum CampaignStatus {
+  DRAFT
+  SCHEDULED
+  QUEUED
+  RUNNING
+  PAUSED
+  COMPLETED
+  CANCELLED
+  FAILED
+}
+
+enum CampaignContactStatus {
+  PENDING
+  QUEUED
+  SENDING
+  SENT
+  DELIVERED
+  READ
+  REPLIED
+  FAILED
+  SKIPPED
+  OPTED_OUT
+}
+
+// Vocabulário controlado de origem do contato (item 12) — nunca inventar um
+// valor fora desta lista.
+enum ContactSource {
+  EVENT
+  MANUAL_IMPORT
+  SHOPIFY
+  FORM
+  WHATSAPP
+  PARTNER
+  OTHER
+}
+
+// UNKNOWN nunca vira OPTED_IN sozinho (item 12) — só muda por ação explícita
+// (import com a coluna preenchida, ou opt-out detectado por mensagem).
+enum ConsentStatus {
+  UNKNOWN
+  OPTED_IN
+  OPTED_OUT
+}
+
+// Status comercial (item 24) — nunca substitui o status técnico de envio
+// (CampaignContactStatus); alterado manualmente pelo atendente/responsável.
+enum ProspectStatus {
+  NEW
+  CONTACTED
+  REPLIED
+  INTERESTED
+  QUALIFIED
+  NOT_INTERESTED
+  CONVERTED
+}
+
+// Configuração global (item 31) — registro único, mesmo padrão de
+// BotGlobalSettings. `massMessagingEnabled` é o master switch: mesmo com
+// campanhas cadastradas/agendadas, nenhum envio real acontece com ele OFF
+// (item 32 — estado inicial seguro).
+model CampaignGlobalSettings {
+  id                                String   @id @default("singleton")
+  massMessagingEnabled              Boolean  @default(false)
+  maxCampaignRecipients             Int      @default(5000)
+  allowScheduling                   Boolean  @default(true)
+  allowImports                      Boolean  @default(true)
+  // Item 18: limites centralizados aqui — nunca hardcoded em outro arquivo.
+  defaultBatchSize                  Int      @default(20)
+  defaultDelayBetweenBatchesSeconds Int      @default(5)
+  defaultMaxRetries                 Int      @default(2)
+  updatedAt                         DateTime @updatedAt
+  createdAt                         DateTime @default(now())
+}
+
+// Configurações → Conversas: registro único, mesmo padrão de
+// CampaignGlobalSettings/BotGlobalSettings. Fonte central de todos os
+// prazos/flags de SLA, alertas, contexto do Bot e reabertura de conversa —
+// nenhum desses números deve viver hardcoded em outro arquivo (item 11).
+model ConversationSettings {
+  id String @id @default("singleton")
+
+  // SLA de primeira resposta (item 1)
+  firstResponseSlaEnabled Boolean @default(false)
+  firstResponseSlaMinutes Int     @default(10)
+
+  // SLA de resposta durante atendimento (item 2)
+  responseSlaEnabled Boolean @default(false)
+  responseSlaMinutes Int     @default(15)
+
+  // Alerta de conversa sem resposta (item 3)
+  unansweredConversationAlertEnabled Boolean @default(false)
+  unansweredConversationAlertMinutes Int     @default(30)
+
+  // Alerta de conversa parada (item 4)
+  stalledConversationAlertEnabled Boolean @default(false)
+  stalledConversationAlertMinutes Int     @default(360)
+
+  // Alerta de SLA próximo do limite (item 3 — gestão de SLA/prioridade):
+  // dispara quando já se passou este percentual do prazo configurado
+  // (firstResponseSlaMinutes/responseSlaMinutes) sem estourar ainda.
+  slaNearBreachAlertEnabled Boolean @default(false)
+  slaNearBreachPercent      Int     @default(80)
+
+  // Alerta de conversa sem responsável (item 3 — gestão de SLA/prioridade):
+  // conversa ativa (não FINALIZADO/BOT) sem assignedUserId há X minutos.
+  unassignedConversationAlertEnabled Boolean @default(false)
+  unassignedConversationAlertMinutes Int     @default(30)
+
+  // Contexto do Bot (item 5) — default global; flag por Bot continua existindo
+  // e tem prioridade quando definido (ver bot-orchestrator-service.js).
+  botContextTtlMinutes Int @default(120)
+
+  // Retomada do Bot após humano (item 6) — nasce OFF; só estrutura, nenhum
+  // job automático ainda age sobre estes campos (ver conversation-sla-service.js).
+  botResumeAfterHumanEnabled Boolean @default(false)
+  botResumeAfterHumanMinutes Int     @default(60)
+
+  // Reabertura de conversa (itens 7 e 8)
+  reopenConversationOnCustomerMessage Boolean @default(true)
+  reopenWindowMinutes                 Int?
+
+  // Horário comercial aplicado a SLA (item 9) — reusa business-hours-service.js.
+  slaBusinessHoursOnly Boolean @default(false)
+
+  // Finalização automática (já existente em conversation-inactivity-service.js,
+  // antes hardcoded — agora configurável a partir daqui).
+  autoFinalizationEnabled Boolean @default(true)
+  autoFinalizationMinutes Int     @default(1440)
+
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+}
+
+model Campaign {
+  id               String  @id @default(cuid())
+  name             String
+  description      String? @db.Text
+  channel          Channel @default(META)
+  // Conta específica do canal (multi-conta) — null usa a conta padrão.
+  channelAccountId String?
+  // Template Meta selecionado (item 3) — nome+idioma são a chave real usada
+  // para buscar o template aprovado na Meta a cada envio (nunca cacheia o
+  // conteúdo aqui: sempre confere status/aprovação no momento de enviar).
+  templateName     String
+  templateLanguage String
+  templateCategory String?
+  // Mapa {{variableKey}} -> nome do campo do CampaignContact (ou um valor
+  // fixo prefixado "static:") — ver campaign-template-service.js.
+  variableMapping  Json?
+
+  category          String? // categoria/tipo da campanha (livre, ex.: "Prospecção")
+  replyCategoryId   String? // categoria/equipe da CONVERSA quando o contato responde
+  replyBotId        String? // Bot de triagem opcional após resposta (item 16)
+  responsibleUserId String?
+
+  status      CampaignStatus @default(DRAFT)
+  timezone    String         @default("America/Sao_Paulo")
+  scheduledAt DateTime?
+  startedAt   DateTime?
+  pausedAt    DateTime?
+  completedAt DateTime?
+  cancelledAt DateTime?
+  failedAt    DateTime?
+  lastBatchAt DateTime?
+
+  // Item 17/18: limites desta campanha — se ausentes, o worker usa os
+  // defaults de CampaignGlobalSettings (nunca hardcoded).
+  batchSize                  Int?
+  delayBetweenBatchesSeconds Int?
+  maxRetries                 Int?
+
+  // Item 29: telefone autorizado para "Enviar teste" — nunca contabilizado
+  // nas métricas reais (CampaignContact.isTest).
+  testPhone String?
+
+  segmentFilters Json? // critérios de segmentação combináveis (item 10)
+
+  createdByUserId String?
+  updatedByUserId String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  createdBy      User?             @relation("CampaignCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  responsible    User?             @relation("CampaignResponsible", fields: [responsibleUserId], references: [id], onDelete: SetNull)
+  replyCategory  Category?         @relation(fields: [replyCategoryId], references: [id], onDelete: SetNull)
+  replyBot       Bot?              @relation(fields: [replyBotId], references: [id], onDelete: SetNull)
+  channelAccount ChannelAccount?   @relation(fields: [channelAccountId], references: [id], onDelete: SetNull)
+  contacts       CampaignContact[]
+  imports        CampaignImport[]
+  conversations  Conversation[]
+
+  @@index([status, scheduledAt])
+  @@index([createdByUserId])
+}
+
+// Participante de uma campanha (item 5) — dados PRÓPRIOS da campanha, nunca
+// duplicando Contact desnecessariamente: `contactId` só é vinculado quando
+// já existe (ou passa a existir) um Contact real para o telefone (item 8).
+model CampaignContact {
+  id         String  @id @default(cuid())
+  campaignId String
+  contactId  String?
+
+  phone       String // sempre E.164 normalizado (item 6)
+  firstName   String?
+  fullName    String?
+  email       String?
+  companyName String?
+  document    String? // CPF/CNPJ, opcional
+  city        String?
+  state       String?
+  tags        String[] @default([])
+  notes       String?  @db.Text
+
+  source        ContactSource @default(OTHER)
+  consentStatus ConsentStatus @default(UNKNOWN)
+  // Cache local de opt-out (item 13) — sempre derivado da tabela OptOut
+  // global no momento da importação/segmentação; nunca a única fonte de
+  // verdade (o worker sempre reconfere OptOut antes de enviar).
+  optOut        Boolean       @default(false)
+
+  status            CampaignContactStatus @default(PENDING)
+  isTest            Boolean               @default(false)
+  externalMessageId String?
+  sentAt            DateTime?
+  deliveredAt       DateTime?
+  readAt            DateTime?
+  repliedAt         DateTime?
+  failedAt          DateTime?
+  failureReason     String?               @db.Text
+  retryCount        Int                   @default(0)
+
+  prospectStatus ProspectStatus @default(NEW)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  campaign      Campaign       @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  contact       Contact?       @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  conversations Conversation[]
+
+  // Item 8: nunca duas linhas para o mesmo telefone normalizado na mesma
+  // campanha.
+  @@unique([campaignId, phone])
+  @@index([campaignId, status])
+  @@index([contactId])
+  @@index([externalMessageId])
+}
+
+// Um lote de importação (item 6/26) — guarda quem importou e um resumo para
+// auditoria/histórico; os erros linha-a-linha voltam na resposta da própria
+// requisição de importação (baixados como CSV pelo cliente), não persistidos
+// aqui para não guardar duas vezes os mesmos dados brutos do arquivo.
+model CampaignImport {
+  id               String   @id @default(cuid())
+  campaignId       String
+  fileName         String?
+  totalRows        Int      @default(0)
+  validRows        Int      @default(0)
+  invalidRows      Int      @default(0)
+  duplicateRows    Int      @default(0)
+  optOutRows       Int      @default(0)
+  importedByUserId String?
+  createdAt        DateTime @default(now())
+
+  campaign   Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  importedBy User?    @relation("CampaignImportedBy", fields: [importedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([campaignId, createdAt])
+}
+
+// Lista de supressão GLOBAL por telefone (item 11/13) — nunca por campanha:
+// um opt-out vale para TODAS as campanhas futuras. Nunca removido (apagado)
+// de verdade: `removedAt` marca a reversão manual, mantendo o histórico
+// completo para auditoria (item 13/26).
+model OptOut {
+  id              String    @id @default(cuid())
+  phone           String    @unique
+  contactId       String?
+  reason          String?   @db.Text
+  source          String // ex.: "REPLY_KEYWORD", "MANUAL", "IMPORT_FLAG"
+  createdAt       DateTime  @default(now())
+  removedAt       DateTime?
+  removedByUserId String?
+  removalReason   String?   @db.Text
+
+  removedByUser User? @relation("OptOutRemovedBy", fields: [removedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([phone])
+}
+
+// Motor de IA / Fallback externo — chave de API de cada provider, gerenciada
+// pelo painel (nunca mais precisa editar env na VPS). GLOBAL, não por Bot:
+// cada Bot só escolhe QUAL provider/modelo usar (featureFlags.externalAiProvider/
+// externalAiModel), a credencial em si é uma única por provider para toda a
+// instalação. Cifrada com AES-256-GCM (mesmo padrão de ChannelAccount/
+// integration-secret-service.js), chave mestra separada
+// (AI_SECRETS_ENCRYPTION_KEY, nunca INTEGRATION_ENCRYPTION_KEY) — nunca
+// texto puro. `lastFour` é a única parte em claro (mesmo princípio de
+// "final do cartão"), só para exibição, nunca a chave inteira.
+model AiProviderCredential {
+  provider          String   @id // "ANTHROPIC" | "GEMINI" | "OPENAI"
+  encryptedKey      Bytes
+  encryptionIv      Bytes
+  encryptionAuthTag Bytes
+  lastFour          String
+  defaultModel      String?
+  updatedByUserId   String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  updatedByUser User? @relation("AiProviderCredentialUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: SetNull)
+}
+
+// IA LOCAL — configuração GLOBAL do PROVIDER, reutilizada por qualquer Bot
+// que escolha featureFlags.aiProvider = "LOCAL_QWEN" (ver bot-constants.js).
+// `baseUrl` aponta para o RAG SERVER local (rag_server.py, em C:\App
+// Whats\rag — dev: http://127.0.0.1:8992; produção: endereço privado
+// Tailscale do PC), NUNCA para o Ollama diretamente — é o RAG Server quem
+// fala com o Ollama, faz a busca na Knowledge (Info_Bots/ChromaDB/
+// nomic-embed-text) e devolve a resposta pronta. Não é credencial (não
+// guarda segredo), por isso não usa o mesmo cofre cifrado de
+// AiProviderCredential. Registro único ("singleton"), igual a
+// BotGlobalSettings. Nunca instanciar um provider por Bot: todos
+// compartilham esta mesma configuração.
+model LocalAiProviderSettings {
+  id              String    @id @default("singleton")
+  enabled         Boolean   @default(false)
+  baseUrl         String?
+  defaultModel    String    @default("qwen3:14b")
+  timeoutMs       Int       @default(45000)
+  maxConcurrency  Int       @default(1)
+  updatedByUserId String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  updatedByUser User? @relation("LocalAiProviderSettingsUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: SetNull)
+}
+
+// Registro de cada tentativa da IA local em MODO SHADOW/OBSERVAÇÃO (nunca
+// enviado ao cliente — ver bot-ai-shadow-service.js): o que a IA teria
+// respondido, com que Knowledge, em quanto tempo, e se seria elegível para
+// auto-resposta real (useAi/autoReplyEnabled continuam sendo dois controles
+// independentes — ver bot-ai-gate-service.js). Serve para validar qualidade
+// antes de ligar autoReplyEnabled de verdade num Bot.
+model BotAiShadowLog {
+  id             String   @id @default(cuid())
+  conversationId String
+  messageId      String?
+  botId          String
+  provider       String
+  model          String?
+  aiMode         String
+  action         String?
+  intent         String?
+  issue          String?
+  confidence     Float?
+  entities       Json?
+  knowledgeUsed  Json?
+  missingInformation Json?
+  responseText   String?  @db.Text
+  handoffCategory String?
+  handoffReason  String?
+  summary        String?  @db.Text
+  autoReplyEligible Boolean @default(false)
+  autoReplyBlockedReason String?
+  latencyMs      Int?
+  status         String
+  errorCode      String?
+  createdAt      DateTime @default(now())
+
+  @@index([botId, createdAt])
+  @@index([conversationId, createdAt])
+}
+
+// ============================================================
+// Flow Builder (Editor Visual de Bots)
+// ============================================================
+// O grafo (nós + conexões + posições) é salvo inteiro em JSON: o editor
+// sempre grava o grafo todo de uma vez e versões publicadas são imutáveis,
+// então tabelas por nó/aresta só adicionariam joins. Shape validado em
+// bot-visual-flow-graph.js — nunca lido cru por outro módulo.
+
+enum BotExecutionMode {
+  LEGACY
+  FLOW_BUILDER
+}
+
+enum BotFlowStatus {
+  DRAFT
+  ACTIVE
+  INACTIVE
+}
+
+enum BotFlowExecutionStatus {
+  RUNNING
+  WAITING_CUSTOMER
+  WAITING_TIMER
+  HANDED_OFF
+  COMPLETED
+  FAILED
+}
+
+model BotFlow {
+  id              String        @id @default(cuid())
+  botId           String
+  name            String
+  description     String?
+  status          BotFlowStatus @default(DRAFT)
+  // Rascunho em edição — nunca executado em conversa real. Publicar copia
+  // isto para uma BotFlowVersion nova e aponta activeVersionId para ela.
+  draftGraph      Json
+  draftUpdatedAt  DateTime      @default(now())
+  activeVersionId String?       @unique
+  // Fluxo padrão do Bot quando o Bot está em executionMode FLOW_BUILDER.
+  isDefault       Boolean       @default(false)
+  archivedAt      DateTime?
+  createdByUserId String?
+  createdByName   String?
+  updatedByUserId String?
+  updatedByName   String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  bot           Bot                @relation(fields: [botId], references: [id], onDelete: Cascade)
+  activeVersion BotFlowVersion?    @relation("BotFlowActiveVersion", fields: [activeVersionId], references: [id], onDelete: SetNull)
+  versions      BotFlowVersion[]   @relation("BotFlowVersions")
+  executions    BotFlowExecution[]
+
+  @@index([botId, archivedAt])
+}
+
+model BotFlowVersion {
+  id                String   @id @default(cuid())
+  flowId            String
+  version           Int
+  graph             Json
+  label             String?
+  publishedByUserId String?
+  publishedByName   String?
+  createdAt         DateTime @default(now())
+
+  flow         BotFlow            @relation("BotFlowVersions", fields: [flowId], references: [id], onDelete: Cascade)
+  activeFor    BotFlow?           @relation("BotFlowActiveVersion")
+  executions   BotFlowExecution[]
+
+  @@unique([flowId, version])
+}
+
+model BotFlowExecution {
+  id             String                 @id @default(cuid())
+  conversationId String
+  botId          String
+  flowId         String
+  versionId      String
+  currentNodeKey String?
+  context        Json                   @default("{}")
+  status         BotFlowExecutionStatus @default(RUNNING)
+  // WAITING_TIMER: quando o worker deve retomar (bot-visual-flow-worker.js).
+  resumeAt       DateTime?
+  // Idempotência: última mensagem do cliente já consumida por esta execução.
+  lastMessageId  String?
+  // Contador otimista — toda transição faz updateMany(where step = N).
+  step           Int                    @default(0)
+  error          String?
+  startedAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+  finishedAt     DateTime?
+
+  conversation Conversation          @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  flow         BotFlow               @relation(fields: [flowId], references: [id], onDelete: Cascade)
+  version      BotFlowVersion        @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  logs         BotFlowExecutionLog[]
+
+  @@index([conversationId, status])
+  @@index([status, resumeAt])
+  @@index([flowId])
+}
+
+model BotFlowExecutionLog {
+  id          String   @id @default(cuid())
+  executionId String
+  flowId      String
+  version     Int
+  nodeKey     String
+  nodeType    String
+  // Entrada/saída sempre sanitizadas (sem headers/segredos) — ver
+  // sanitizeForLog em bot-visual-flow-engine.js.
+  input       Json?
+  output      Json?
+  branch      String?
+  result      String
+  error       String?
+  durationMs  Int?
+  createdAt   DateTime @default(now())
+
+  execution BotFlowExecution @relation(fields: [executionId], references: [id], onDelete: Cascade)
+
+  @@index([executionId, createdAt])
+}

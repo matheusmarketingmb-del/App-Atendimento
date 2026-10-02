@@ -1,0 +1,1094 @@
+// Snapshot dos models/enums de Bot, IA, Knowledge e Flow Builder extraídos de
+// prisma/schema.prisma em 2026-10-02 (branch feature/social-meta-native, HEAD 47617a4).
+// Referência apenas — NÃO é um schema válido sozinho (relações apontam para
+// Contact/Conversation/User/Category/QuickReply/Campaign do schema principal).
+
+enum BotStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+}
+
+// STANDARD = Bot comum (IA/intenções). SYSTEM_TRIAGE = o Bot de Triagem
+// Inicial (item "Integrar Bot de Triagem ao sistema de Bots") — sempre no
+// máximo um Bot ativo com esse tipo (validado em bot-service.js), nunca
+// criado pela API (só via migration de seed), identificado na UI como
+// "Bot do sistema" e protegido contra exclusão (Bot.isSystem).
+enum BotType {
+  STANDARD
+  SYSTEM_TRIAGE
+}
+
+enum BotFallbackAction {
+  USE_BOT_FALLBACK
+  TRANSFER_TO_CATEGORY
+  TRANSFER_TO_HUMAN
+}
+
+enum BotAction {
+  RESPOND
+  ASK_CLARIFICATION
+  HANDOFF_HUMAN
+  SWITCH_BOT
+  QUERY_TOOL
+  NO_ACTION
+}
+
+enum BotSocialBehavior {
+  GREETING
+  THANKS
+  GOODBYE
+  SMALL_TALK
+  CONFIRMATION
+  NEGATION
+  HUMAN_REQUEST
+  BUSINESS_INTENT
+}
+
+enum BotObservationFeedback {
+  UNREVIEWED
+  CORRECT
+  INCORRECT
+}
+
+enum BotLearningSuggestionType {
+  INTENT_EXAMPLE
+  NEW_INTENT
+  RESPONSE
+  CLARIFICATION
+  KNOWLEDGE
+  ENTITY_PATTERN
+  // Item 16 (Aprendizado Supervisionado x Flow Engine): conversa em que o
+  // fluxo terminou em HANDOFF_HUMAN (não resolvido) — sugere revisão manual
+  // da etapa/conhecimento, nunca altera o fluxo sozinho.
+  FLOW_REVIEW
+  // Item 1 desta fase: resposta de um atendente humano que resolveu bem o
+  // caso e não corresponde a nenhuma Resposta Rápida existente — sugere
+  // cadastrar uma nova (revisão humana continua obrigatória).
+  QUICK_REPLY
+}
+
+enum BotLearningSuggestionStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  EDITED
+}
+
+enum KnowledgeSourceType {
+  FAQ
+  MANUAL
+  PRODUCT
+  POLICY
+  WARRANTY
+  PROCEDURE
+  GENERAL
+  OTHER
+}
+
+// READ_ONLY = pode ser implementada e executada nesta fase (consulta).
+// SAFE_ACTION = reservado para fase futura (ação reversível/de baixo risco).
+// SENSITIVE_ACTION = nunca executável nesta fase (cancelamento, reembolso,
+// troca de endereço/cobrança, alteração de pedido) — ver bot-tools/bot-tool.js.
+enum ToolRiskLevel {
+  READ_ONLY
+  SAFE_ACTION
+  SENSITIVE_ACTION
+}
+
+model Bot {
+  id                      String    @id @default(cuid())
+  name                    String
+  description             String?
+  status                  BotStatus @default(DRAFT)
+  // Ver enum BotType. `isSystem` bloqueia arquivamento/exclusão acidental
+  // (item "Bot de Sistema") — a ativação/desativação normal (status) continua
+  // liberada mesmo para um Bot de sistema, é o próprio controle pedido.
+  type                    BotType   @default(STANDARD)
+  isSystem                Boolean   @default(false)
+  channel                 Channel
+  // Multi-canal (item 22): lista adicional de canais compatíveis, aditiva ao
+  // `channel` legado (nunca removido, para não quebrar Bots existentes nem o
+  // código que ainda lê `bot.channel`). Vazio = Bot segue single-channel.
+  channels                Channel[] @default([])
+  initialMessage          String    @db.Text
+  outsideHoursMessage     String    @db.Text
+  fallbackMessage         String    @db.Text
+  // Mensagem enviada após o encaminhamento (handoff) para o setor escolhido
+  // — usada hoje só pelo Bot de Triagem (routingText original de
+  // triage-bot-service.js). Nula em Bots comuns, que não têm esse conceito.
+  handoffMessage          String?   @db.Text
+  timezone                String    @default("America/Sao_Paulo")
+  defaultCategoryId       String?
+  highConfidenceThreshold Float     @default(0.8)
+  lowConfidenceThreshold  Float     @default(0.55)
+
+  // Item 5/6 (Nova conversa / Conversa finalizada) — só têm efeito prático
+  // hoje no Bot de Triagem (triage-bot-service.js), mas ficam no Bot em geral
+  // porque descrevem "quando este Bot deve iniciar sozinho", aplicável a
+  // qualquer Bot que venha a rodar no fluxo real de mensagens no futuro.
+  runOnNewConversation Boolean @default(true)
+  runAfterReopen       Boolean @default(true)
+
+  // Identidade (fase de governança) — ver bot-governance-service.js.
+  introduceWithName       Boolean @default(false)
+  presentationMessage     String? @db.Text
+  reintroduceOnNewSession Boolean @default(true)
+
+  // Toggles críticos (nunca ligar sozinho num Bot já existente): ficam como
+  // colunas dedicadas para leitura rápida no kill switch e nas queries do
+  // ranking/dashboard. Os demais recursos (menos arriscados) ficam validados
+  // dentro de featureFlags/toolPermissions — ver bot-governance-service.js.
+  autoReplyEnabled Boolean @default(false)
+  toolsEnabled     Boolean @default(false)
+  ratingEnabled    Boolean @default(false)
+  featureFlags     Json    @default("{}")
+  toolPermissions  Json    @default("{}")
+
+  // Avaliação do atendimento (BotRating) — ver bot-rating-service.js.
+  ratingMessage         String? @db.Text
+  ratingFollowupMessage String? @db.Text
+  requestRatingOn       String  @default("BOT_COMPLETED")
+  requestRatingComment  Boolean @default(false)
+
+  archivedAt              DateTime?
+  // Flow Builder (Editor Visual): LEGACY = motor atual (intenções/etapas
+  // lineares/triagem), FLOW_BUILDER = executa o BotFlow ativo deste Bot
+  // (bot-visual-flow-engine.js). Padrão LEGACY: nenhum Bot existente muda.
+  executionMode           BotExecutionMode @default(LEGACY)
+  createdAt               DateTime                @default(now())
+  updatedAt               DateTime                @updatedAt
+  defaultCategory         Category?               @relation(fields: [defaultCategoryId], references: [id], onDelete: SetNull)
+  schedules               BotSchedule[]
+  holidays                BotHoliday[]
+  intents                 BotIntent[]
+  observations            BotObservation[]
+  conversationStates      ConversationBotState[]
+  learningSuggestions     BotLearningSuggestion[]
+  versions                BotVersion[]
+  ratings                 BotRating[]
+  agentFeedback           BotAgentFeedback[]
+  knowledgeSources        KnowledgeSource[]
+  knowledgeSourceAccesses KnowledgeSourceBot[]
+  handoffContexts         BotHandoffContext[]
+  suggestionFeedback      BotSuggestionFeedback[]
+  campaigns               Campaign[]
+  triageOptions           BotTriageOption[]
+  personality             BotPersonality?
+  visualFlows             BotFlow[]
+
+  @@index([status, channel])
+  @@index([defaultCategoryId])
+  @@index([type])
+}
+
+// Personalidade configurável por Bot ("Bot → Personalidade"). Define só
+// COMO o Bot responde (tom, estilo, comportamentos, tamanho preferido) —
+// nunca O QUE ele responde: isso continua vindo de KnowledgeSource
+// (Base de Conhecimento), Tools, Flow Engine e das respostas configuradas da
+// intenção (ver bot-response-service.js/bot-personality-service.js). Um Bot
+// sem este registro usa o preset padrão da Mibro Brasil (ver
+// DEFAULT_PERSONALITY em bot-personality-constants.js) — nunca fica "sem
+// personalidade nenhuma".
+enum BotPersonalityPreset {
+  TRIAGEM
+  SUPORTE
+  COMERCIAL
+  POS_VENDA
+  PERSONALIZADO
+}
+
+enum BotResponseLength {
+  SHORT
+  MEDIUM
+  LONG
+}
+
+model BotPersonality {
+  id     String @id @default(cuid())
+  botId  String @unique
+  bot    Bot    @relation(fields: [botId], references: [id], onDelete: Cascade)
+
+  // Preset usado como ponto de partida (item "Adicionar presets"). Continua
+  // editável depois de aplicado — vira PERSONALIZADO assim que um campo é
+  // alterado manualmente na tela (ver bot-personality-service.js), mas o
+  // valor aqui é só rótulo/rastreio, nunca reaplicado sozinho.
+  preset BotPersonalityPreset @default(PERSONALIZADO)
+
+  assistantName          String?
+  roleDescription        String?           @db.Text
+  tone                   String[]          @default([])
+  responseStyle          String[]          @default([])
+  mandatoryBehaviors     String[]          @default([])
+  forbiddenBehaviors     String[]          @default([])
+  additionalInstructions String?           @db.Text
+  responseLength         BotResponseLength @default(MEDIUM)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([preset])
+}
+
+// Opções/setores da lista interativa do Bot de Triagem (item "Fluxo /
+// Opções"). Cada linha é um item do menu do WhatsApp: rótulo + setor de
+// destino. `categoryId` usa onDelete: Restrict de propósito — nunca deixa
+// uma opção apontar para uma categoria apagada ("não permitir destino
+// inválido"); a categoria só pode ser removida depois de desvincular a
+// opção. Hoje só o Bot SYSTEM_TRIAGE usa este modelo, mas nada aqui é
+// exclusivo dele.
+model BotTriageOption {
+  id          String   @id @default(cuid())
+  botId       String
+  categoryId  String
+  label       String
+  description String?
+  enabled     Boolean  @default(true)
+  order       Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  bot         Bot      @relation(fields: [botId], references: [id], onDelete: Cascade)
+  category    Category @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+
+  @@unique([botId, categoryId])
+  @@index([botId, order])
+}
+
+model BotSchedule {
+  id        String   @id @default(cuid())
+  botId     String
+  dayOfWeek Int
+  enabled   Boolean  @default(true)
+  startTime String   @db.VarChar(5)
+  endTime   String   @db.VarChar(5)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  bot       Bot      @relation(fields: [botId], references: [id], onDelete: Cascade)
+
+  @@unique([botId, dayOfWeek])
+  @@index([botId])
+}
+
+model BotHoliday {
+  id        String   @id @default(cuid())
+  botId     String
+  date      String   @db.VarChar(10)
+  name      String
+  enabled   Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  bot       Bot      @relation(fields: [botId], references: [id], onDelete: Cascade)
+
+  @@unique([botId, date])
+  @@index([botId, date])
+}
+
+// BotIntent é, ao mesmo tempo, a "intenção" que o motor de interpretação já
+// usa (interpreter/decision/response) E a associação Bot<->GlobalIntent
+// (item 1 do plano de conhecimento/tools): quando globalIntentId está
+// preenchido, name/description/examples desta linha são a config
+// bot-específica (prioridade, resposta, categoria, ação) em cima do
+// significado/exemplos compartilhados em GlobalIntent. Bots antigos (sem
+// globalIntentId) continuam funcionando exatamente como antes — nada no
+// pipeline de interpretação foi alterado por este campo.
+model BotIntent {
+  id                   String                  @id @default(cuid())
+  botId                String
+  globalIntentId       String?
+  name                 String
+  description          String?
+  responseMessage      String?                 @db.Text
+  priority             Int                     @default(0)
+  active               Boolean                 @default(true)
+  fallbackAction       BotFallbackAction       @default(USE_BOT_FALLBACK)
+  categoryId           String?
+  // Nome de uma Tool (bot-tools/tool-registry.js) associada a esta intenção
+  // (item 8: "onde está meu pedido?" -> ACOMPANHAR_PEDIDO -> OrderTool). Só é
+  // efetivamente chamada se a Tool existir, estiver habilitada no registry E
+  // permitida em Bot.toolPermissions — ver bot-tool-orchestrator-service.js.
+  toolName             String?
+  createdAt            DateTime                @default(now())
+  updatedAt            DateTime                @updatedAt
+  bot                  Bot                     @relation(fields: [botId], references: [id], onDelete: Cascade)
+  globalIntent         GlobalIntent?           @relation(fields: [globalIntentId], references: [id], onDelete: SetNull)
+  category             Category?               @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  examples             BotIntentExample[]
+  conversationStates   ConversationBotState[]
+  activeInFlowStates   ConversationBotState[]  @relation("ConversationActiveFlowIntent")
+  feedbackObservations BotObservation[]        @relation("ObservationFeedbackIntent")
+  learningSuggestions  BotLearningSuggestion[]
+  ratings              BotRating[]
+  quickReplyLinks      QuickReplyIntent[]
+  knowledgeSources     KnowledgeSource[]
+  botHandoffContexts   BotHandoffContext[]
+  flowSteps            BotFlowStep[]
+
+  @@index([botId, active, priority])
+  @@index([categoryId])
+  @@index([globalIntentId])
+}
+
+// Flow Engine: conduz uma intenção por várias etapas em vez de responder uma
+// única vez (item "evoluir o Bot para conduzir atendimentos em múltiplas
+// etapas"). Uma BotIntent sem nenhuma etapa continua se comportando exatamente
+// como antes (responseMessage/toolName/Base de Conhecimento de intenção,
+// single-shot) — o motor só assume quando existem etapas ativas.
+//
+// `nextStepId`/`onSuccessStepId`/`onFailureStepId`/`gotoStepId` são
+// referências por id a outra BotFlowStep da MESMA intenção, guardadas como
+// String simples (sem FK/@relation) de propósito: evita ambiguidade de
+// múltiplas self-relations e cascade ao apagar uma etapa; a validade é
+// checada no serviço (bot-flow-service.js) na escrita e defensivamente na
+// execução (etapa-alvo ausente/inativa => encaminha para humano, nunca trava).
+model BotFlowStep {
+  id       String            @id @default(cuid())
+  intentId String
+  name     String
+  order    Int
+  action   BotFlowStepAction
+
+  // ASK_QUESTION
+  question  String? @db.Text
+  entityKey String?
+  required  Boolean @default(true)
+
+  // USE_KNOWLEDGE (associação direta; se vazio, cai para busca por
+  // intenção/palavra-chave via KnowledgeSourceProvider, igual ao fluxo atual)
+  knowledgeSourceId String?
+
+  // QUERY_TOOL (nome de uma Tool do registry — bot-tools/tool-registry.js;
+  // continua bloqueada se desativada/sem permissão, ver bot-tool-orchestrator-service.js)
+  toolName String?
+
+  // RESPOND (e mensagem de fechamento opcional para RESOLVED/HANDOFF_HUMAN)
+  responseMessage String? @db.Text
+
+  // Roteamento
+  nextStepId      String?
+  onSuccessStepId String?
+  onFailureStepId String?
+  gotoStepId      String?
+  maxAttempts     Int     @default(3)
+
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  intent          BotIntent        @relation(fields: [intentId], references: [id], onDelete: Cascade)
+  knowledgeSource KnowledgeSource? @relation(fields: [knowledgeSourceId], references: [id], onDelete: SetNull)
+
+  @@unique([intentId, order])
+  @@index([intentId, active])
+  @@index([knowledgeSourceId])
+}
+
+enum BotFlowStepAction {
+  ASK_QUESTION
+  USE_KNOWLEDGE
+  QUERY_TOOL
+  RESPOND
+  RESOLVED
+  HANDOFF_HUMAN
+  GOTO_STEP
+}
+
+enum FlowResolutionStatus {
+  IN_PROGRESS
+  RESOLVED
+  HANDED_OFF
+  ABANDONED
+}
+
+// Biblioteca Global de Intenções (item 1): significado + exemplos
+// compartilhados entre Bots. Cada BotIntent associada (via globalIntentId)
+// guarda a config bot-específica (prioridade/resposta/categoria/ação).
+// Remover a associação de um Bot (deletar a BotIntent) nunca apaga a
+// GlobalIntent nem os exemplos globais.
+model GlobalIntent {
+  id          String   @id @default(cuid())
+  name        String
+  description String?  @db.Text
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  examples         GlobalIntentExample[]
+  botIntents       BotIntent[]
+  knowledgeSources KnowledgeSource[]
+
+  @@index([active])
+}
+
+// Exemplos de treinamento compartilhados por todos os Bots associados à
+// GlobalIntent. Aprovação de sugestão de aprendizado (bot-learning-service.js)
+// adiciona exemplos aqui (deduplicado por texto normalizado) e propaga para
+// as BotIntentExample de cada Bot associado — ver global-intent-service.js.
+model GlobalIntentExample {
+  id             String       @id @default(cuid())
+  globalIntentId String
+  text           String       @db.Text
+  createdAt      DateTime     @default(now())
+  globalIntent   GlobalIntent @relation(fields: [globalIntentId], references: [id], onDelete: Cascade)
+
+  @@index([globalIntentId])
+}
+
+model BotIntentExample {
+  id        String    @id @default(cuid())
+  intentId  String
+  text      String    @db.Text
+  createdAt DateTime  @default(now())
+  intent    BotIntent @relation(fields: [intentId], references: [id], onDelete: Cascade)
+
+  @@index([intentId])
+}
+
+model BotObservation {
+  id                      String                 @id @default(cuid())
+  conversationId          String
+  messageId               String                 @unique
+  botId                   String?
+  botName                 String
+  channel                 Channel                @default(META)
+  withinHours             Boolean
+  intentId                String?
+  intentName              String?
+  matchedExample          String?
+  categoryId              String?
+  categoryName            String?
+  fallbackAction          BotFallbackAction?
+  confidence              Float?
+  action                  BotAction?
+  socialBehavior          BotSocialBehavior?
+  extractedEntities       Json?
+  // Rastreabilidade de Tools (item 11 - Observação): qual Tool teria sido
+  // chamada e o resultado, sem nunca executar a Tool de verdade quando
+  // mode === "OBSERVATION" — ver bot-tool-orchestrator-service.js.
+  toolName                String?
+  toolResult              Json?
+  // Item 19 (Observação): rastro do que o motor teria usado/decidido sem
+  // executar nada de verdade — mesma regra de "nunca inventar" das outras
+  // colunas acima, só que para conhecimento e IA externa.
+  knowledgeSourceId       String?
+  knowledgeSourceTitle    String?
+  calledExternalAi        Boolean                @default(false)
+  flowStepId              String?
+  flowResolutionStatus    String?
+  // Item 4/7 (troca de assunto / sugestão para o atendente): a resposta que
+  // o motor calcularia para esta mensagem (texto final, já resolvido por
+  // Flow Engine/Knowledge/Tool/fallback) — nunca enviada automaticamente;
+  // só fica disponível para o atendente usar via "Sugestão de resposta"
+  // quando um humano já assumiu a conversa. `topicSwitchDetected` registra
+  // quando a mensagem trocou de intenção no meio de um fluxo em andamento.
+  suggestedResponseText   String?                @db.Text
+  topicSwitchDetected     Boolean                @default(false)
+  provider                String?
+  mode                    String                 @default("OBSERVATION")
+  status                  String                 @default("OK")
+  errorCode               String?
+  feedback                BotObservationFeedback @default(UNREVIEWED)
+  feedbackIntentId        String?
+  feedbackByUserId        String?
+  feedbackAt              DateTime?
+  suggestedQuickReplyId   String?
+  suggestedQuickReplyName String?
+  createdAt               DateTime               @default(now())
+
+  conversation        Conversation            @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  message             Message                 @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  bot                 Bot?                    @relation(fields: [botId], references: [id], onDelete: SetNull)
+  category            Category?               @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  feedbackIntent      BotIntent?              @relation("ObservationFeedbackIntent", fields: [feedbackIntentId], references: [id], onDelete: SetNull)
+  feedbackByUser      User?                   @relation("ObservationFeedbackUser", fields: [feedbackByUserId], references: [id], onDelete: SetNull)
+  suggestedQuickReply QuickReply?             @relation("ObservationSuggestedQuickReply", fields: [suggestedQuickReplyId], references: [id], onDelete: SetNull)
+  suggestionFeedback  BotSuggestionFeedback[]
+
+  @@index([conversationId, createdAt])
+  @@index([botId, createdAt])
+  @@index([categoryId])
+  @@index([createdAt])
+  @@index([feedback])
+}
+
+// Item 8 (feedback do atendente sobre uma sugestão específica — distinto de
+// BotAgentFeedback, que é "o Bot ajudou nesta conversa?" de forma geral).
+// Uma linha por atendente+sugestão (observação); `finalResponseText` é
+// opcional (o que o atendente realmente enviou, quando informado pelo
+// cliente da UI ao dar o feedback) — nunca inferido automaticamente aqui.
+model BotSuggestionFeedback {
+  id                String   @id @default(cuid())
+  observationId     String
+  botId             String?
+  conversationId    String
+  userId            String
+  // `helpful` (👍/👎) e `action` (o que o atendente fez com a sugestão na UI:
+  // USED/EDITED/IGNORED) são sinais independentes — nem sempre os dois
+  // chegam juntos. Pelo menos um dos dois é sempre informado (validado no
+  // service, não aqui).
+  helpful           Boolean?
+  action            String?
+  finalResponseText String?  @db.Text
+  createdAt         DateTime @default(now())
+
+  observation  BotObservation @relation(fields: [observationId], references: [id], onDelete: Cascade)
+  bot          Bot?           @relation(fields: [botId], references: [id], onDelete: SetNull)
+  conversation Conversation   @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user         User           @relation("SuggestionFeedbackUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([observationId, userId])
+  @@index([botId, createdAt])
+  @@index([conversationId])
+}
+
+model ConversationBotState {
+  id                    String  @id @default(cuid())
+  conversationId        String  @unique
+  activeBotId           String?
+  lastIntentId          String?
+  lastConfidence        Float?
+  failedInterpretations Int     @default(0)
+  pendingClarification  Boolean @default(false)
+  extractedEntities     Json?
+
+  // Identidade: já se apresentou nesta sessão operacional?
+  introducedAt DateTime?
+
+  // Proteção contra loop (bot-loop-guard-service.js): mesma resposta
+  // repetida N vezes seguidas.
+  lastResponseHash        String?
+  lastResponseRepeatCount Int     @default(0)
+
+  // Proteção contra ping-pong de SWITCH_BOT numa janela de tempo.
+  switchCount           Int       @default(0)
+  switchWindowStartedAt DateTime?
+
+  // Pausa quando um humano assume a conversa (handoffAutoPause).
+  humanPausedAt DateTime?
+
+  // Flow Engine (item "ESTADO DA CONVERSA"): posição e memória do atendimento
+  // em múltiplas etapas em andamento nesta conversa. `currentFlowStepId` nulo
+  // = nenhum fluxo aguardando resposta agora (nova mensagem volta a ser
+  // interpretada normalmente); `activeFlowIntentId` fica preenchido mesmo
+  // depois de resolvido/encaminhado, só como registro do último fluxo rodado.
+  activeFlowIntentId     String?
+  currentFlowStepId      String?
+  flowCollectedEntities  Json?
+  flowAskedQuestions     Json?
+  flowAttemptedSolutions Json?
+  flowFailedSteps        Json?
+  flowStepAttempts       Json?
+  flowResolutionStatus   FlowResolutionStatus?
+  // Item "ESTADO DA CONVERSA" (fase de contexto/conhecimento/Tools):
+  // `pendingQuestion` guarda o texto exato da pergunta aguardando resposta
+  // (a mesma etapa ASK_QUESTION já identificada por currentFlowStepId — só
+  // evita uma consulta extra para exibir/auditar a pergunta em aberto).
+  // `lastBotAction` é a última ação decidida pelo motor (RESPOND,
+  // ASK_CLARIFICATION, QUERY_TOOL, HANDOFF_HUMAN...), fora ou dentro de um
+  // fluxo — nunca usado para decidir nada sozinho, só auditoria/depuração.
+  pendingQuestion        String?               @db.Text
+  lastBotAction          String?
+
+  // Item 6 (contexto de produto): memória de entidades em nível de
+  // CONVERSA, nunca de uma etapa específica — mescla (nunca sobrescreve) a
+  // cada turno, sobrevive à troca de intenção/fluxo e respeita o mesmo TTL
+  // de contextExpirationMinutes (resetada junto com os campos flow* quando a
+  // sessão expira). "tenho um GS Pro 2" -> "ele tem NFC?" não repergunta o
+  // modelo mesmo em uma intenção nova sem fluxo nenhum.
+  contextEntities Json?
+
+  // Contexto real / "Case State" (plano de Inteligência de Bots, item 4):
+  // memória estruturada do CASO em nível de CONVERSA — sintoma, produto,
+  // aplicativo, sistema operacional, perguntas já feitas, soluções já
+  // tentadas/falhadas, ferramentas usadas, pendências. Diferente de
+  // `contextEntities` (bag chave/valor genérico) e dos campos `flow*`
+  // (memória de UM fluxo específico, descartada quando ele termina): isto
+  // sobrevive à troca de intenção/fluxo, no mesmo ciclo de vida/TTL de
+  // `contextEntities` (resetado junto quando a sessão expira). Shape
+  // validado em bot-case-state-service.js, nunca lido cru por outro módulo.
+  caseState Json?
+
+  // Item 5 (múltiplas intenções): pilha de fluxos PAUSADOS por troca de
+  // assunto (item 4) — cada item é um snapshot igual ao persistido em
+  // flow*/pendingQuestion. Vazio/nulo = nenhum fluxo em espera. Nunca cresce
+  // sem limite: MAX_FLOW_STACK_DEPTH em bot-flow-service.js.
+  flowStack Json?
+
+  // Item 9 (avaliação do cliente): nunca pedir de novo na mesma conversa.
+  // `awaitingRatingScore` faz a PRÓXIMA mensagem do cliente ser interpretada
+  // como nota (1-5) em vez de reclassificada normalmente.
+  ratingRequestedAt   DateTime?
+  awaitingRatingScore Boolean   @default(false)
+
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+
+  conversation     Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  activeBot        Bot?         @relation(fields: [activeBotId], references: [id], onDelete: SetNull)
+  lastIntent       BotIntent?   @relation(fields: [lastIntentId], references: [id], onDelete: SetNull)
+  activeFlowIntent BotIntent?   @relation("ConversationActiveFlowIntent", fields: [activeFlowIntentId], references: [id], onDelete: SetNull)
+
+  @@index([activeBotId])
+  @@index([lastIntentId])
+  @@index([activeFlowIntentId])
+}
+
+// Rastreia se/quando uma conversa já foi analisada pelo motor de
+// aprendizado, para nunca reprocessar a mesma conversa (bot-learning-service.js).
+model ConversationLearningState {
+  id                     String    @id @default(cuid())
+  conversationId         String    @unique
+  lastAnalyzedAt         DateTime?
+  messageCountAtAnalysis Int       @default(0)
+  suggestionCount        Int       @default(0)
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+}
+
+// Sugestão gerada a partir da observação/análise de conversas reais. Nunca é
+// aplicada automaticamente: só passa a valer quando um humano aprova
+// (bot-learning-service.js). Conteúdo sempre sanitizado (sem dados pessoais).
+model BotLearningSuggestion {
+  id               String                      @id @default(cuid())
+  botId            String?
+  conversationId   String?
+  intentId         String?
+  type             BotLearningSuggestionType
+  status           BotLearningSuggestionStatus @default(PENDING)
+  title            String
+  suggestedContent String                      @db.Text
+  sourceCount      Int                         @default(1)
+  confidence       Float?
+  metadata         Json?
+  createdAt        DateTime                    @default(now())
+  updatedAt        DateTime                    @updatedAt
+  reviewedAt       DateTime?
+  reviewedByUserId String?
+
+  bot            Bot?          @relation(fields: [botId], references: [id], onDelete: SetNull)
+  conversation   Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  intent         BotIntent?    @relation(fields: [intentId], references: [id], onDelete: SetNull)
+  reviewedByUser User?         @relation("LearningSuggestionReviewer", fields: [reviewedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt])
+  @@index([botId, status])
+  @@index([type, status])
+}
+
+// Item 15 (Custo/uso de IA externa): um registro por chamada REAL a um
+// provider externo (nunca para o provider local, nunca para o simulador —
+// ver bot-ai-usage-service.js). Sem relação FK para Bot de propósito (mesmo
+// padrão solto de BotObservation.knowledgeSourceId): só estatística, nunca
+// trava a inserção se o Bot for removido depois.
+model BotAiUsage {
+  id           String   @id @default(cuid())
+  botId        String?
+  provider     String
+  reason       String
+  inputTokens  Int?
+  outputTokens Int?
+  createdAt    DateTime @default(now())
+
+  @@index([botId, createdAt])
+  @@index([provider, createdAt])
+}
+
+// Snapshot completo do Bot (campos + intenções + horários + featureFlags) em
+// um ponto no tempo. Criado sob demanda ("Salvar versão"/"Publicar"), nunca a
+// cada edição — ver bot-version-service.js. Restaurar cria uma versão NOVA a
+// partir de uma antiga; nunca apaga histórico.
+model BotVersion {
+  id                  String   @id @default(cuid())
+  botId               String
+  version             Int
+  label               String?
+  description         String?
+  snapshot            Json
+  restoredFromVersion Int?
+  createdAt           DateTime @default(now())
+  createdByUserId     String?
+  createdByName       String?
+
+  bot           Bot   @relation(fields: [botId], references: [id], onDelete: Cascade)
+  createdByUser User? @relation("BotVersionAuthor", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  @@unique([botId, version])
+  @@index([botId, createdAt])
+}
+
+// Avaliação do atendimento feita pelo CLIENTE (customerRating). Nunca gerada
+// pelo modo Observação — só existe quando o Bot realmente atendeu (ver
+// bot-rating-service.js). Uma conversa recebe no máximo uma avaliação.
+model BotRating {
+  id              String   @id @default(cuid())
+  botId           String
+  conversationId  String?  @unique
+  channel         Channel  @default(META)
+  score           Int
+  comment         String?  @db.Text
+  resolvedByBot   Boolean  @default(false)
+  intentId        String?
+  handoffOccurred Boolean  @default(false)
+  metadata        Json?
+  createdAt       DateTime @default(now())
+
+  bot          Bot           @relation(fields: [botId], references: [id], onDelete: Cascade)
+  conversation Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  intent       BotIntent?    @relation(fields: [intentId], references: [id], onDelete: SetNull)
+
+  @@index([botId, createdAt])
+  @@index([botId, score])
+  @@index([intentId])
+}
+
+// Feedback do ATENDENTE ("o bot ajudou?") após um handoff — sinal distinto
+// da avaliação do cliente (BotRating), nunca misturado com ela.
+model BotAgentFeedback {
+  id             String   @id @default(cuid())
+  conversationId String
+  botId          String?
+  userId         String
+  helpful        Boolean
+  comment        String?  @db.Text
+  createdAt      DateTime @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  bot          Bot?         @relation(fields: [botId], references: [id], onDelete: SetNull)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId, userId])
+  @@index([botId])
+}
+
+// Base de Conhecimento (item 3): separa "entender a intenção" (BotIntent/
+// GlobalIntent) de "saber a resposta" (KnowledgeSource). Sem RAG/semântica
+// nesta fase — busca por texto/tags/tipo/categoria/produto/intenção via
+// bot-knowledge/knowledge-provider.js, estruturado para permitir semântica
+// futura sem quebrar a API. Regras: sempre precisa de `source`; conteúdo
+// desativado ou expirado nunca é retornado/usado; nunca guardar segredos.
+model KnowledgeSource {
+  id             String              @id @default(cuid())
+  botId          String?
+  title          String
+  type           KnowledgeSourceType
+  source         String?
+  content        String?             @db.Text
+  // Item 3/4: dimensões de busca estruturada (texto/tags/intenção/produto/
+  // categoria), sem semântica ainda.
+  category       String?
+  product        String?
+  tags           String[]            @default([])
+  globalIntentId String?
+  intentId       String?
+  version        Int                 @default(1)
+  active         Boolean             @default(true)
+  validFrom      DateTime?
+  validUntil     DateTime?
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  bot          Bot?                 @relation(fields: [botId], references: [id], onDelete: SetNull)
+  globalIntent GlobalIntent?        @relation(fields: [globalIntentId], references: [id], onDelete: SetNull)
+  intent       BotIntent?           @relation(fields: [intentId], references: [id], onDelete: SetNull)
+  botAccesses  KnowledgeSourceBot[]
+  flowSteps    BotFlowStep[]
+
+  @@index([botId, active])
+  @@index([type])
+  @@index([globalIntentId])
+  @@index([intentId])
+  @@index([category])
+  @@index([product])
+}
+
+model KnowledgeSourceBot {
+  knowledgeSourceId String
+  botId             String
+  createdAt         DateTime        @default(now())
+  knowledgeSource   KnowledgeSource @relation(fields: [knowledgeSourceId], references: [id], onDelete: Cascade)
+  bot               Bot             @relation(fields: [botId], references: [id], onDelete: Cascade)
+
+  @@id([knowledgeSourceId, botId])
+  @@index([botId])
+}
+
+// Configuração global de automação de Bots — inclui o kill switch
+// ("Automação de Bots"). Registro único (id fixo "singleton").
+model BotGlobalSettings {
+  id                          String    @id @default("singleton")
+  automationEnabled           Boolean   @default(true)
+  observationEnabled          Boolean   @default(true)
+  learningEnabled             Boolean   @default(true)
+  ratingsEnabled              Boolean   @default(false)
+  rankingEnabled              Boolean   @default(false)
+  minimumRatingsForRanking    Int       @default(20)
+  // Item 9: liga/desliga a Biblioteca Global de Intenções como um todo
+  // (associar/reaproveitar GlobalIntent entre Bots). Desligar não apaga
+  // GlobalIntent/associações — só bloqueia novas operações de biblioteca.
+  intentLibraryEnabled        Boolean   @default(true)
+  killSwitchActivatedAt       DateTime?
+  killSwitchActivatedByUserId String?
+  updatedAt                   DateTime  @updatedAt
+  createdAt                   DateTime  @default(now())
+}
+
+// Contexto estruturado capturado no momento do HANDOFF_HUMAN (item 2).
+// Nunca guarda "chain-of-thought" do modelo — só fatos: intenção, confiança,
+// categoria, entidades extraídas, últimas informações relevantes, perguntas
+// já feitas e soluções já tentadas, mais um resumo curto (2-4 frases) gerado
+// de forma determinística a partir desses fatos (sem chamar IA).
+model BotHandoffContext {
+  id                   String    @id @default(cuid())
+  conversationId       String
+  botId                String?
+  botName              String?
+  intentId             String?
+  intentName           String?
+  confidence           Float?
+  category             String?
+  extractedEntities    Json?
+  lastRelevantInfo     String?   @db.Text
+  questionsAsked       Json?
+  solutionsTried       Json?
+  summary              String?   @db.Text
+  // Item 2 (handoff inteligente): quando o handoff aconteceu DENTRO de um
+  // Flow Engine, estes campos vêm do estado estruturado do fluxo (nunca do
+  // heurístico "mensagem termina com ?") — produto coletado, etapa em que
+  // parou, resultado e motivo, para o atendente nunca precisar reler a
+  // conversa inteira.
+  product              String?
+  flowResolutionStatus String?
+  currentStepName      String?
+  handoffReason        String?   @db.Text
+  createdAt            DateTime  @default(now())
+  // Retomada explícita do Bot ("[Retomar Bot]") — nunca automática.
+  resumedAt            DateTime?
+  resumedByUserId      String?
+
+  conversation  Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  bot           Bot?         @relation(fields: [botId], references: [id], onDelete: SetNull)
+  intent        BotIntent?   @relation(fields: [intentId], references: [id], onDelete: SetNull)
+  resumedByUser User?        @relation("HandoffResumedByUser", fields: [resumedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([conversationId, createdAt])
+  @@index([botId, createdAt])
+}
+
+// Liga uma resposta rápida a uma ou mais BotIntent existentes (nunca
+// duplica o texto dentro de cada intenção) — usado futuramente para
+// sugestão automática (Observação/IA).
+model QuickReplyIntent {
+  id           String   @id @default(cuid())
+  quickReplyId String
+  botIntentId  String
+  createdAt    DateTime @default(now())
+
+  quickReply QuickReply @relation(fields: [quickReplyId], references: [id], onDelete: Cascade)
+  botIntent  BotIntent  @relation(fields: [botIntentId], references: [id], onDelete: Cascade)
+
+  @@unique([quickReplyId, botIntentId])
+  @@index([botIntentId])
+}
+
+// Motor de IA / Fallback externo — chave de API de cada provider, gerenciada
+// pelo painel (nunca mais precisa editar env na VPS). GLOBAL, não por Bot:
+// cada Bot só escolhe QUAL provider/modelo usar (featureFlags.externalAiProvider/
+// externalAiModel), a credencial em si é uma única por provider para toda a
+// instalação. Cifrada com AES-256-GCM (mesmo padrão de ChannelAccount/
+// integration-secret-service.js), chave mestra separada
+// (AI_SECRETS_ENCRYPTION_KEY, nunca INTEGRATION_ENCRYPTION_KEY) — nunca
+// texto puro. `lastFour` é a única parte em claro (mesmo princípio de
+// "final do cartão"), só para exibição, nunca a chave inteira.
+model AiProviderCredential {
+  provider          String   @id // "ANTHROPIC" | "GEMINI" | "OPENAI"
+  encryptedKey      Bytes
+  encryptionIv      Bytes
+  encryptionAuthTag Bytes
+  lastFour          String
+  defaultModel      String?
+  updatedByUserId   String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  updatedByUser User? @relation("AiProviderCredentialUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: SetNull)
+}
+
+// IA LOCAL — configuração GLOBAL do PROVIDER, reutilizada por qualquer Bot
+// que escolha featureFlags.aiProvider = "LOCAL_QWEN" (ver bot-constants.js).
+// `baseUrl` aponta para o RAG SERVER local (rag_server.py, em C:\App
+// Whats\rag — dev: http://127.0.0.1:8992; produção: endereço privado
+// Tailscale do PC), NUNCA para o Ollama diretamente — é o RAG Server quem
+// fala com o Ollama, faz a busca na Knowledge (Info_Bots/ChromaDB/
+// nomic-embed-text) e devolve a resposta pronta. Não é credencial (não
+// guarda segredo), por isso não usa o mesmo cofre cifrado de
+// AiProviderCredential. Registro único ("singleton"), igual a
+// BotGlobalSettings. Nunca instanciar um provider por Bot: todos
+// compartilham esta mesma configuração.
+model LocalAiProviderSettings {
+  id              String    @id @default("singleton")
+  enabled         Boolean   @default(false)
+  baseUrl         String?
+  defaultModel    String    @default("qwen3:14b")
+  timeoutMs       Int       @default(45000)
+  maxConcurrency  Int       @default(1)
+  updatedByUserId String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  updatedByUser User? @relation("LocalAiProviderSettingsUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: SetNull)
+}
+
+// Registro de cada tentativa da IA local em MODO SHADOW/OBSERVAÇÃO (nunca
+// enviado ao cliente — ver bot-ai-shadow-service.js): o que a IA teria
+// respondido, com que Knowledge, em quanto tempo, e se seria elegível para
+// auto-resposta real (useAi/autoReplyEnabled continuam sendo dois controles
+// independentes — ver bot-ai-gate-service.js). Serve para validar qualidade
+// antes de ligar autoReplyEnabled de verdade num Bot.
+model BotAiShadowLog {
+  id             String   @id @default(cuid())
+  conversationId String
+  messageId      String?
+  botId          String
+  provider       String
+  model          String?
+  aiMode         String
+  action         String?
+  intent         String?
+  issue          String?
+  confidence     Float?
+  entities       Json?
+  knowledgeUsed  Json?
+  missingInformation Json?
+  responseText   String?  @db.Text
+  handoffCategory String?
+  handoffReason  String?
+  summary        String?  @db.Text
+  autoReplyEligible Boolean @default(false)
+  autoReplyBlockedReason String?
+  latencyMs      Int?
+  status         String
+  errorCode      String?
+  createdAt      DateTime @default(now())
+
+  @@index([botId, createdAt])
+  @@index([conversationId, createdAt])
+}
+
+enum BotExecutionMode {
+  LEGACY
+  FLOW_BUILDER
+}
+
+enum BotFlowStatus {
+  DRAFT
+  ACTIVE
+  INACTIVE
+}
+
+enum BotFlowExecutionStatus {
+  RUNNING
+  WAITING_CUSTOMER
+  WAITING_TIMER
+  HANDED_OFF
+  COMPLETED
+  FAILED
+}
+
+model BotFlow {
+  id              String        @id @default(cuid())
+  botId           String
+  name            String
+  description     String?
+  status          BotFlowStatus @default(DRAFT)
+  // Rascunho em edição — nunca executado em conversa real. Publicar copia
+  // isto para uma BotFlowVersion nova e aponta activeVersionId para ela.
+  draftGraph      Json
+  draftUpdatedAt  DateTime      @default(now())
+  activeVersionId String?       @unique
+  // Fluxo padrão do Bot quando o Bot está em executionMode FLOW_BUILDER.
+  isDefault       Boolean       @default(false)
+  archivedAt      DateTime?
+  createdByUserId String?
+  createdByName   String?
+  updatedByUserId String?
+  updatedByName   String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  bot           Bot                @relation(fields: [botId], references: [id], onDelete: Cascade)
+  activeVersion BotFlowVersion?    @relation("BotFlowActiveVersion", fields: [activeVersionId], references: [id], onDelete: SetNull)
+  versions      BotFlowVersion[]   @relation("BotFlowVersions")
+  executions    BotFlowExecution[]
+
+  @@index([botId, archivedAt])
+}
+
+model BotFlowVersion {
+  id                String   @id @default(cuid())
+  flowId            String
+  version           Int
+  graph             Json
+  label             String?
+  publishedByUserId String?
+  publishedByName   String?
+  createdAt         DateTime @default(now())
+
+  flow         BotFlow            @relation("BotFlowVersions", fields: [flowId], references: [id], onDelete: Cascade)
+  activeFor    BotFlow?           @relation("BotFlowActiveVersion")
+  executions   BotFlowExecution[]
+
+  @@unique([flowId, version])
+}
+
+model BotFlowExecution {
+  id             String                 @id @default(cuid())
+  conversationId String
+  botId          String
+  flowId         String
+  versionId      String
+  currentNodeKey String?
+  context        Json                   @default("{}")
+  status         BotFlowExecutionStatus @default(RUNNING)
+  // WAITING_TIMER: quando o worker deve retomar (bot-visual-flow-worker.js).
+  resumeAt       DateTime?
+  // Idempotência: última mensagem do cliente já consumida por esta execução.
+  lastMessageId  String?
+  // Contador otimista — toda transição faz updateMany(where step = N).
+  step           Int                    @default(0)
+  error          String?
+  startedAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+  finishedAt     DateTime?
+
+  conversation Conversation          @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  flow         BotFlow               @relation(fields: [flowId], references: [id], onDelete: Cascade)
+  version      BotFlowVersion        @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  logs         BotFlowExecutionLog[]
+
+  @@index([conversationId, status])
+  @@index([status, resumeAt])
+  @@index([flowId])
+}
+
+model BotFlowExecutionLog {
+  id          String   @id @default(cuid())
+  executionId String
+  flowId      String
+  version     Int
+  nodeKey     String
+  nodeType    String
+  // Entrada/saída sempre sanitizadas (sem headers/segredos) — ver
+  // sanitizeForLog em bot-visual-flow-engine.js.
+  input       Json?
+  output      Json?
+  branch      String?
+  result      String
+  error       String?
+  durationMs  Int?
+  createdAt   DateTime @default(now())
+
+  execution BotFlowExecution @relation(fields: [executionId], references: [id], onDelete: Cascade)
+
+  @@index([executionId, createdAt])
+}

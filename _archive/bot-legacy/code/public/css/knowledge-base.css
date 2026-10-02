@@ -1,0 +1,21 @@
+.knowledge-search{margin:0 10px 8px;padding:0 8px}
+.knowledge-search input{width:100%;height:34px;padding:0 9px;border:1px solid var(--line);border-radius:8px;color:var(--ink);background:var(--surface);font-size:10px}
+.knowledge-filters{margin:0 10px 8px;padding:0 8px;display:grid;gap:6px}
+.knowledge-filters select,.access-mode-label select{width:100%;height:34px;padding:0 9px;border:1px solid var(--line);border-radius:8px;color:var(--ink);background:var(--surface);font-size:9px}
+.knowledge-card-type{padding:3px 7px;border-radius:8px;color:#7a3418;background:var(--orange-soft);font-size:7px;font-weight:900}
+.knowledge-card-access{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.access-mode-label{display:grid;gap:5px;color:#626c76;font-size:8px;font-weight:800}
+.access-help{margin:9px 0 11px}
+.bot-access-checklist{max-height:310px;display:grid;gap:6px;overflow:auto}
+.bot-access-checklist label{display:grid;grid-template-columns:auto 1fr;align-items:center;gap:8px;padding:9px;border:1px solid var(--line);border-radius:9px;color:var(--ink);background:var(--panel);font-size:9px;font-weight:700}
+.bot-access-checklist label small{display:block;margin-top:2px;color:var(--muted);font-size:7px}
+.bot-access-checklist input{width:15px;height:15px;accent-color:var(--orange)}
+.bot-access-checklist.is-global{opacity:.48;pointer-events:none}
+.activation-note{margin:13px 0 0;padding:10px;border:1px solid #f1d0c5;border-radius:9px;color:#866d65;background:#fff8f5;font-size:8px;line-height:1.5}
+html[data-theme=dark] .activation-note{border-color:#4a3226;background:#2a1f1a;color:#d3a692}
+.knowledge-summary{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}
+.knowledge-summary span{padding:10px;border-radius:9px;color:var(--muted);background:var(--panel);font-size:8px;text-align:center}
+.knowledge-summary strong{display:block;margin-top:3px;color:var(--ink);font-size:11px}
+.summary-help{margin:12px 0 0;text-align:center}
+#knowledge-content{min-height:240px}
+@media(max-width:720px){.knowledge-summary{grid-template-columns:1fr}.knowledge-shell .bots-sidebar{max-height:390px}}

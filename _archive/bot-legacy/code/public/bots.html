@@ -1,0 +1,466 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#ef5b2a">
+  <link rel="icon" type="image/png" sizes="192x192" href="/assets/app-icon-192.png">
+  <title>Bots &bull; Central de Atendimento</title>
+  <script>try{const saved=localStorage.getItem("mibro-theme");document.documentElement.dataset.theme=saved||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light")}catch{}</script>
+  <link rel="stylesheet" href="/css/skeleton.css">
+  <link rel="stylesheet" href="/css/bots.css">
+  <script src="/js/feature-flags.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/"><img src="/assets/mibro-logo.png" alt="Mibro"><span></span><small>Gerenciamento de Bots</small></a>
+    <div class="phase-badge">FASE 4 &bull; GOVERNANÇA E AVALIAÇÃO</div>
+    <a class="back-link" href="/knowledge-base">Base de conhecimento</a>
+    <a class="back-link" href="/">&larr; Central</a>
+    <button id="theme-toggle" class="round-button" type="button" title="Alternar tema">&#9790;</button>
+    <button id="logout" class="user-button" type="button"><span id="current-user">Master</span> &bull; Sair</button>
+  </header>
+
+  <main class="bots-shell">
+    <aside class="bots-sidebar">
+      <div class="sidebar-heading">
+        <div><span>AUTOMAÇÕES</span><h1>Bots</h1><p id="bot-count">Carregando...</p></div>
+        <button id="new-bot" type="button">+ Novo</button>
+      </div>
+      <div id="bot-list" class="bot-list"><div class="skeleton-list"><div class="skeleton skeleton-card"></div><div class="skeleton skeleton-card"></div><div class="skeleton skeleton-card"></div></div></div>
+      <div class="safety-note"><b>Ambiente seguro</b><p>Ativar um Bot nesta fase não altera o webhook, a triagem atual ou os envios da Meta.</p></div>
+      <div class="global-settings-card">
+        <div class="global-settings-heading"><b>Configurações dos Bots</b><span id="global-automation-status" class="global-status-pill">...</span></div>
+        <p class="card-help">Controla automação, observação, aprendizado, avaliações e ranking para TODOS os Bots de uma vez.</p>
+        <label class="global-toggle-row"><span>Automação de Bots</span><input id="global-automation" type="checkbox" disabled aria-label="Estado da automação de Bots"></label>
+        <label class="global-toggle-row"><span>Modo Observação global</span><input id="global-observation" type="checkbox"></label>
+        <label class="global-toggle-row"><span>Aprendizado global</span><input id="global-learning" type="checkbox"></label>
+        <label class="global-toggle-row"><span>Avaliações globais</span><input id="global-ratings" type="checkbox"></label>
+        <label class="global-toggle-row"><span>Ranking de Bots</span><input id="global-ranking" type="checkbox"></label>
+        <label class="global-toggle-row"><span>Amostra mínima p/ ranking</span><input id="global-min-ratings" type="number" min="1" max="10000" style="width:56px"></label>
+        <button id="save-global-settings" type="button" class="global-save-button">Salvar configurações</button>
+        <button id="kill-switch" type="button" class="kill-switch-button">DESATIVAR AUTOMAÇÃO DOS BOTS</button>
+      </div>
+    </aside>
+
+    <section class="bots-workspace">
+      <nav class="workspace-tabs">
+        <button type="button" class="tab-button active" data-tab="config">Configuração</button>
+        <button type="button" class="tab-button" data-tab="observations">Observações</button>
+        <button type="button" class="tab-button" data-tab="learning">Aprendizado</button>
+        <button type="button" class="tab-button" data-tab="performance">Desempenho</button>
+        <button type="button" class="tab-button" data-tab="versions">Versões</button>
+        <button type="button" class="tab-button" data-tab="ranking">Ranking</button>
+        <button type="button" class="tab-button" data-tab="ai-keys">Chaves de IA</button>
+      </nav>
+
+      <div id="empty-state" class="empty-state">
+        <div>?</div><h2>Configure seus Bots</h2>
+        <p>Crie mensagens, horários e intenções. Tudo pode ser testado localmente antes de qualquer integração.</p>
+        <button id="empty-new-bot" type="button">Criar primeiro Bot</button>
+      </div>
+
+      <div id="editor" hidden>
+        <header class="editor-heading">
+          <div><span id="editor-eyebrow">BOT SELECIONADO</span><h2 id="editor-title">Novo Bot</h2><span id="system-bot-badge" class="mini-status SYSTEM" hidden>Bot do sistema</span><p id="editor-description">Configuração administrativa isolada do atendimento real.</p></div>
+          <div id="status-actions" class="status-actions" hidden>
+            <span id="status-badge" class="status-badge">RASCUNHO</span>
+            <a id="open-flow-builder" class="flow-builder-link" href="/flow-builder" title="Montar o fluxo deste Bot arrastando blocos">&#9638; Editor Visual</a>
+            <button type="button" data-status="DRAFT">Rascunho</button>
+            <button type="button" data-status="ACTIVE">Ativar</button>
+            <button type="button" data-status="PAUSED">Pausar</button>
+            <button id="archive-bot" class="danger" type="button">Arquivar</button>
+          </div>
+        </header>
+
+        <div class="editor-grid">
+          <form id="bot-form" class="card basic-card">
+            <div class="card-heading"><div><span>CONFIGURAÇÃO</span><h3>Identidade e mensagens</h3></div><button type="submit">Salvar Bot</button></div>
+            <div class="fields two-columns">
+              <label><span>Nome *</span><input id="bot-name" maxlength="100" required placeholder="Ex.: Atendimento inicial"></label>
+              <label><span>Canal *</span><select id="bot-channel" required>
+                <option value="META">WhatsApp (Meta)</option>
+                <option value="INSTAGRAM_DIRECT">Instagram Direct</option>
+                <option value="INSTAGRAM_COMMENTS">Instagram Comentários</option>
+                <option value="FACEBOOK_MESSENGER">Facebook Messenger</option>
+                <option value="FACEBOOK_COMMENTS">Facebook Comentários</option>
+                <option value="EMAIL">E-mail</option>
+                <option data-marketplace-feature hidden value="MERCADO_LIVRE">Mercado Livre</option>
+                <option data-marketplace-feature hidden value="TIKTOK_SHOP">TikTok Shop</option>
+                <option data-marketplace-feature hidden value="AMAZON_MARKETPLACE">Amazon Marketplace</option>
+                <option data-marketplace-feature hidden value="SHOPEE">Shopee</option>
+                <option data-marketplace-feature hidden value="SHEIN_MARKETPLACE">SHEIN Marketplace</option>
+                <option value="GOOGLE_REVIEWS">Google Reviews / Perfil da Empresa</option>
+                <option value="RECLAME_AQUI">Reclame Aqui</option>
+              </select></label>
+              <div class="full">
+                <span>Canais adicionais (opcional)</span>
+                <p class="card-help" style="margin:2px 0 8px">Além do canal principal acima — não afeta o canal já configurado.</p>
+                <div id="bot-channels-checklist" class="bot-channels-checklist"></div>
+              </div>
+              <label class="full"><span>Descrição</span><input id="bot-description" maxlength="500" placeholder="Objetivo deste Bot"></label>
+              <label><span>Timezone *</span><input id="bot-timezone" maxlength="100" value="America/Sao_Paulo" required></label>
+              <label><span>Categoria padrão</span><select id="bot-category"></select></label>
+              <label><span>Confiança baixa</span><input id="bot-low-confidence" type="number" min="0" max="1" step="0.01" value="0.55" required></label>
+              <label><span>Confiança alta</span><input id="bot-high-confidence" type="number" min="0" max="1" step="0.01" value="0.8" required></label>
+              <label class="full"><span>Mensagem inicial *</span><textarea id="bot-initial" maxlength="4000" required placeholder="Mensagem apresentada no início do fluxo"></textarea></label>
+              <label class="full"><span>Mensagem fora do horário *</span><textarea id="bot-outside" maxlength="4000" required placeholder="Resposta usada fora do horário configurado"></textarea></label>
+              <label class="full"><span>Mensagem de fallback *</span><textarea id="bot-fallback" maxlength="4000" required placeholder="Resposta usada quando nenhuma intenção corresponder"></textarea></label>
+            </div>
+
+            <div id="triage-only-fields" class="fields-heading" hidden>TRIAGEM</div>
+            <div id="triage-only-config" class="fields two-columns" hidden>
+              <label class="full"><span>Mensagem após encaminhamento</span><textarea id="bot-handoff" maxlength="4000" placeholder="Enviada ao cliente depois de escolher o setor. Use {{saudacao_virgula}} e {{categoria}}."></textarea></label>
+              <label class="checkbox"><input id="bot-run-new" type="checkbox" checked><span>Executar em nova conversa</span></label>
+              <label class="checkbox"><input id="bot-run-reopen" type="checkbox" checked><span>Executar quando conversa finalizada reabrir</span></label>
+              <p class="card-help full">Nas mensagens acima você pode usar: <code>{{saudacao}}</code>, <code>{{saudacao_virgula}}</code>, <code>{{horario}}</code> (calculado a partir da disponibilidade abaixo) e, só no encaminhamento, <code>{{categoria}}</code>.</p>
+            </div>
+
+            <div class="fields-heading">IDENTIDADE</div>
+            <div class="fields two-columns">
+              <label class="checkbox"><input id="bot-introduce" type="checkbox"><span>Apresentar-se pelo nome</span></label>
+              <label class="checkbox"><input id="bot-reintroduce" type="checkbox" checked><span>Apresentar novamente em nova sessão</span></label>
+              <label class="full"><span>Mensagem de apresentação (use {{botName}})</span><textarea id="bot-presentation" maxlength="500" placeholder="Olá! Eu sou a {{botName}}, assistente virtual da Mibro."></textarea></label>
+            </div>
+
+            <div class="fields-heading">RECURSOS DO BOT</div>
+            <div class="fields two-columns feature-flags-grid">
+              <label class="checkbox critical-toggle"><input id="flag-autoReplyEnabled" type="checkbox"><span>Resposta automática (envia mensagem real)</span></label>
+              <label class="checkbox critical-toggle"><input id="flag-toolsEnabled" type="checkbox"><span>Uso de Tools</span></label>
+              <label class="checkbox critical-toggle"><input id="flag-ratingEnabled" type="checkbox"><span>Avaliação do atendimento</span></label>
+              <label class="checkbox"><input id="flag-interpretationEnabled" type="checkbox" checked><span>Interpretação inteligente</span></label>
+              <label class="checkbox"><input id="flag-conversationalBehaviorEnabled" type="checkbox" checked><span>Comportamento conversacional</span></label>
+              <label class="checkbox"><input id="flag-contextEnabled" type="checkbox" checked><span>Contexto de conversa</span></label>
+              <label class="checkbox"><input id="flag-autoSwitchEnabled" type="checkbox" checked><span>Troca automática de Bot</span></label>
+              <label class="checkbox"><input id="flag-observationEnabled" type="checkbox" checked><span>Observação</span></label>
+              <label class="checkbox"><input id="flag-learningEnabled" type="checkbox" checked><span>Aprendizado supervisionado</span></label>
+              <label class="checkbox"><input id="flag-agentSuggestionsEnabled" type="checkbox" checked><span>Sugestões de resposta ao atendente</span></label>
+              <label class="checkbox"><input id="flag-knowledgeSuggestionsEnabled" type="checkbox" checked><span>Sugestões de conhecimento</span></label>
+              <label class="checkbox"><input id="flag-knowledgeBaseEnabled" type="checkbox"><span>Base de conhecimento</span></label>
+              <label class="checkbox"><input id="flag-handoffAutoPauseEnabled" type="checkbox" checked><span>Pausar ao humano assumir</span></label>
+              <label class="checkbox"><input id="flag-autoFinalizeOnResolution" type="checkbox"><span>Preparar finalização após resposta confirmada (Flow Engine)</span></label>
+              <label class="checkbox"><input id="flag-externalAiFallbackEnabled" type="checkbox"><span>IA externa como fallback (quando a confiança local for baixa)</span></label>
+              <label><span>Máx. mensagens de contexto</span><input id="flag-contextMaxMessages" type="number" min="1" max="30" value="10"></label>
+              <label><span>Expiração de contexto (min)</span><input id="flag-contextExpirationMinutes" type="number" min="5" max="1440" value="120"></label>
+              <label><span>Máx. trocas de Bot / janela</span><input id="flag-maxSwitchesPerWindow" type="number" min="1" max="20" value="3"></label>
+              <label><span>Janela de troca de Bot (min)</span><input id="flag-switchWindowMinutes" type="number" min="1" max="180" value="10"></label>
+              <label><span>Limiar de confiança para IA externa</span><input id="flag-externalAiThreshold" type="number" min="0" max="1" step="0.05" value="0.7"></label>
+              <label><span>Provider de IA externa</span><select id="flag-externalAiProvider"></select></label>
+              <label><span>Modelo (opcional)</span><input id="flag-externalAiModel" maxlength="120" placeholder="Vazio = modelo padrão do provider"></label>
+            </div>
+          </form>
+
+          <section class="card requires-bot">
+            <div class="card-heading"><div><span>MOTOR DE IA</span><h3>Fallback externo</h3></div><button id="test-ai-provider" type="button">Testar conexão</button></div>
+            <p class="card-help">A IA externa só é chamada quando "IA externa como fallback" está ligada acima e a confiança local fica abaixo do limiar — nunca em toda mensagem. Sem credencial configurada, o Bot continua funcionando normalmente só com o motor local. O status abaixo é sempre do provider selecionado à esquerda. Para cadastrar/trocar a chave de API, use a aba "Chaves de IA" (configuração global, só Master).</p>
+            <div id="ai-provider-status" class="metrics-strip"></div>
+          </section>
+
+          <form id="rating-config-form" class="card requires-bot">
+            <div class="card-heading"><div><span>QUALIDADE</span><h3>Avaliação do atendimento</h3></div><button type="submit">Salvar avaliação</button></div>
+            <div class="fields two-columns">
+              <label class="checkbox"><input id="rating-enabled" type="checkbox"><span>Ativar avaliação</span></label>
+              <label class="checkbox"><input id="rating-request-comment" type="checkbox"><span>Solicitar comentário</span></label>
+              <label><span>Solicitar avaliação quando</span><select id="rating-request-on">
+                <option value="BOT_COMPLETED">Atendimento do Bot for concluído</option>
+                <option value="BEFORE_HANDOFF">Antes de handoff humano</option>
+                <option value="MANUAL">Somente manualmente</option>
+                <option value="NEVER">Nunca</option>
+              </select></label>
+              <label class="full"><span>Mensagem de avaliação</span><textarea id="rating-message" maxlength="500" placeholder="Antes de finalizar, como você avalia meu atendimento?"></textarea></label>
+              <label class="full"><span>Mensagem após avaliação</span><textarea id="rating-followup" maxlength="500" placeholder="Obrigado pela sua avaliação!"></textarea></label>
+            </div>
+          </form>
+
+          <form id="schedule-form" class="card requires-bot">
+            <div class="card-heading"><div><span>DISPONIBILIDADE</span><h3>Horários</h3></div><button type="submit">Salvar horários</button></div>
+            <p class="card-help">Sem horários salvos, o simulador considera o Bot disponível.</p>
+            <div id="schedule-list" class="schedule-list"></div>
+          </form>
+
+          <section id="triage-holidays-card" class="card requires-bot" hidden>
+            <div class="card-heading"><div><span>DISPONIBILIDADE</span><h3>Feriados</h3></div><button id="new-holiday" type="button">+ Feriado</button></div>
+            <p class="card-help">Nestas datas, a Triagem Inicial usa a mensagem de fora do horário durante todo o dia.</p>
+            <div id="holiday-list" class="holiday-list"></div>
+            <form id="holiday-form" class="intent-form" hidden>
+              <input id="holiday-original-date" type="hidden">
+              <div class="fields two-columns">
+                <label><span>Data *</span><input id="holiday-date" type="date" required></label>
+                <label><span>Nome *</span><input id="holiday-name" maxlength="100" required placeholder="Ex.: Natal"></label>
+                <label class="checkbox full"><input id="holiday-enabled" type="checkbox" checked><span>Feriado ativo</span></label>
+              </div>
+              <div class="form-actions"><button id="cancel-holiday" type="button">Cancelar</button><button type="submit">Salvar feriado</button></div>
+            </form>
+          </section>
+
+          <section id="triage-options-card" class="card requires-bot" hidden>
+            <div class="card-heading"><div><span>TRIAGEM</span><h3>Opções de triagem</h3></div><button id="new-triage-option" type="button">+ Opção</button></div>
+            <p class="card-help">Setores mostrados na lista do WhatsApp, na ordem abaixo. Cada opção precisa de uma categoria de destino válida.</p>
+            <div id="triage-option-list" class="intent-list"></div>
+            <form id="triage-option-form" class="intent-form" hidden>
+              <input id="triage-option-id" type="hidden">
+              <div class="fields two-columns">
+                <label><span>Rótulo *</span><input id="triage-option-label" maxlength="24" required placeholder="Ex.: Suporte"></label>
+                <label><span>Ordem</span><input id="triage-option-order" type="number" step="10" value="0"></label>
+                <label class="full"><span>Descrição (opcional)</span><input id="triage-option-description" maxlength="200"></label>
+                <label class="full"><span>Categoria de destino *</span><select id="triage-option-category" required></select></label>
+                <label class="checkbox"><input id="triage-option-enabled" type="checkbox" checked><span>Opção habilitada</span></label>
+              </div>
+              <div class="form-actions"><button id="cancel-triage-option" type="button">Cancelar</button><button type="submit">Salvar opção</button></div>
+            </form>
+          </section>
+
+          <section class="card requires-bot intentions-card">
+            <div class="card-heading"><div><span>REGRAS</span><h3>Intenções</h3></div><button id="new-intent" type="button">+ Intenção</button></div>
+            <div id="intent-list" class="intent-list"></div>
+            <form id="intent-form" class="intent-form" hidden>
+              <input id="intent-id" type="hidden">
+              <div class="fields two-columns">
+                <label><span>Nome *</span><input id="intent-name" maxlength="100" required></label>
+                <label><span>Prioridade</span><input id="intent-priority" type="number" min="-1000" max="1000" value="0" required></label>
+                <label class="full"><span>Descrição</span><input id="intent-description" maxlength="500"></label>
+                <label class="full"><span>Resposta</span><textarea id="intent-response" maxlength="4000" placeholder="Se ficar vazia, será usado o fallback do Bot"></textarea></label>
+                <label><span>Ação</span><select id="intent-action"><option value="USE_BOT_FALLBACK">Usar fallback</option><option value="TRANSFER_TO_CATEGORY">Transferir para categoria</option><option value="TRANSFER_TO_HUMAN">Transferir para humano</option></select></label>
+                <label><span>Categoria</span><select id="intent-category"></select></label>
+                <label class="full"><span>Exemplos - um por linha</span><textarea id="intent-examples" maxlength="10000" placeholder="segunda via&#10;acompanhar pedido"></textarea></label>
+                <label class="checkbox"><input id="intent-active" type="checkbox" checked><span>Intenção ativa</span></label>
+              </div>
+              <div class="form-actions"><button id="cancel-intent" type="button">Cancelar</button><button type="submit">Salvar intenção</button></div>
+            </form>
+
+            <div id="intent-flow-section" hidden>
+              <div class="card-heading"><div><span>ATENDIMENTO</span><h3>Fluxo de atendimento</h3></div><button id="new-flow-step" type="button">+ Etapa</button></div>
+              <p class="card-help">Opcional: configure etapas para esta intenção conduzir o atendimento em várias mensagens (perguntar, consultar conhecimento/ferramenta, resolver ou encaminhar) em vez de responder uma única vez. Sem etapas, a intenção continua respondendo como hoje.</p>
+              <div id="flow-step-list" class="intent-list"></div>
+
+              <form id="flow-step-form" class="intent-form" hidden>
+                <input id="flow-step-id" type="hidden">
+                <div class="fields two-columns">
+                  <label><span>Nome da etapa *</span><input id="flow-step-name" maxlength="120" required></label>
+                  <label><span>Ação *</span><select id="flow-step-action" required>
+                    <option value="ASK_QUESTION">Perguntar (ASK_QUESTION)</option>
+                    <option value="USE_KNOWLEDGE">Usar Base de Conhecimento (USE_KNOWLEDGE)</option>
+                    <option value="QUERY_TOOL">Consultar Tool (QUERY_TOOL)</option>
+                    <option value="RESPOND">Responder (RESPOND)</option>
+                    <option value="RESOLVED">Marcar como resolvido (RESOLVED)</option>
+                    <option value="HANDOFF_HUMAN">Encaminhar para humano (HANDOFF_HUMAN)</option>
+                    <option value="GOTO_STEP">Ir para outra etapa (GOTO_STEP)</option>
+                  </select></label>
+
+                  <label class="full flow-field-question"><span>Pergunta</span><input id="flow-step-question" maxlength="1000" placeholder="Ex.: Qual é o modelo do seu produto?"></label>
+                  <label class="flow-field-question"><span>Entidade/campo esperado</span><input id="flow-step-entity-key" maxlength="60" placeholder="Ex.: modelo"></label>
+                  <label class="checkbox flow-field-question"><input id="flow-step-required" type="checkbox" checked><span>Resposta obrigatória</span></label>
+
+                  <label class="full flow-field-knowledge"><span>Conhecimento associado</span><select id="flow-step-knowledge"><option value="">Buscar automaticamente pela intenção</option></select></label>
+
+                  <label class="full flow-field-tool"><span>Tool associada (futura)</span><select id="flow-step-tool"><option value="">Nenhuma</option></select></label>
+
+                  <label class="full flow-field-response"><span>Mensagem</span><textarea id="flow-step-response" maxlength="4000" placeholder="Texto enviado nesta etapa"></textarea></label>
+
+                  <label class="full flow-field-goto"><span>Ir para a etapa</span><select id="flow-step-goto"><option value="">Selecione</option></select></label>
+
+                  <label><span>Próxima etapa</span><select id="flow-step-next"><option value="">Encerra o fluxo</option></select></label>
+                  <label><span>Ação em sucesso</span><select id="flow-step-on-success"><option value="">Usar "Próxima etapa"</option></select></label>
+                  <label><span>Ação em falha</span><select id="flow-step-on-failure"><option value="">Usar "Próxima etapa"</option></select></label>
+                  <label><span>Máximo de tentativas</span><input id="flow-step-max-attempts" type="number" min="1" max="10" value="3"></label>
+                  <label class="checkbox"><input id="flow-step-active" type="checkbox" checked><span>Etapa ativa</span></label>
+                </div>
+                <div class="form-actions"><button id="cancel-flow-step" type="button">Cancelar</button><button type="submit">Salvar etapa</button></div>
+              </form>
+            </div>
+          </section>
+
+          <form id="simulator-form" class="card requires-bot simulator-card">
+            <div class="card-heading"><div><span>TESTE SEGURO</span><h3>Simulador</h3></div><span class="local-only">NÃO ENVIA MENSAGENS</span></div>
+
+            <div id="ai-status-bar" class="ai-status-bar" hidden>
+              <span class="ai-status-item">IA Local <b id="ai-status-local" class="status-dot">-</b></span>
+              <span class="ai-status-item">RAG <b id="ai-status-rag" class="status-dot">-</b></span>
+              <span class="ai-status-item">Knowledge <b id="ai-status-knowledge" class="status-dot">-</b></span>
+              <span class="ai-status-item">Modelo <b id="ai-status-model">-</b></span>
+            </div>
+
+            <div id="simulator-transcript" class="simulator-transcript"></div>
+            <label class="simulator-input"><span>Mensagem do cliente</span><textarea id="simulator-message" required placeholder="Digite uma mensagem para testar o fluxo"></textarea></label>
+            <label class="checkbox simulate-autoreply-toggle">
+              <input id="simulate-autoreply" type="checkbox">
+              <span>Simular auto-resposta ativada <small>(só nesta simulação — não altera o Bot real)</small></span>
+            </label>
+            <div class="simulator-actions">
+              <button type="submit">Executar simulação</button>
+              <button id="simulator-clear" type="button">Limpar conversa</button>
+            </div>
+            <div id="simulator-result" class="simulator-result"><p>O resultado da simulação aparecerá aqui.</p></div>
+            <div id="simulator-flow-info" class="simulator-result" hidden></div>
+
+            <div id="ai-preview" class="ai-preview" hidden>
+              <div class="ai-preview-mode">
+                <b>MODO: DRY RUN</b>
+                <span>Nenhuma mensagem real será enviada.</span>
+              </div>
+
+              <div class="ai-preview-answer-card">
+                <span class="ai-preview-label">Resposta sugerida (IA local)</span>
+                <p id="ai-preview-answer"></p>
+              </div>
+
+              <div id="ai-preview-decision" class="ai-preview-decision">
+                <b id="ai-preview-decision-title">—</b>
+                <span id="ai-preview-decision-reason"></span>
+                <small id="ai-preview-decision-code"></small>
+              </div>
+
+              <div class="result-grid ai-preview-grid">
+                <span>Ação<strong id="ai-preview-action">-</strong></span>
+                <span>Confiança<strong id="ai-preview-confidence">-</strong></span>
+                <span>Necessita humano<strong id="ai-preview-needs-human">-</strong></span>
+                <span>Motivo interno<strong id="ai-preview-reason-code">-</strong></span>
+                <span>Intenção<strong id="ai-preview-intent">-</strong></span>
+                <span>Produto<strong id="ai-preview-product">-</strong></span>
+                <span>Provider / Modelo<strong id="ai-preview-provider">-</strong></span>
+                <span>Tempo<strong id="ai-preview-timing">-</strong></span>
+              </div>
+
+              <details id="ai-preview-knowledge" class="ai-preview-knowledge">
+                <summary>Conhecimento utilizado (<span id="ai-preview-knowledge-count">0</span>)</summary>
+                <ol id="ai-preview-knowledge-list"></ol>
+              </details>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <div id="observations-panel" class="observations-panel" hidden>
+        <div class="card observations-card">
+          <div class="card-heading"><div><span>COMPARAÇÃO</span><h3>Observações do motor de interpretação</h3></div></div>
+          <p class="card-help">Mensagens reais recebidas pela Meta, interpretadas em paralelo à triagem — nada aqui é enviado ao cliente.</p>
+          <div id="obs-metrics" class="metrics-strip"></div>
+          <div class="observations-toolbar">
+            <select id="obs-filter-bot"><option value="">Todos os Bots</option></select>
+            <input id="obs-filter-intent" type="text" placeholder="Filtrar por intenção">
+            <select id="obs-filter-confidence">
+              <option value="">Qualquer confiança</option>
+              <option value="0.8">Alta (&ge; 80%)</option>
+              <option value="0.55">Média (&ge; 55%)</option>
+              <option value="0">Baixa (todas)</option>
+            </select>
+            <input id="obs-filter-from" type="date" aria-label="De">
+            <input id="obs-filter-to" type="date" aria-label="Até">
+            <button id="obs-refresh" type="button">Filtrar</button>
+          </div>
+          <div class="observations-table-wrap">
+            <table class="observations-table">
+              <thead><tr>
+                <th>Data</th><th>Contato</th><th>Mensagem</th><th>Bot</th><th>Intenção</th>
+                <th>Confiança</th><th>Ação</th><th>Categoria</th><th>Status</th>
+              </tr></thead>
+              <tbody id="obs-table-body"></tbody>
+            </table>
+          </div>
+          <div id="obs-empty" class="intent-empty" hidden>Nenhuma observação registrada ainda.</div>
+        </div>
+      </div>
+
+      <div id="learning-panel" class="observations-panel" hidden>
+        <div class="card observations-card">
+          <div class="card-heading"><div><span>APRENDIZADO SUPERVISIONADO</span><h3>Sugestões geradas a partir de conversas reais</h3></div></div>
+          <p class="card-help">Nada aqui altera um Bot sozinho. Toda sugestão exige aprovação humana antes de virar exemplo, intenção ou resposta configurada.</p>
+          <div id="learning-metrics" class="metrics-strip"></div>
+          <div class="observations-toolbar">
+            <input id="analyze-conversation-id" type="text" placeholder="ID da conversa finalizada">
+            <button id="analyze-conversation" type="button">Analisar conversa</button>
+            <select id="learning-filter-status">
+              <option value="PENDING">Pendentes</option>
+              <option value="APPROVED">Aprovadas</option>
+              <option value="REJECTED">Rejeitadas</option>
+              <option value="EDITED">Editadas</option>
+              <option value="">Todas</option>
+            </select>
+            <select id="learning-filter-type">
+              <option value="">Todos os tipos</option>
+              <option value="INTENT_EXAMPLE">Novo exemplo</option>
+              <option value="NEW_INTENT">Nova intenção</option>
+              <option value="RESPONSE">Resposta recomendada</option>
+              <option value="CLARIFICATION">Esclarecimento</option>
+              <option value="KNOWLEDGE">Conhecimento</option>
+              <option value="ENTITY_PATTERN">Padrão de entidade</option>
+            </select>
+            <button id="learning-refresh" type="button">Filtrar</button>
+          </div>
+          <div id="learning-list" class="learning-list"></div>
+          <div id="learning-empty" class="intent-empty" hidden>Nenhuma sugestão nesse filtro.</div>
+        </div>
+      </div>
+
+      <div id="performance-panel" class="observations-panel" hidden>
+        <div class="card observations-card">
+          <div class="card-heading"><div><span>DESEMPENHO</span><h3>Métricas do Bot selecionado</h3></div></div>
+          <p class="card-help">Interpretação (Observação) e atendimento real (Avaliação) aparecem separados — Observação nunca conta como atendimento.</p>
+          <div class="observations-toolbar">
+            <select id="perf-period">
+              <option value="">Tudo</option>
+              <option value="today">Hoje</option>
+              <option value="7d">7 dias</option>
+              <option value="30d">30 dias</option>
+              <option value="90d">90 dias</option>
+            </select>
+            <button id="perf-refresh" type="button">Atualizar</button>
+          </div>
+          <div class="metrics-strip" id="perf-interpretation-metrics"></div>
+          <div class="metrics-strip" id="perf-attendance-metrics"></div>
+          <div class="rating-distribution" id="perf-distribution"></div>
+          <div class="card-heading"><div><span>INTENÇÕES</span><h3>Desempenho por intenção</h3></div></div>
+          <div class="observations-table-wrap">
+            <table class="observations-table">
+              <thead><tr><th>Intenção</th><th>Acionamentos</th><th>Confiança média</th><th>Handoffs</th><th>Avaliações</th><th>Nota média</th></tr></thead>
+              <tbody id="intent-metrics-body"></tbody>
+            </table>
+          </div>
+          <div class="card-heading"><div><span>QUALIDADE</span><h3>Possíveis conflitos entre intenções</h3></div></div>
+          <div id="intent-conflicts-list" class="learning-list"></div>
+
+          <div class="card-heading"><div><span>QUALIDADE</span><h3>Métricas e alertas</h3></div></div>
+          <p class="card-help">Handoffs, troca de assunto, sugestões usadas pelo atendente e alertas simples de qualidade — nunca automações destrutivas.</p>
+          <div class="metrics-strip" id="quality-metrics"></div>
+          <div id="quality-alerts" class="learning-list"></div>
+        </div>
+      </div>
+
+      <div id="versions-panel" class="observations-panel" hidden>
+        <div class="card observations-card">
+          <div class="card-heading"><div><span>VERSIONAMENTO</span><h3>Versões do Bot selecionado</h3></div></div>
+          <p class="card-help">Restaurar cria uma versão NOVA a partir da antiga — o histórico nunca é apagado.</p>
+          <div class="observations-toolbar">
+            <input id="version-label" type="text" placeholder="Rótulo (opcional)" maxlength="100">
+            <input id="version-description" type="text" placeholder="Descrição (opcional)" maxlength="500">
+            <button id="save-version" type="button">Salvar versão</button>
+          </div>
+          <div id="versions-list" class="learning-list"></div>
+          <div id="versions-empty" class="intent-empty" hidden>Nenhuma versão salva ainda.</div>
+        </div>
+      </div>
+
+      <div id="ranking-panel" class="observations-panel" hidden>
+        <div class="card observations-card">
+          <div class="card-heading"><div><span>QUALIDADE</span><h3>Ranking dos Bots</h3></div></div>
+          <p class="card-help">Score equilibrado (média Bayesiana): pondera nota média e volume de avaliações contra a amostra mínima configurada — não é só "maior nota média".</p>
+          <div id="ranking-disabled-notice" class="intent-empty" hidden>Ranking desativado nas configurações globais.</div>
+          <div id="ranking-list" class="learning-list"></div>
+          <div id="ranking-excluded-heading" class="card-heading" hidden><div><span>DADOS INSUFICIENTES</span><h3>Abaixo da amostra mínima</h3></div></div>
+          <div id="ranking-excluded-list" class="learning-list"></div>
+        </div>
+      </div>
+
+      <div id="ai-keys-panel" class="observations-panel" hidden>
+        <div class="card observations-card">
+          <div class="card-heading"><div><span>MOTOR DE IA</span><h3>Chaves de API dos providers</h3></div></div>
+          <p class="card-help">Configuração GLOBAL (vale para todos os Bots) — só uma conta Master pode ver/alterar. A chave nunca é salva em texto puro nem devolvida inteira: só os últimos 4 caracteres aparecem aqui. Cada Bot escolhe qual provider/modelo usar na aba "Configuração"; a credencial em si é única por provider.</p>
+          <div id="ai-keys-list" class="learning-list"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+  <div id="toast" class="toast" role="status"></div>
+  <script src="/js/bots.js"></script>
+</body>
+</html>
