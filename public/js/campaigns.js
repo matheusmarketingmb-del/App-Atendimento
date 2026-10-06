@@ -41,9 +41,49 @@ function metricTile(value, label) {
 
 // ===== Lista de campanhas =====
 
+// ===== Multiempresa (item 35/36): empresa primeiro; depois só números,
+// templates (WABA do número), setores e Bots daquela empresa. =====
+state.companyFilter = "ALL";
+state.accounts = [];
+
+async function loadCampaignAccounts() {
+  await window.CompanyContext.load();
+  state.accounts = await api("/api/campaign-accounts").catch(() => []);
+  const companyIds = new Set(state.accounts.map((account) => account.companyId));
+  const companies = window.CompanyContext.companies.filter((company) => companyIds.has(company.id));
+  $("#campaign-company").innerHTML = (companies.length > 1 ? `<option value="">Selecione a empresa</option>` : "")
+    + companies.map((company) => `<option value="${escapeHtml(company.id)}">${escapeHtml(company.name)}</option>`).join("");
+  window.CompanyContext.mountFilter($("#campaign-company-filter"), (slug) => { state.companyFilter = slug; loadCampaigns().catch((error) => toast(error.message, true)); }, "ALL");
+}
+
+function renderCampaignAccounts(companyId, selectedId = "") {
+  const accounts = state.accounts.filter((account) => account.companyId === companyId);
+  $("#campaign-account").innerHTML = (accounts.length > 1 ? `<option value="">Selecione o número</option>` : "")
+    + accounts.map((account) => `<option value="${escapeHtml(account.id)}">${escapeHtml(account.name)}${account.displayNumber ? ` · ${escapeHtml(account.displayNumber)}` : ""}</option>`).join("");
+  if (selectedId && accounts.some((account) => account.id === selectedId)) $("#campaign-account").value = selectedId;
+  // Setor e Bot de resposta: só os da empresa (o backend também valida).
+  [...$("#campaign-reply-category").options].forEach((option) => { option.hidden = Boolean(option.value) && option.dataset.companyId !== companyId; });
+  [...$("#campaign-reply-bot").options].forEach((option) => { option.hidden = Boolean(option.value) && option.dataset.companyId !== companyId; });
+}
+
+async function applyCampaignCompany(companyId, accountId = "") {
+  $("#campaign-company").value = companyId || "";
+  renderCampaignAccounts(companyId, accountId);
+  await ensureTemplatesLoaded();
+}
+
+$("#campaign-company").addEventListener("change", () => {
+  $("#campaign-reply-category").value = ""; $("#campaign-reply-bot").value = "";
+  applyCampaignCompany($("#campaign-company").value).catch((error) => toast(error.message, true));
+});
+$("#campaign-account").addEventListener("change", () => ensureTemplatesLoaded().catch((error) => toast(error.message, true)));
+
 async function loadCampaigns() {
   const status = $("#campaign-status-filter").value;
-  state.campaigns = await api(`/api/campaigns${status ? `?status=${status}` : ""}`);
+  const params = new URLSearchParams();
+  if (status) params.set("status", status);
+  if (state.companyFilter !== "ALL") params.set("company", state.companyFilter);
+  state.campaigns = await api(`/api/campaigns${params.toString() ? `?${params}` : ""}`);
   renderCampaignList();
 }
 
@@ -51,8 +91,8 @@ function renderCampaignList() {
   $("#campaign-count").textContent = `${state.campaigns.length} campanha(s)`;
   $("#campaign-list").innerHTML = state.campaigns.length ? state.campaigns.map((campaign) => `
     <button class="bot-card ${state.selected?.id === campaign.id ? "active" : ""}" type="button" data-campaign-id="${escapeHtml(campaign.id)}">
-      <header><b>${escapeHtml(campaign.name)}</b><span class="mini-status ${campaign.status}">${statusLabels[campaign.status]}</span></header>
-      <small>${escapeHtml(campaign.templateName)}</small>
+      <header><b>${escapeHtml(campaign.name)}</b>${window.CompanyContext.badge(campaign.company)}<span class="mini-status ${campaign.status}">${statusLabels[campaign.status]}</span></header>
+      <small>${escapeHtml(campaign.templateName)}${campaign.channelAccount ? ` · ${escapeHtml(campaign.channelAccount.name)}` : ""}</small>
       <div class="bot-meta"><span>${campaign._count.contacts} contato(s)</span></div>
     </button>
   `).join("") : '<div class="intent-empty">Nenhuma campanha criada.</div>';
@@ -83,8 +123,14 @@ async function ensureTemplatesLoaded() {
   select.innerHTML = `<option value="">Carregando templates...</option>`;
   status.textContent = "";
   retry.hidden = true;
+  const accountId = $("#campaign-account").value;
+  if (!accountId) {
+    select.innerHTML = `<option value="">Selecione a empresa e o número de envio</option>`;
+    setTemplatesAvailability(false, "Selecione primeiro a empresa e o número de WhatsApp: os templates são os da conta (WABA) desse número.");
+    return;
+  }
   try {
-    const response = await api("/api/campaign-templates");
+    const response = await api(`/api/campaign-templates?channelAccountId=${encodeURIComponent(accountId)}`);
     const templates = Array.isArray(response) ? response : [];
     state.templates = templates;
     if (!templates.length) {
@@ -113,13 +159,13 @@ async function ensureCategoriesAndBotsLoaded() {
   try {
     state.categories = await api("/api/categories");
     $("#campaign-reply-category").innerHTML = `<option value="">Sem categoria automática</option>${state.categories.map((category) => (
-      `<option value="${escapeHtml(category.id)}">${escapeHtml(category.name)}</option>`
+      `<option value="${escapeHtml(category.id)}" data-company-id="${escapeHtml(category.companyId || "")}">${escapeHtml(category.name)}${category.company ? ` — ${escapeHtml(category.company.displayName)}` : ""}</option>`
     )).join("")}`;
   } catch { /* categorias são opcionais nesta tela */ }
   try {
     state.bots = await api("/api/bots");
     $("#campaign-reply-bot").innerHTML = `<option value="">Nenhum</option>${state.bots.map((bot) => (
-      `<option value="${escapeHtml(bot.id)}">${escapeHtml(bot.name)}</option>`
+      `<option value="${escapeHtml(bot.id)}" data-company-id="${escapeHtml(bot.companyId || "")}">${escapeHtml(bot.name)}${bot.company ? ` — ${escapeHtml(bot.company.displayName)}` : ""}</option>`
     )).join("")}`;
   } catch { /* bots são opcionais nesta tela */ }
 }
@@ -199,6 +245,9 @@ function fillEditor(campaign) {
 
 async function selectCampaign(id) {
   state.selected = await api(`/api/campaigns/${id}`);
+  // Empresa de campanha existente é fixa; templates do número dela.
+  $("#campaign-company").disabled = true;
+  await applyCampaignCompany(state.selected.companyId, state.selected.channelAccountId || "");
   renderEditor();
   await Promise.all([loadMetrics(), loadContacts()]);
 }
@@ -230,6 +279,10 @@ function startNewCampaign() {
   $("#status-actions").hidden = true;
   document.querySelectorAll(".requires-bot").forEach((element) => { element.hidden = true; });
   resetEditor();
+  $("#campaign-company").disabled = false;
+  const preferred = window.CompanyContext.companies.find((company) => company.slug === state.companyFilter);
+  const onlyOption = $("#campaign-company").options.length === 1 ? $("#campaign-company").options[0].value : "";
+  applyCampaignCompany(preferred?.id || onlyOption).catch((error) => toast(error.message, true));
   renderCampaignList();
 }
 
@@ -242,6 +295,8 @@ $("#campaign-form").addEventListener("submit", async (event) => {
   const template = selectedTemplate();
   if (!template) { toast("Selecione um template aprovado.", true); return; }
   const payload = {
+    ...(state.selected ? {} : { companyId: $("#campaign-company").value || undefined }),
+    channelAccountId: $("#campaign-account").value || undefined,
     name: $("#campaign-name").value,
     category: $("#campaign-category").value || null,
     description: $("#campaign-description").value || null,
@@ -518,6 +573,7 @@ $("#logout").addEventListener("click", async () => {
   try {
     const status = await api("/api/auth/status");
     $("#current-user").textContent = status.user.name;
+    await loadCampaignAccounts();
     await Promise.all([ensureTemplatesLoaded(), ensureCategoriesAndBotsLoaded(), loadCampaigns()]);
   } catch (error) { toast(error.message, true); }
 })();

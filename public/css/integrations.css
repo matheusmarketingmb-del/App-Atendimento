@@ -80,4 +80,9 @@
 .access-user-option { display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--line); border-radius:12px; cursor:pointer; }
 .access-user-option input { width:18px; height:18px; }
 .access-user-option span { display:grid; gap:2px; }
-.access-user-option small { color:var(--muted); }
+.access-user-option small { color:var(--muted); }/* Multiempresa: empresa das novas conexões e da conta. */
+.integrations-company-bar{display:flex;align-items:center;gap:10px;margin:0 0 14px;color:var(--muted);font-size:12px;font-weight:700}
+.integrations-company-bar select{min-height:32px;border:1px solid var(--line);border-radius:8px;color:var(--ink);background:var(--surface)}
+.account-row-main .company-badge{margin-left:2px}
+.account-dialog-company{display:flex;align-items:center;gap:6px;margin:4px 0 10px;color:var(--muted);font-size:12px}
+.company-select-field{display:grid;gap:4px;margin-bottom:10px}

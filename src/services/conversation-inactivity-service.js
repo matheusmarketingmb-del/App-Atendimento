@@ -1,14 +1,14 @@
 const prisma = require("../database/prisma");
-const { getConversationSettings } = require("./conversation-settings-service");
+const { settingsPlan } = require("./conversation-settings-service");
 
 const defaultInactivityMinutes = 1440;
 
 async function finalizeInactiveConversations({
-  now = new Date(), inactivityMinutes = defaultInactivityMinutes, client = prisma,
+  now = new Date(), inactivityMinutes = defaultInactivityMinutes, client = prisma, scope = {},
 } = {}) {
   const cutoff = new Date(now.getTime() - inactivityMinutes * 60 * 1000);
   const candidates = await client.conversation.findMany({
-    where: { status: { not: "FINALIZADO" }, lastMessageAt: { lte: cutoff } },
+    where: { ...scope, status: { not: "FINALIZADO" }, lastMessageAt: { lte: cutoff } },
     select: {
       id: true,
       messages: {
@@ -57,13 +57,15 @@ function startInactivityMonitor({
       // Configurações → Conversas (item 11): o default de produção vem do
       // singleton central, não mais de uma constante fixa. `inactivityMinutes`
       // continua aceito como override explícito (usado pelos testes).
-      let minutes = inactivityMinutes;
-      if (minutes === undefined) {
-        const settings = await getConversationSettings();
-        if (!settings.autoFinalizationEnabled) return;
-        minutes = settings.autoFinalizationMinutes;
+      // Multiempresa: cada empresa com configuração própria usa a dela.
+      const plan = inactivityMinutes !== undefined
+        ? [{ settings: { autoFinalizationEnabled: true, autoFinalizationMinutes: inactivityMinutes }, scope: {} }]
+        : await settingsPlan();
+      let finalized = 0;
+      for (const { settings, scope } of plan) {
+        if (!settings.autoFinalizationEnabled) continue;
+        finalized += await finalizeInactiveConversations({ inactivityMinutes: settings.autoFinalizationMinutes, scope });
       }
-      const finalized = await finalizeInactiveConversations({ inactivityMinutes: minutes });
       if (finalized) onChange?.(finalized);
     } catch (error) {
       console.error("Erro ao finalizar conversas inativas:", error);

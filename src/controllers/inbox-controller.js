@@ -1,8 +1,10 @@
+const prisma = require("../database/prisma");
 const inbox = require("../services/inbox-service");
 const { resolveMedia } = require("../services/media-storage-service");
 const { finalizeConversation, sendAudio, sendDocument, sendImage, sendText, sendVideo } = require("../services/message-service");
 const inboxEvents = require("../realtime/inbox-events");
 const authorization = require("../services/authorization-service");
+const whatsappAccounts = require("../services/whatsapp-account-service");
 const internalChat = require("../services/internal-chat-service");
 const { customerServiceWindowFrom, getCustomerServiceWindow, listApprovedTemplates, sendApprovedTemplate, templatesConfigured } = require("../services/meta-template-service");
 const { createOutboundConversation, createOutboundEmail, listOutboundChannels } = require("../services/outbound-conversation-service");
@@ -72,12 +74,33 @@ function createInboxController(channel) {
         return res.json(result);
       } catch (error) { return next(error); }
     },
+    // Multiempresa: templates da WABA do número da conversa (?conversationId)
+    // ou do número escolhido (?channelAccountId) — nunca de outra empresa.
     async templates(req, res, next) {
-      try { return res.json(await listApprovedTemplates(channel)); }
-      catch (error) { return next(error); }
+      try {
+        let account;
+        if (req.query.conversationId) {
+          await authorization.assertCanViewConversation(req.user, String(req.query.conversationId));
+          const conversation = await prisma.conversation.findUnique({ where: { id: String(req.query.conversationId) }, include: { channelAccount: true } });
+          account = await whatsappAccounts.accountForConversation(conversation);
+        } else {
+          account = await whatsappAccounts.resolveAccountForUser(req.user, {
+            channelAccountId: req.query.channelAccountId || null, company: req.query.company || null,
+          });
+        }
+        return res.json(await listApprovedTemplates(channel, account));
+      } catch (error) { return next(error); }
     },
-    async metaStatus(_req, res) {
-      return res.json({ templatesConfigured: templatesConfigured() });
+    async metaStatus(req, res, next) {
+      try {
+        const accounts = await whatsappAccounts.listAccountsForUser(req.user);
+        return res.json({ templatesConfigured: accounts.some((account) => account.templatesConfigured) || templatesConfigured() });
+      } catch (error) { return next(error); }
+    },
+    // Números de WhatsApp (e empresa de cada um) acessíveis ao usuário.
+    async whatsappAccounts(req, res, next) {
+      try { return res.json(await whatsappAccounts.listAccountsForUser(req.user, { company: req.query.company || null })); }
+      catch (error) { return next(error); }
     },
     async outboundChannels(req, res, next) {
       try { return res.json(await listOutboundChannels(req.user)); }
@@ -103,12 +126,12 @@ function createInboxController(channel) {
           values: req.body.values && typeof req.body.values === "object" ? req.body.values : {},
           sentByUserId: req.user.id, channel,
         });
-        inboxEvents.publish();
+        inboxEvents.publishForConversation(req.params.id);
         return res.status(201).json(result.message);
       } catch (error) { return next(error); }
     },
     async summary(req, res, next) {
-      try { return res.json(await inbox.getConversationSummary(req.user)); }
+      try { return res.json(await inbox.getConversationSummary(req.user, { company: req.query.company })); }
       catch (error) { return next(error); }
     },
     async alerts(req, res, next) {
@@ -118,7 +141,7 @@ function createInboxController(channel) {
     async update(req, res, next) {
       try {
         const conversation = await inbox.updateConversation(req.params.id, req.body, req.user);
-        inboxEvents.publish();
+        inboxEvents.publishForConversation(req.params.id);
         return res.json(conversation);
       }
       catch (error) { return next(error); }
@@ -173,7 +196,7 @@ async signalTransfer(req, res, next) {
     async deleteConversation(req, res, next) {
       try {
         const result = await inbox.deleteConversation(req.params.id, req.user);
-        inboxEvents.publish();
+        inboxEvents.publishForConversation(req.params.id);
         return res.json(result);
       } catch (error) { return next(error); }
     },
@@ -182,14 +205,14 @@ async signalTransfer(req, res, next) {
         const conversation = await inbox.updateConversation(req.params.id, {
           assignedUserId: req.user.id,
         }, req.user);
-        inboxEvents.publish();
+        inboxEvents.publishForConversation(req.params.id);
         return res.json(conversation);
       } catch (error) { return next(error); }
     },
     async pinConversation(req, res, next) {
       try {
         const result = await inbox.setConversationPinned(req.params.id, req.body, req.user);
-        inboxEvents.publish();
+        inboxEvents.publishForConversation(req.params.id);
         return res.json(result);
       } catch (error) { return next(error); }
     },
@@ -200,7 +223,7 @@ async signalTransfer(req, res, next) {
   channel,
   viewer: req.user,
 });
-        inboxEvents.publish();
+        inboxEvents.publishForConversation(req.params.id);
         return res.json(result);
       }
       catch (error) { return next(error); }
@@ -211,7 +234,7 @@ async signalTransfer(req, res, next) {
       try {
         await authorization.assertCanViewConversation(req.user, req.params.id);
         const result = await sendText({ conversationId: req.params.id, text, sentByUserId: req.user.id, channel });
-        inboxEvents.publish();
+        inboxEvents.publishForConversation(req.params.id);
         return res.status(201).json(result.message);
       } catch (error) { return next(error); }
     },
@@ -224,7 +247,7 @@ async signalTransfer(req, res, next) {
           mimeType: req.file.mimetype, fileName: req.file.originalname,
           caption: req.body.caption, sentByUserId: req.user.id, channel,
         });
-        inboxEvents.publish();
+        inboxEvents.publishForConversation(req.params.id);
         return res.status(201).json(result.message);
       } catch (error) { return next(error); }
     },
@@ -237,7 +260,7 @@ async signalTransfer(req, res, next) {
           mimeType: req.file.mimetype, fileName: req.file.originalname,
           caption: req.body.caption, sentByUserId: req.user.id, channel,
         });
-        inboxEvents.publish();
+        inboxEvents.publishForConversation(req.params.id);
         return res.status(201).json(result.message);
       } catch (error) { return next(error); }
     },
@@ -249,7 +272,7 @@ async signalTransfer(req, res, next) {
           conversationId: req.params.id, buffer: req.file.buffer, fileName: req.file.originalname,
           durationMs: req.body.durationMs, sentByUserId: req.user.id, channel,
         });
-        inboxEvents.publish();
+        inboxEvents.publishForConversation(req.params.id);
         return res.status(201).json(result.message);
       } catch (error) { return next(error); }
     },
@@ -262,7 +285,7 @@ async signalTransfer(req, res, next) {
           mimeType: req.file.mimetype, fileName: req.file.originalname,
           caption: req.body.caption, sentByUserId: req.user.id, channel,
         });
-        inboxEvents.publish();
+        inboxEvents.publishForConversation(req.params.id);
         return res.status(201).json(result.message);
       } catch (error) { return next(error); }
     },
@@ -276,7 +299,7 @@ async signalTransfer(req, res, next) {
           conversationId: req.params.id, actorUserId: req.user.id,
           action: "STATUS_CHANGED", details: { from: result.previousStatus, to: "FINALIZADO" },
         });
-        inboxEvents.publish();
+        inboxEvents.publishForConversation(req.params.id);
         return res.json(result);
       } catch (error) { return next(error); }
     },
@@ -303,7 +326,7 @@ async signalTransfer(req, res, next) {
       } catch (error) { return next(error); }
     },
     async categories(req, res, next) {
-      try { return res.json(await inbox.listCategories(req.user)); }
+      try { return res.json(await inbox.listCategories(req.user, { company: req.query.company })); }
       catch (error) { return next(error); }
     },
     async categoryVisibility(req, res, next) {

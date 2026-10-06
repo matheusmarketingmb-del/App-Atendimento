@@ -45,7 +45,7 @@ test("painel de Integrações: CRUD nunca devolve segredo em texto puro e respei
 
     const plaintextSecret = await fetch(`${base}/api/integrations/accounts`, {
       method: "POST", headers: { "Content-Type": "application/json", Cookie: cookie },
-      body: JSON.stringify({
+      body: JSON.stringify({ companyId: "cmp_mibro",
         channel: "TIKTOK_SHOP", name: "Teste Integração segredo público",
         config: { appKey: "public", appSecret: "nao-pode-ficar-no-json" },
       }),
@@ -55,7 +55,7 @@ test("painel de Integrações: CRUD nunca devolve segredo em texto puro e respei
 
     const created = await fetch(`${base}/api/integrations/accounts`, {
       method: "POST", headers: { "Content-Type": "application/json", Cookie: cookie },
-      body: JSON.stringify({
+      body: JSON.stringify({ companyId: "cmp_mibro",
         channel: "MERCADO_LIVRE", name: "Teste Integração ML",
         secrets: { accessToken: "APP_USR-super-secreto-123456" },
         config: { sellerId: "123" },

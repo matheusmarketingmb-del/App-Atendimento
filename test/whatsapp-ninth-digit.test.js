@@ -44,8 +44,8 @@ test("resposta sem o 9 cai na conversa iniciada com o 9 (e vice-versa)", async (
 });
 
 test("quando os dois contatos já existem, cada ID continua no próprio contato", async () => {
-  const a = await prisma.contact.create({ data: { channel: "META", externalId: exactPairWithNine, phone: exactPairWithNine, name: "Par A" } });
-  const b = await prisma.contact.create({ data: { channel: "META", externalId: exactPairWithoutNine, phone: exactPairWithoutNine, name: "Par B" } });
+  const a = await prisma.contact.create({ data: { companyId: "cmp_mibro", channel: "META", externalId: exactPairWithNine, phone: exactPairWithNine, name: "Par A" } });
+  const b = await prisma.contact.create({ data: { companyId: "cmp_mibro", channel: "META", externalId: exactPairWithoutNine, phone: exactPairWithoutNine, name: "Par B" } });
   const resultA = await findOrCreateMetaConversation({ contactExternalId: exactPairWithNine, phone: exactPairWithNine });
   const resultB = await findOrCreateMetaConversation({ contactExternalId: exactPairWithoutNine, phone: exactPairWithoutNine });
   assert.equal(resultA.contact.id, a.id);

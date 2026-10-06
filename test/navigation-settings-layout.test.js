@@ -56,7 +56,10 @@ test("alertas preservam o rótulo recolhível e piscam apenas com conversa não 
 });
 
 test("contadores da navegação usam a lista global sem acompanhar filtros ativos", () => {
-  assert.match(appJs, /MARKETPLACE_UI_ENABLED \? Promise\.resolve\(null\) : api\("\/api\/conversations"\)/);
+  // Multiempresa: os contadores seguem só o filtro de EMPRESA (escolha de
+  // contexto, não de fila) — status/categoria/etc. continuam fora.
+  assert.match(appJs, /MARKETPLACE_UI_ENABLED \? Promise\.resolve\(null\) : api\(`\/api\/conversations\$\{companyOnly\}`\)/);
+  assert.match(appJs, /const companyOnly = company \? `\?company=\$\{encodeURIComponent\(company\)\}` : "";/);
   assert.match(appJs, /summaryConversations\.reduce/);
 });
 

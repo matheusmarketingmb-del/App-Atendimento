@@ -47,11 +47,11 @@ test("assinatura de push: cria, lista só as próprias, e bloqueia dono errado",
 
     await fetch(`${base}/api/admin/users`, {
       method: "POST", headers: { "Content-Type": "application/json", Cookie: masterCookie },
-      body: JSON.stringify({ name: "Atendente Push HTTP", email: "push-http-agent@teste.local", password: "senha-segura-123", role: "ATENDENTE" }),
+      body: JSON.stringify({ companyAccess: [{ companyId: "cmp_mibro" }], name: "Atendente Push HTTP", email: "push-http-agent@teste.local", password: "senha-segura-123", role: "ATENDENTE" }),
     });
     await fetch(`${base}/api/admin/users`, {
       method: "POST", headers: { "Content-Type": "application/json", Cookie: masterCookie },
-      body: JSON.stringify({ name: "Outro Push HTTP", email: "push-http-other@teste.local", password: "senha-segura-123", role: "ATENDENTE" }),
+      body: JSON.stringify({ companyAccess: [{ companyId: "cmp_mibro" }], name: "Outro Push HTTP", email: "push-http-other@teste.local", password: "senha-segura-123", role: "ATENDENTE" }),
     });
     const agentLogin = await fetch(`${base}/api/auth/login`, {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -114,11 +114,11 @@ test("assinatura de push: cria, lista só as próprias, e bloqueia dono errado",
 });
 
 test("notifyIncomingMessage envia push só para o atendente responsável e limpa subscription expirada", async () => {
-  const user = await prisma.user.create({ data: {
+  const user = await prisma.user.create({ data: { companyAccess: { create: { companyId: "cmp_mibro" } },
     name: "Atendente Push Direto", email: "push-http-agent-direto@teste.local", role: "ATENDENTE",
   } });
-  const contact = await prisma.contact.create({ data: { externalId: "push-test-contact-1", phone: "5599999999999", name: "Cliente Push" } });
-  const conversation = await prisma.conversation.create({ data: { contactId: contact.id, assignedUserId: user.id, status: "EM_ATENDIMENTO" } });
+  const contact = await prisma.contact.create({ data: { companyId: "cmp_mibro", externalId: "push-test-contact-1", phone: "5599999999999", name: "Cliente Push" } });
+  const conversation = await prisma.conversation.create({ data: { companyId: "cmp_mibro", contactId: contact.id, assignedUserId: user.id, status: "EM_ATENDIMENTO" } });
   const subscription = await prisma.pushSubscription.create({ data: {
     userId: user.id, endpoint: "https://push.example.com/direct-1", p256dh: "p", auth: "a", deviceLabel: "Teste",
   } });
@@ -135,7 +135,8 @@ test("notifyIncomingMessage envia push só para o atendente responsável e limpa
     assert.equal(calls.length, 1);
     assert.equal(calls[0].target.endpoint, subscription.endpoint);
     assert.match(calls[0].payload.url, new RegExp(conversation.id));
-    assert.equal(calls[0].payload.title, "Cliente Push");
+    // Multiempresa (item 43): notificação de cliente sempre diz a empresa.
+    assert.equal(calls[0].payload.title, "MIBRO · Cliente Push");
 
     // subscription inválida/expirada (410 Gone) é removida automaticamente
     webpush.sendNotification = async () => { const error = new Error("gone"); error.statusCode = 410; throw error; };
@@ -153,8 +154,8 @@ test("notifyIncomingMessage envia push só para o atendente responsável e limpa
 });
 
 test("conversa sem atendente responsável não dispara push (evita ruído amplo)", async () => {
-  const contact = await prisma.contact.create({ data: { externalId: "push-test-contact-2", phone: "5599999999998", name: "Cliente Sem Atendente" } });
-  const conversation = await prisma.conversation.create({ data: { contactId: contact.id, status: "NOVO" } });
+  const contact = await prisma.contact.create({ data: { companyId: "cmp_mibro", externalId: "push-test-contact-2", phone: "5599999999998", name: "Cliente Sem Atendente" } });
+  const conversation = await prisma.conversation.create({ data: { companyId: "cmp_mibro", contactId: contact.id, status: "NOVO" } });
   const message = await prisma.message.create({ data: {
     conversationId: conversation.id, direction: "RECEBIDA", status: "RECEBIDA", type: "text",
     text: "Primeira mensagem", occurredAt: new Date(),

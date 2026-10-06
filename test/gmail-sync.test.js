@@ -29,7 +29,7 @@ test.before(async () => {
   process.env.INTEGRATION_ENCRYPTION_KEY = "11".repeat(32);
   await prisma.integrationGlobalSettings.upsert({ where: { id: "singleton" }, update: { newChannelsEnabled: true }, create: { id: "singleton", newChannelsEnabled: true } });
   await prisma.channelAccount.deleteMany({ where: { name: accountName } });
-  account = await prisma.channelAccount.create({ data: {
+  account = await prisma.channelAccount.create({ data: { companyId: "cmp_mibro",
     channel: "EMAIL", name: accountName, status: "CONNECTED", enabled: true,
     oauthProvider: "GOOGLE", tokenExpiresAt: new Date(Date.now() + 3600000),
     config: { provider: "GMAIL", emailAddress: "central@example.com" },

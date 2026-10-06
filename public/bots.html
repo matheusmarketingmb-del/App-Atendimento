@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="theme-color" content="#ef5b2a">
+  <meta name="theme-color" content="#16171a">
   <link rel="icon" type="image/png" sizes="192x192" href="/assets/app-icon-192.png">
   <title>Bots &bull; Central de Atendimento</title>
   <script>try{const saved=localStorage.getItem("mibro-theme");document.documentElement.dataset.theme=saved||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light")}catch{}</script>
@@ -14,7 +14,7 @@
 </head>
 <body>
   <header class="topbar">
-    <a class="brand" href="/"><img src="/assets/mibro-logo.png" alt="Mibro"><span></span><small>Bots &bull; Editor Visual</small></a>
+    <a class="brand" href="/"><img src="/assets/central-mark.svg" alt="Central de Atendimento"><span></span><small>Bots &bull; Editor Visual</small></a>
     <a class="back-link" href="/">&larr; Central</a>
     <button id="theme-toggle" class="round-button" type="button" title="Alternar tema">&#9790;</button>
     <button id="logout" class="user-button" type="button"><span id="current-user">Master</span> &bull; Sair</button>
@@ -26,6 +26,7 @@
         <div><span>AUTOMAÇÕES</span><h1>Bots</h1><p id="bot-count">Carregando...</p></div>
         <button id="new-bot" type="button">+ Novo Bot</button>
       </div>
+      <div id="bot-company-filter" class="company-filter" role="radiogroup" aria-label="Filtrar Bots por empresa" hidden></div>
       <div id="bot-list" class="bot-list"><div class="skeleton-list"><div class="skeleton skeleton-card"></div><div class="skeleton skeleton-card"></div></div></div>
       <div class="global-settings-card">
         <div class="global-settings-heading"><b>Automação dos Bots</b><span id="global-automation-status" class="global-status-pill">...</span></div>
@@ -211,7 +212,8 @@
   <dialog id="new-bot-dialog" class="bot-dialog">
     <form id="new-bot-form" method="dialog" class="fields">
       <div class="full dialog-heading"><span>NOVO BOT</span><h3>Criar Bot</h3><p>Depois de criar, o Editor Visual abre direto com o fluxo principal.</p></div>
-      <label class="full">Nome<input id="new-bot-name" maxlength="100" placeholder="Atendimento Mibro" required></label>
+      <div id="new-bot-company" class="full"></div>
+      <label class="full">Nome<input id="new-bot-name" maxlength="100" placeholder="Triagem Sincrofit" required></label>
       <label class="full">Descrição<textarea id="new-bot-description" maxlength="500" rows="2" placeholder="Triagem e respostas de suporte"></textarea></label>
       <div class="full"><span>Canal / escopo</span><div id="new-bot-channels" class="bot-channels-checklist"></div></div>
       <div class="form-actions full"><button id="cancel-new-bot" type="button">Cancelar</button><button type="submit">Criar e abrir Editor Visual</button></div>
@@ -219,6 +221,7 @@
   </dialog>
 
   <div id="toast" class="toast"></div>
+  <script src="/js/company-context.js"></script>
   <script src="/js/bots.js"></script>
 </body>
 </html>

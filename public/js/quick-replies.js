@@ -31,7 +31,7 @@ function toast(message, error = false) {
 
 function categoryOptions(selected = "") {
   return `<option value="">Sem setor específico (aparece para todos)</option>${state.categories.map((category) => (
-    `<option value="${escapeHtml(category.id)}" ${category.id === selected ? "selected" : ""}>${escapeHtml(category.parentId ? `- ${category.name}` : category.name)}</option>`
+    `<option value="${escapeHtml(category.id)}" ${category.id === selected ? "selected" : ""}>${escapeHtml(category.parentId ? `- ${category.name}` : category.name)}${category.company ? ` — ${escapeHtml(category.company.displayName)}` : ""}</option>`
   )).join("")}`;
 }
 
@@ -42,7 +42,34 @@ function currentFilters() {
     channel: $("#qr-filter-channel").value,
     active: $("#qr-filter-active").value,
     includeArchived: "false",
+    ...(state.companyFilter && state.companyFilter !== "ALL" ? { company: state.companyFilter } : {}),
   };
+}
+
+// Multiempresa (item 31): "Vale para" = Todas as empresas (GLOBAL) ou uma
+// empresa (COMPANY). Setor é sempre de uma empresa — resposta global não
+// tem setor. Respostas antigas viraram "Mibro" na migração; promova a
+// global só as genéricas.
+function renderCompanyOptions(item = null) {
+  const value = item ? (item.scope === "GLOBAL" ? "GLOBAL" : item.companyId || "") : (window.CompanyContext.companies.find((company) => company.slug === state.companyFilter)?.id || "");
+  $("#qr-company").innerHTML = `<option value="GLOBAL">Todas as empresas (global)</option>${window.CompanyContext.companies.map((company) => (
+    `<option value="${escapeHtml(company.id)}">${escapeHtml(company.name)}</option>`
+  )).join("")}`;
+  $("#qr-company").value = value || (window.CompanyContext.multi() ? "" : window.CompanyContext.companies[0]?.id || "GLOBAL");
+  if (!$("#qr-company").value) $("#qr-company").selectedIndex = -1;
+  syncCategoryByCompany(item?.categoryId || "");
+}
+
+function syncCategoryByCompany(selectedId = $("#qr-category").value) {
+  const companyId = $("#qr-company").value;
+  $("#qr-category").innerHTML = categoryOptions(selectedId);
+  [...$("#qr-category").options].forEach((option) => {
+    if (!option.value) return;
+    const category = state.categories.find((item) => item.id === option.value);
+    option.hidden = companyId === "GLOBAL" || category?.companyId !== companyId;
+  });
+  if ($("#qr-category").selectedOptions[0]?.hidden) $("#qr-category").value = "";
+  $("#qr-category").disabled = companyId === "GLOBAL";
 }
 
 function renderFilterOptions() {
@@ -58,8 +85,8 @@ function renderList() {
   $("#qr-count").textContent = `${state.quickReplies.length} resposta${state.quickReplies.length === 1 ? "" : "s"} configurada${state.quickReplies.length === 1 ? "" : "s"}`;
   $("#qr-list").innerHTML = state.quickReplies.length ? state.quickReplies.map((item) => `
     <button class="bot-card ${state.selected?.id === item.id ? "active" : ""}" type="button" data-qr-id="${escapeHtml(item.id)}">
-      <header><b>${escapeHtml(item.name)}</b><span class="mini-status ${item.active ? "ACTIVE" : "PAUSED"}">${item.active ? "ATIVA" : "INATIVA"}</span></header>
-      <small class="qr-shortcut-pill">${escapeHtml(item.shortcut)}</small>
+      <header><b>${escapeHtml(item.name)}</b>${item.scope === "GLOBAL" ? `<span class="company-badge">GLOBAL</span>` : window.CompanyContext.badge(item.company)}<span class="mini-status ${item.active ? "ACTIVE" : "PAUSED"}">${item.active ? "ATIVA" : "INATIVA"}</span></header>
+      <small class="qr-shortcut-pill">${escapeHtml(item.shortcut)}${item.contentType === "AUDIO" ? " · 🎤 áudio" : ""}</small>
       <div class="bot-meta"><span>${escapeHtml(item.category?.name || "Sem setor")}</span><span>•</span><span>${item.usageCount} uso(s)</span></div>
     </button>
   `).join("") : '<div class="intent-empty">Nenhuma resposta encontrada.</div>';
@@ -77,10 +104,27 @@ function renderChannelsChecklist(selected = []) {
   `).join("");
 }
 
+// Áudio (item 32): da empresa ou global, gerido aqui pelo Master. O arquivo
+// só é escolhido na criação; depois, só nome/atalho/escopo/setor mudam.
+function syncContentType(item = null) {
+  const audio = $("#qr-content-type").value === "AUDIO";
+  $("#qr-text-field").hidden = audio;
+  $("#qr-text").required = !audio;
+  $("#qr-audio-field").hidden = !audio;
+  $("#qr-audio-file").hidden = Boolean(item);
+  $("#qr-audio-file").required = audio && !item;
+  $("#qr-audio-player").hidden = !item?.audio;
+  if (item?.audio) $("#qr-audio-player").src = item.audio.url;
+}
+
 function fillForm(item = null) {
+  $("#qr-content-type").value = item?.contentType || "TEXT";
+  $("#qr-content-type").disabled = Boolean(item);
+  $("#qr-audio-file").value = "";
+  syncContentType(item);
   $("#qr-name").value = item?.name || "";
   $("#qr-shortcut").value = item?.shortcut || "";
-  $("#qr-category").innerHTML = categoryOptions(item?.categoryId || "");
+  renderCompanyOptions(item);
   $("#qr-type").value = item?.type || "QUICK_REPLY";
   $("#qr-text").value = item?.text || "";
   $("#qr-available-agents").checked = item ? item.availableToAgents : true;
@@ -137,7 +181,9 @@ function formPayload() {
   return {
     name: $("#qr-name").value,
     shortcut: $("#qr-shortcut").value,
-    categoryId: $("#qr-category").value || null,
+    scope: $("#qr-company").value === "GLOBAL" ? "GLOBAL" : "COMPANY",
+    companyId: $("#qr-company").value === "GLOBAL" ? null : ($("#qr-company").value || undefined),
+    categoryId: $("#qr-company").value === "GLOBAL" ? null : ($("#qr-category").value || null),
     type: $("#qr-type").value,
     text: $("#qr-text").value,
     channels: Array.from(document.querySelectorAll("#qr-channels-checklist input:checked")).map((input) => input.value),
@@ -151,12 +197,36 @@ $("#qr-search").addEventListener("input", () => { clearTimeout($("#qr-search")._
 $("#qr-filter-category").addEventListener("change", loadList);
 $("#qr-filter-channel").addEventListener("change", loadList);
 $("#qr-filter-active").addEventListener("change", loadList);
+$("#qr-company").addEventListener("change", () => syncCategoryByCompany());
 $("#qr-text").addEventListener("input", () => { clearTimeout($("#qr-text")._t); $("#qr-text")._t = setTimeout(renderPreview, 250); });
+
+$("#qr-content-type").addEventListener("change", () => syncContentType(state.selected));
+
+async function createManagedAudio(payload) {
+  const file = $("#qr-audio-file").files[0];
+  if (!file) throw new Error("Escolha o arquivo de áudio.");
+  const form = new FormData();
+  form.append("file", file);
+  for (const key of ["name", "shortcut", "scope", "companyId", "categoryId"]) if (payload[key]) form.append(key, payload[key]);
+  const response = await fetch("/api/quick-replies/managed-audio", { method: "POST", body: form, credentials: "same-origin" });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.error || "Não foi possível salvar o áudio.");
+  return body;
+}
 
 $("#qr-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   try {
     const payload = formPayload();
+    const audio = $("#qr-content-type").value === "AUDIO";
+    if (audio) delete payload.text;
+    if (audio && !state.selected) {
+      const saved = await createManagedAudio(payload);
+      toast("Áudio rápido criado.");
+      await loadList();
+      await selectQuickReply(saved.id);
+      return;
+    }
     const saved = state.selected
       ? await api(`/api/quick-replies/${state.selected.id}`, { method: "PATCH", body: JSON.stringify(payload) })
       : await api("/api/quick-replies", { method: "POST", body: JSON.stringify(payload) });
@@ -207,8 +277,11 @@ $("#logout").addEventListener("click", async () => {
     if (!status.authenticated || !status.user.isMaster) return location.replace("/");
     $("#current-user").textContent = status.user.name;
     state.categories = (await api("/api/categories")).filter((category) => category.active !== false);
+    await window.CompanyContext.load();
+    state.companyFilter = "ALL";
+    window.CompanyContext.mountFilter($("#qr-company-filter"), (slug) => { state.companyFilter = slug; loadList().catch((error) => toast(error.message, true)); }, "ALL");
     renderFilterOptions();
-    $("#qr-category").innerHTML = categoryOptions();
+    renderCompanyOptions();
     await loadList();
   } catch (error) {
     if ($("#qr-list").querySelector(".skeleton-list")) $("#qr-list").innerHTML = `<div class="empty-list">Não foi possível carregar as respostas rápidas.</div>`;

@@ -18,9 +18,46 @@ let cacheExpiresAt = 0;
 function invalidateCache() {
   cache = null;
   cacheExpiresAt = 0;
+  companyCache = null;
+  companyCacheExpiresAt = 0;
 }
 
-async function getConversationSettings(client = prisma) {
+// Multiempresa (item 39): uma empresa pode ter configuração PRÓPRIA completa
+// (linha com companyId, criada como cópia da global na primeira edição);
+// sem ela, vale a global ("singleton"). Remover o override volta à global.
+let companyCache = null;
+let companyCacheExpiresAt = 0;
+
+async function companyOverrides(client = prisma) {
+  if (client === prisma && companyCache && Date.now() < companyCacheExpiresAt) return companyCache;
+  const rows = await client.conversationSettings.findMany({ where: { companyId: { not: null } } });
+  const map = new Map(rows.map((row) => [row.companyId, row]));
+  if (client === prisma) { companyCache = map; companyCacheExpiresAt = Date.now() + CACHE_TTL_MS; }
+  return map;
+}
+
+// Configuração efetiva para uma conversa/empresa.
+async function getConversationSettings(client = prisma, companyId = null) {
+  if (companyId) {
+    const override = (await companyOverrides(client)).get(companyId);
+    if (override) return override;
+  }
+  return getGlobalConversationSettings(client);
+}
+
+// Plano para os monitores (SLA, finalização): cada empresa com override usa
+// a dela; todas as outras conversas usam a global. `scope` é um filtro Prisma.
+async function settingsPlan(client = prisma) {
+  const overrides = await companyOverrides(client);
+  const global = await getGlobalConversationSettings(client);
+  const overrideIds = [...overrides.keys()];
+  return [
+    { settings: global, scope: overrideIds.length ? { companyId: { notIn: overrideIds } } : {} },
+    ...[...overrides.values()].map((settings) => ({ settings, scope: { companyId: settings.companyId } })),
+  ];
+}
+
+async function getGlobalConversationSettings(client = prisma) {
   if (client === prisma && cache && Date.now() < cacheExpiresAt) return cache;
   let settings;
   try {
@@ -42,9 +79,34 @@ async function getConversationSettings(client = prisma) {
   return settings;
 }
 
-async function getConversationSettingsForViewer(viewer) {
+async function resolveSettingsCompany(viewer, company) {
+  if (!company || company === "ALL" || company === "GLOBAL") return null;
+  const [companyId] = await require("./company-service").resolveCompanyFilter(viewer, company);
+  return companyId;
+}
+
+// `company` (slug): mostra a configuração própria da empresa, ou a global
+// marcada como herdada (isCompanyOverride=false).
+async function getConversationSettingsForViewer(viewer, { company } = {}) {
   authorization.assertCanViewConversationSettings(viewer);
-  return getConversationSettings();
+  const companyId = await resolveSettingsCompany(viewer, company);
+  if (!companyId) return { ...(await getGlobalConversationSettings()), scope: "GLOBAL", isCompanyOverride: false };
+  const override = (await companyOverrides()).get(companyId);
+  return { ...(override || await getGlobalConversationSettings()), scope: "COMPANY", companyId, isCompanyOverride: Boolean(override) };
+}
+
+// Volta a empresa para a configuração global (remove só o override).
+async function resetCompanyConversationSettings(company, actor) {
+  authorization.assertMaster(actor);
+  const companyId = await resolveSettingsCompany(actor, company);
+  if (!companyId) throw fail("Informe a empresa.");
+  const removed = await prisma.conversationSettings.deleteMany({ where: { companyId } });
+  invalidateCache();
+  await audit.recordAudit({
+    actor, action: "CONVERSATION_SETTINGS_COMPANY_RESET", entityType: "CONVERSATION_SETTINGS", entityId: null, companyId,
+    summary: "Empresa voltou a usar as configurações globais de Conversas", details: { removed: removed.count },
+  });
+  return getConversationSettingsForViewer(actor, { company });
 }
 
 function fail(message, statusCode = 400) {
@@ -127,7 +189,23 @@ async function updateConversationSettings(data, actor) {
 
   if (!Object.keys(update).length) throw fail("Informe ao menos um campo para atualizar.");
 
-  const before = await getConversationSettings();
+  const companyId = await resolveSettingsCompany(actor, data.company);
+  if (companyId) {
+    // Primeira edição da empresa: nasce como cópia da global + alterações.
+    const existing = (await companyOverrides()).get(companyId);
+    const { id: _id, companyId: _companyId, createdAt: _createdAt, updatedAt: _updatedAt, ...globalValues } = await getGlobalConversationSettings();
+    const settings = existing
+      ? await prisma.conversationSettings.update({ where: { id: existing.id }, data: update })
+      : await prisma.conversationSettings.create({ data: { ...globalValues, ...update, id: `company:${companyId}`, companyId } });
+    invalidateCache();
+    await audit.recordAudit({
+      actor, action: "CONVERSATION_SETTINGS_UPDATED", entityType: "CONVERSATION_SETTINGS", entityId: null, companyId,
+      summary: "Atualizou as configurações de Conversas da empresa", details: { before: existing || null, after: settings },
+    });
+    return { ...settings, scope: "COMPANY", isCompanyOverride: true };
+  }
+
+  const before = await getGlobalConversationSettings();
   const settings = await prisma.conversationSettings.update({ where: { id: SETTINGS_ID }, data: update });
   invalidateCache();
   await audit.recordAudit({
@@ -140,6 +218,9 @@ async function updateConversationSettings(data, actor) {
 module.exports = {
   getConversationSettings,
   getConversationSettingsForViewer,
+  getGlobalConversationSettings,
+  resetCompanyConversationSettings,
+  settingsPlan,
   updateConversationSettings,
   invalidateCache,
 };

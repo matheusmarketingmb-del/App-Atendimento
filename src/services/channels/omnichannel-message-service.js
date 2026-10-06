@@ -50,11 +50,17 @@ async function findOrCreateChannelConversation(normalized, client = prisma) {
   const contactExternalId = NEW_CHANNELS.includes(channel)
     ? channelScope + ":" + senderExternalId
     : senderExternalId;
+  // Multiempresa: a conta (página/caixa/loja) que recebeu define a empresa.
+  const account = channelAccountId
+    ? await client.channelAccount.findUnique({ where: { id: channelAccountId }, select: { companyId: true } })
+    : await require("../whatsapp-account-service").getLegacyAccount(client);
+  if (!account?.companyId) throw new Error("Conta de canal sem empresa definida.");
+  const { companyId } = account;
 
   const contact = await client.contact.upsert({
-    where: { channel_externalId: { channel, externalId: contactExternalId } },
+    where: { companyId_channel_externalId: { companyId, channel, externalId: contactExternalId } },
     update: { ...(senderName ? { name: senderName } : {}), ...(channel === "EMAIL" ? { email: senderExternalId } : {}) },
-    create: { channel, externalId: contactExternalId, name: senderName || senderExternalId, phone: null, ...(channel === "EMAIL" ? { email: senderExternalId } : {}) },
+    create: { companyId, channel, externalId: contactExternalId, name: senderName || senderExternalId, phone: null, ...(channel === "EMAIL" ? { email: senderExternalId } : {}) },
   });
 
   const conversation = await client.conversation.upsert({
@@ -64,7 +70,7 @@ async function findOrCreateChannelConversation(normalized, client = prisma) {
       ...(normalized.externalConversationId ? { externalConversationId: normalized.externalConversationId } : {}),
     },
     create: {
-      contactId: contact.id, channel, channelScope, channelAccountId: channelAccountId || null,
+      companyId, contactId: contact.id, channel, channelScope, channelAccountId: channelAccountId || null,
       externalConversationId: normalized.externalConversationId || null,
       kind: conversationKindFor(channel, normalized), status: "NOVO",
     },

@@ -1,15 +1,23 @@
 const prisma = require("../database/prisma");
+const companyService = require("./company-service");
 
 const isMaster = (user) => user?.role === "ADMIN";
+
+// Escopo que nunca casa com nada (usuário sem nenhuma empresa liberada).
+const NO_ACCESS = Object.freeze({ id: { in: [] } });
 
 function forbidden(message = "Você não possui permissão para esta ação.") {
   return Object.assign(new Error(message), { statusCode: 403 });
 }
 
+// Setores liberados — só de empresas às quais o usuário ainda tem acesso
+// (perder o acesso à empresa derruba junto os setores dela).
 async function allowedCategoryIds(user) {
   if (isMaster(user)) return null;
+  const companyIds = await companyService.accessibleCompanyIds(user);
+  if (!companyIds.length) return [];
   const access = await prisma.userCategoryAccess.findMany({
-    where: { userId: user.id },
+    where: { userId: user.id, category: { is: { companyId: { in: companyIds } } } },
     select: { categoryId: true },
   });
   return access.map(({ categoryId }) => categoryId);
@@ -39,30 +47,64 @@ async function queueCategoryFilters(user) {
 // alertas e contadores — a regra nunca é só visual.
 // Exceção: o Supervisor acompanha as áreas que gerencia (categorias
 // liberadas), então vê também as conversas já assumidas por outros nelas.
+// Multiempresa: a regra acima é aplicada POR EMPRESA, com o cargo que o
+// usuário tem naquela empresa (Ana pode ser Supervisor na Mibro e Atendente
+// na Sincrofit). Empresa sem acesso nunca entra no OR — vale também para
+// busca por ID direto (IDOR): a conversa simplesmente não é encontrada.
 async function conversationScope(user) {
   if (isMaster(user)) return {};
-  if (user?.role === "SUPERVISOR") return sectorScope(user);
-  const queue = await queueCategoryFilters(user);
-  const visible = [{ assignedUserId: user.id }];
-  if (queue.length) visible.push({ AND: [{ assignedUserId: null }, { OR: queue }] });
-  return { AND: [{ OR: visible }, emailAccountScope(user)] };
+  const access = await companyService.companyAccess(user);
+  if (!access.length) return NO_ACCESS;
+  const categoryIds = await allowedCategoryIds(user);
+  const branches = access.map(({ companyId, role, permissions }) => {
+    // "Sem categoria" pode ser liberado por empresa (permissões da empresa).
+    const uncategorized = permissions && typeof permissions.canViewUncategorized === "boolean"
+      ? permissions.canViewUncategorized : Boolean(user.canViewUncategorized);
+    const queue = [];
+    if (categoryIds.length) queue.push({ categoryId: { in: categoryIds } });
+    if (uncategorized) queue.push({ categoryId: null });
+    const visible = [{ assignedUserId: user.id }];
+    if (role === "SUPERVISOR") visible.push(...queue);
+    else if (queue.length) visible.push({ AND: [{ assignedUserId: null }, { OR: queue }] });
+    return { AND: [{ companyId }, { OR: visible }] };
+  });
+  return { AND: [{ OR: branches }, emailAccountScope(user)] };
 }
 
 // Escopo por setor (regra anterior à privacidade): inclui conversas já
 // assumidas por outros atendentes do setor. Nunca é usado para entregar
 // conteúdo — só para métricas agregadas (atividade da equipe) e para dizer
-// "em atendimento por Fulano" a quem é do setor.
+// "em atendimento por Fulano" a quem é do setor. Também restrito às
+// empresas acessíveis.
 async function sectorScope(user) {
   if (isMaster(user)) return {};
+  const companyIds = await companyService.accessibleCompanyIds(user);
+  if (!companyIds.length) return NO_ACCESS;
   const queue = await queueCategoryFilters(user);
   const visible = [{ assignedUserId: user.id }, ...queue];
-  return { AND: [{ OR: visible }, emailAccountScope(user)] };
+  return { AND: [{ companyId: { in: companyIds } }, { OR: visible }, emailAccountScope(user)] };
 }
 
 async function canAccessCategory(user, categoryId) {
   if (isMaster(user)) return true;
   if (!categoryId) return Boolean(user.canViewUncategorized);
   return (await allowedCategoryIds(user)).includes(categoryId);
+}
+
+// Permissão avaliada com o cargo/permissões do usuário NA EMPRESA do recurso.
+// Sem acesso à empresa => 404 (não revela o recurso).
+async function forCompany(user, companyId) {
+  const scoped = await companyService.userForCompany(user, companyId);
+  if (!scoped) throw Object.assign(new Error("Recurso não encontrado."), { statusCode: 404 });
+  return scoped;
+}
+
+// Escopo Prisma para recursos com coluna companyId (Contact, Category, Bot,
+// Campaign…): Master Global vê tudo; demais só empresas liberadas.
+async function companyScope(user) {
+  if (isMaster(user)) return {};
+  const companyIds = await companyService.accessibleCompanyIds(user);
+  return companyIds.length ? { companyId: { in: companyIds } } : NO_ACCESS;
 }
 
 // 403 "em atendimento por Fulano" para quem é do setor e perdeu acesso
@@ -168,5 +210,5 @@ module.exports = {
   allowedCategoryIds, assertCanAccessContact, assertCanManageCampaigns, assertCanManageCategories, assertCanMergeContacts, assertCanStartConversations,
   assertCanSetPriority, assertCanViewConversation, assertCanViewConversationSettings, assertMaster,
   canAccessCategory, canManageCampaigns, canMergeContacts, canSetPriority, canStartConversations, canTransfer, canViewConversationSettings,
-  conversationAccessError, conversationScope, forbidden, isMaster, sectorScope,
+  companyScope, conversationAccessError, conversationScope, forCompany, forbidden, isMaster, sectorScope,
 };

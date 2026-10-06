@@ -29,7 +29,7 @@ test("chave global bloqueia dispatcher de novos canais sem afetar Meta", async (
   });
   await assert.doesNotReject(() => assertNewChannelEnabled("META"));
   const account = await prisma.channelAccount.create({
-    data: { channel: "EMAIL", name: "Teste Switch Inbound", enabled: true },
+    data: { companyId: "cmp_mibro", channel: "EMAIL", name: "Teste Switch Inbound", enabled: true },
   });
   const inbound = normalizeInboundMessage({
     channel: "EMAIL", channelAccountId: account.id, senderExternalId: "blocked@example.com", type: "text",
@@ -40,7 +40,7 @@ test("chave global bloqueia dispatcher de novos canais sem afetar Meta", async (
 
 test("dispatcher exige conta do mesmo canal quando novos canais são liberados", async () => {
   await prisma.integrationGlobalSettings.update({ where: { id: "singleton" }, data: { newChannelsEnabled: true } });
-  const account = await prisma.channelAccount.create({ data: { channel: "EMAIL", name: "Teste Switch Conta Cruzada", enabled: true } });
+  const account = await prisma.channelAccount.create({ data: { companyId: "cmp_mibro", channel: "EMAIL", name: "Teste Switch Conta Cruzada", enabled: true } });
   await assert.rejects(() => send({ channel: "SHOPEE", channelAccountId: account.id, to: "x" }), (error) => {
     assert.equal(error.channelErrorCode, "INVALID_PAYLOAD");
     return true;

@@ -11,23 +11,49 @@ function secret() {
   return process.env.SESSION_SECRET;
 }
 
-function publicUser(user) {
+// Flags gravadas no cadastro do usuário (e que podem ser personalizadas por
+// empresa em UserCompanyAccess.permissions).
+const PERMISSION_FLAGS = Object.freeze([
+  "canViewUncategorized", "canManageCategories", "canTransferConversations", "canViewConversationHistory",
+  "canViewPreviousMessages", "canManageCampaigns", "canSetConversationPriority", "canStartConversations", "canMergeContacts",
+]);
+
+function pickPermissionFlags(source = {}) {
+  return Object.fromEntries(PERMISSION_FLAGS.map((key) => [key, Boolean(source[key])]));
+}
+
+// Permissões efetivas para um cargo + flags. Única regra — usada no usuário
+// (cargo padrão) e por empresa (company-service#userForCompany), para que o
+// cargo da empresa nunca herde permissões calculadas com outro cargo.
+function derivePermissions(role, raw = {}) {
+  const admin = role === "ADMIN";
   return {
-    id: user.id, name: user.name, email: user.email, role: user.role,
-    isMaster: user.role === "ADMIN",
-    canViewUncategorized: user.role === "ADMIN" || user.canViewUncategorized,
-    canManageCategories: user.role === "ADMIN" || user.canManageCategories,
-    canTransferConversations: user.role === "ADMIN" || user.canTransferConversations,
+    canViewUncategorized: admin || Boolean(raw.canViewUncategorized),
+    canManageCategories: admin || Boolean(raw.canManageCategories),
+    canTransferConversations: admin || Boolean(raw.canTransferConversations),
     // Visão de equipe (cargos, permissões e carga de cada um) é só do Master.
-    canViewTeamActivity: user.role === "ADMIN",
-    canViewConversationHistory: user.role === "ADMIN" || user.canViewConversationHistory,
-    canViewPreviousMessages: user.role === "ADMIN" || user.canViewPreviousMessages,
+    canViewTeamActivity: admin,
+    canViewConversationHistory: admin || Boolean(raw.canViewConversationHistory),
+    canViewPreviousMessages: admin || Boolean(raw.canViewPreviousMessages),
     // Campanhas/prospecção (item 27): Admin e Supervisor têm acesso por
     // padrão; um Atendente específico pode ganhar via canManageCampaigns.
-    canManageCampaigns: user.role === "ADMIN" || user.role === "SUPERVISOR" || user.canManageCampaigns,
-    canStartConversations: user.role === "ADMIN" || user.canStartConversations,
-    canMergeContacts: user.role === "ADMIN" || user.canMergeContacts,
+    canManageCampaigns: admin || role === "SUPERVISOR" || Boolean(raw.canManageCampaigns),
+    canSetConversationPriority: admin || role === "SUPERVISOR" || Boolean(raw.canSetConversationPriority),
+    canStartConversations: admin || Boolean(raw.canStartConversations),
+    canMergeContacts: admin || Boolean(raw.canMergeContacts),
   };
+}
+
+function publicUser(user) {
+  const permissionFlags = pickPermissionFlags(user);
+  const result = {
+    id: user.id, name: user.name, email: user.email, role: user.role,
+    isMaster: user.role === "ADMIN",
+    ...derivePermissions(user.role, permissionFlags),
+  };
+  // Flags cruas (não serializadas): base para recalcular por empresa.
+  Object.defineProperty(result, "permissionFlags", { value: permissionFlags, enumerable: false });
+  return result;
 }
 
 function setSession(res, user) {
@@ -75,4 +101,7 @@ async function invalidateSession(token) {
   if (user) await prisma.user.update({ where: { id: user.id }, data: { sessionVersion: { increment: 1 } } });
 }
 
-module.exports = { COOKIE_NAME, clearSession, invalidateSession, login, publicUser, setSession, setup, userFromToken };
+module.exports = {
+  COOKIE_NAME, PERMISSION_FLAGS, clearSession, derivePermissions, invalidateSession, login, pickPermissionFlags,
+  publicUser, setSession, setup, userFromToken,
+};

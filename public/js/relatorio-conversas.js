@@ -61,7 +61,7 @@ function cssVar(name) { return getComputedStyle(document.documentElement).getPro
 // visão filtrada")
 // ---------------------------------------------------------------------
 const state = {
-  period: "7d", startDate: "", endDate: "", agentId: "", channel: "", categoryId: "", status: "", priority: "",
+  period: "7d", startDate: "", endDate: "", company: "", agentId: "", channel: "", categoryId: "", status: "", priority: "",
   metric: "conversations_received", granularity: "", compare: false,
   conversationsPage: 1, conversationsPageSize: 25, conversationsSort: "lastMessageAt", conversationsDir: "desc", conversationsSearch: "",
   statusClickFilter: null, selectedAgents: new Set(),
@@ -69,14 +69,14 @@ const state = {
 
 function readStateFromUrl() {
   const params = new URLSearchParams(location.search);
-  for (const key of ["period", "agentId", "channel", "categoryId", "status", "priority", "startDate", "endDate", "metric", "granularity"]) {
+  for (const key of ["period", "company", "agentId", "channel", "categoryId", "status", "priority", "startDate", "endDate", "metric", "granularity"]) {
     if (params.has(key)) state[key] = params.get(key);
   }
   if (params.has("compare")) state.compare = params.get("compare") === "true";
 }
 function writeStateToUrl() {
   const params = new URLSearchParams();
-  for (const key of ["period", "agentId", "channel", "categoryId", "status", "priority", "startDate", "endDate", "metric", "granularity"]) {
+  for (const key of ["period", "company", "agentId", "channel", "categoryId", "status", "priority", "startDate", "endDate", "metric", "granularity"]) {
     if (state[key]) params.set(key, state[key]);
   }
   if (state.compare) params.set("compare", "true");
@@ -86,6 +86,7 @@ function queryFromState(extra = {}) {
   const params = new URLSearchParams();
   if (state.period) params.set("period", state.period);
   if (state.period === "custom") { if (state.startDate) params.set("startDate", state.startDate); if (state.endDate) params.set("endDate", state.endDate); }
+  if (state.company) params.set("company", state.company);
   if (state.agentId) params.set("agentId", state.agentId);
   if (state.channel) params.set("channel", state.channel);
   if (state.categoryId) params.set("categoryId", state.categoryId);
@@ -99,6 +100,7 @@ function queryFromState(extra = {}) {
 // Filtros: chips + clear + selects
 // ---------------------------------------------------------------------
 const FILTER_LABELS = {
+  company: (value, ctx) => `Empresa: ${(ctx.companies || []).find((c) => c.slug === value)?.name || value}`,
   agentId: (value, ctx) => `Vendedor: ${ctx.agents.find((a) => a.id === value)?.name || value}`,
   channel: (value) => `Canal: ${CHANNEL_LABELS[value] || value}`,
   categoryId: (value, ctx) => `Categoria: ${ctx.categories.find((c) => c.id === value)?.name || value}`,
@@ -120,6 +122,12 @@ async function populateFilterOptions() {
   filterContext = { agents: users, categories };
   $("#f-agent").innerHTML = '<option value="">Vendedor: todos</option><option value="unassigned">Sem responsável</option>'
     + users.map((u) => `<option value="${u.id}">${escapeHtml(u.name)}</option>`).join("");
+  // Multiempresa (item 40): filtro de empresa — "todas" soma, com quebra abaixo.
+  const companyData = await api("/api/companies").catch(() => ({ companies: [] }));
+  filterContext.companies = companyData.companies || [];
+  $("#f-company").innerHTML = '<option value="">Empresa: todas</option>' + filterContext.companies.map((c) => `<option value="${escapeHtml(c.slug)}">${escapeHtml(c.name)}</option>`).join("");
+  $("#f-company").hidden = filterContext.companies.length < 2;
+  $("#f-company").value = state.company;
   $("#f-channel").innerHTML = '<option value="">Canal: todos</option>' + Object.entries(CHANNEL_LABELS).map(([value, label]) => `<option value="${value}">${label}</option>`).join("");
   $("#f-category").innerHTML = '<option value="">Categoria: todas</option>' + categories.map((c) => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join("");
   $("#f-status").innerHTML = '<option value="">Status: todos</option>' + Object.entries(STATUS_LABELS).map(([value, label]) => `<option value="${value}">${label}</option>`).join("");
@@ -141,6 +149,7 @@ $("#f-start").addEventListener("change", (e) => { state.startDate = e.target.val
 $("#f-end").addEventListener("change", (e) => { state.endDate = e.target.value; if (state.period === "custom") onFiltersChanged(); });
 $("#f-agent").addEventListener("change", (e) => { state.agentId = e.target.value; onFiltersChanged(); });
 $("#f-channel").addEventListener("change", (e) => { state.channel = e.target.value; onFiltersChanged(); });
+$("#f-company").addEventListener("change", (e) => { state.company = e.target.value; onFiltersChanged(); });
 $("#f-category").addEventListener("change", (e) => { state.categoryId = e.target.value; onFiltersChanged(); });
 $("#f-status").addEventListener("change", (e) => { state.status = e.target.value; onFiltersChanged(); });
 $("#f-priority").addEventListener("change", (e) => { state.priority = e.target.value; onFiltersChanged(); });
@@ -215,7 +224,7 @@ function renderMainChart(data) {
 
   const linePath = points.map((p, i) => `${i === 0 ? "M" : "L"}${xFor(i).toFixed(1)},${yFor(p.value).toFixed(1)}`).join(" ");
   const areaPath = `${linePath} L${xFor(points.length - 1).toFixed(1)},${height - padBottom} L${xFor(0)},${height - padBottom} Z`;
-  const accent = cssVar("--rp-accent") || "#ef5b2a";
+  const accent = cssVar("--rp-accent") || "#8a8e97";
   let previousLine = "";
   if (points[0].previousValue !== undefined && points[0].previousValue !== null) {
     previousLine = `<path d="${points.map((p, i) => `${i === 0 ? "M" : "L"}${xFor(i).toFixed(1)},${yFor(p.previousValue || 0).toFixed(1)}`).join(" ")}" fill="none" stroke="${cssVar("--rp-muted") || "#8b93a1"}" stroke-width="2" stroke-dasharray="4 4" stroke-linecap="round"/>`;
@@ -543,7 +552,7 @@ async function loadAll() {
   renderKpis("kpi-main", MAIN_KPI_DEFS, null, false);
   renderKpis("kpi-quality", QUALITY_KPI_DEFS, null, true);
   try {
-    const [summary, status, channels, categories, agents, heatmap, waitBuckets, alerts] = await Promise.all([
+    const [summary, status, channels, categories, agents, heatmap, waitBuckets, alerts, companies] = await Promise.all([
       api(`/api/reports/conversations/summary?${queryFromState()}`),
       api(`/api/reports/conversations/status-breakdown?${queryFromState()}`),
       api(`/api/reports/conversations/channel-breakdown?${queryFromState()}`),
@@ -552,7 +561,18 @@ async function loadAll() {
       api(`/api/reports/conversations/heatmap?${queryFromState()}`),
       api(`/api/reports/conversations/wait-time-buckets?${queryFromState()}`),
       api(`/api/reports/conversations/alerts?${queryFromState()}`),
+      api(`/api/reports/conversations/company-breakdown?${queryFromState()}`),
     ]);
+    renderRank("company-rank", companies.items.map((item) => ({ ...item, label: item.company?.name || "Sem empresa" })), {
+      metaFn: (i) => `${i.count} &bull; ${i.open} abertas &bull; ${i.resolved} resolvidas &bull; ${formatDuration(i.firstResponseAvgSeconds)}`,
+      onClick: (item) => { state.company = state.company === item.company?.slug ? "" : (item.company?.slug || ""); $("#f-company").value = state.company; onFiltersChanged(); },
+      emptyLabel: "Sem conversas no período.",
+    });
+    // Barra de cada empresa na cor dela (só a barra; o painel segue neutro).
+    $$("#company-rank .rp-rank-row").forEach((row, index) => {
+      const color = companies.items[index]?.company?.primaryColor;
+      if (/^#[0-9a-f]{6}$/i.test(color || "")) row.querySelector(".rp-rank-fill").style.background = color;
+    });
     renderKpis("kpi-main", MAIN_KPI_DEFS, summary, false);
     renderKpis("kpi-quality", QUALITY_KPI_DEFS, summary, true);
     if (summary.current.truncated) toast("Período muito grande — tempos de resposta não puderam ser calculados. Refine o filtro de período.", true);

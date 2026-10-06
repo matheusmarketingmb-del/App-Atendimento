@@ -19,9 +19,9 @@ function decodeRaw(raw) { return Buffer.from(raw, "base64url").toString("utf8");
 test.before(async () => {
   process.env.INTEGRATION_ENCRYPTION_KEY = "33".repeat(32);
   await prisma.integrationGlobalSettings.upsert({ where: { id: "singleton" }, update: { newChannelsEnabled: true }, create: { id: "singleton", newChannelsEnabled: true } });
-  allowed = await prisma.user.create({ data: { name: "Pode iniciar", email: `${prefix}-allowed@example.com`, role: "ATENDENTE", canViewUncategorized: true, canStartConversations: true } });
-  denied = await prisma.user.create({ data: { name: "Não pode iniciar", email: `${prefix}-denied@example.com`, role: "ATENDENTE", canViewUncategorized: true } });
-  account = await prisma.channelAccount.create({ data: {
+  allowed = await prisma.user.create({ data: { companyAccess: { create: { companyId: "cmp_mibro" } }, name: "Pode iniciar", email: `${prefix}-allowed@example.com`, role: "ATENDENTE", canViewUncategorized: true, canStartConversations: true } });
+  denied = await prisma.user.create({ data: { companyAccess: { create: { companyId: "cmp_mibro" } }, name: "Não pode iniciar", email: `${prefix}-denied@example.com`, role: "ATENDENTE", canViewUncategorized: true } });
+  account = await prisma.channelAccount.create({ data: { companyId: "cmp_mibro",
     channel: "EMAIL", name: prefix, status: "CONNECTED", enabled: true, oauthProvider: "GOOGLE",
     tokenExpiresAt: new Date(Date.now() + 3600000), config: { provider: "GMAIL" },
     providerMetadata: { username: "central@example.com" },

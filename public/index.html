@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#ef5b2a">
+  <meta name="theme-color" content="#16171a">
   <meta name="application-name" content="Mibro">
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" type="image/png" sizes="192x192" href="/assets/app-icon-192.png">
@@ -20,7 +20,7 @@
 <body>
   <header class="topbar">
     <button id="sidebar-toggle" type="button" title="Abrir menu" aria-label="Abrir menu"><span aria-hidden="true">☰</span></button>
-    <div class="brand"><img class="brand-logo" src="/assets/mibro-logo.png" alt="Mibro"><span class="brand-divider"></span><small>Central de Atendimento</small></div>
+    <div class="brand"><img class="brand-logo" src="/assets/central-mark.svg" alt="Central de Atendimento"><span class="brand-divider"></span><small>Central de Atendimento</small></div>
     <button id="command-palette-trigger" class="cmdk-trigger" type="button" aria-haspopup="dialog"><span aria-hidden="true">⌕</span><span>Buscar conversas ou executar uma ação...</span><kbd>Ctrl K</kbd></button>
     <div id="connection-indicator" class="connection" data-state="online" role="status" aria-live="polite"><span class="connection-dot"></span><span id="connection-label">WhatsApp conectado</span></div>
     <button id="install-app" class="install-app" type="button" hidden>Instalar aplicativo</button>
@@ -76,6 +76,7 @@
     </nav>
     <aside id="filters-panel" class="filters-panel">
       <label class="search"><span>⌕</span><input id="search" type="search" placeholder="Buscar nome ou telefone"></label>
+      <div id="company-filter" class="company-filter" role="radiogroup" aria-label="Filtrar por empresa" hidden></div>
       <select id="channel-filter" class="channel-filter" aria-label="Filtrar por canal">
         <option value="">Todos os canais</option>
         <option value="META">WhatsApp</option>
@@ -127,7 +128,7 @@
     </aside>
 
     <section class="conversation-list-panel">
-      <div class="list-heading"><div><span id="workspace-channel-eyebrow" class="workspace-channel-eyebrow">TODOS OS CANAIS</span><h1 id="workspace-channel-title">Conversas</h1><p id="list-summary">Carregando...</p></div><div class="list-heading-actions"><button id="toggle-filters-panel" type="button" title="Recolher filtros e categorias" aria-label="Recolher filtros e categorias" aria-controls="filters-panel" aria-expanded="true">&lsaquo;</button><button id="density-toggle" type="button" title="Alternar densidade da lista" aria-label="Alternar densidade da lista" aria-pressed="false">≡</button><button id="new-conversation" class="new-conversation" type="button" title="Iniciar nova conversa">+ Nova</button><button id="clear-team-filter" title="Remover filtro de atendente" hidden>×</button><button id="refresh" title="Atualizar">↻</button></div></div>
+      <div class="list-heading"><div><span id="workspace-channel-eyebrow" class="workspace-channel-eyebrow">TODOS OS CANAIS</span><h1 id="workspace-channel-title">Conversas</h1><p id="list-summary">Carregando...</p><div id="company-filter-mobile" class="company-filter company-filter-mobile" role="radiogroup" aria-label="Filtrar por empresa" hidden></div></div><div class="list-heading-actions"><button id="toggle-filters-panel" type="button" title="Recolher filtros e categorias" aria-label="Recolher filtros e categorias" aria-controls="filters-panel" aria-expanded="true">&lsaquo;</button><button id="density-toggle" type="button" title="Alternar densidade da lista" aria-label="Alternar densidade da lista" aria-pressed="false">≡</button><button id="new-conversation" class="new-conversation" type="button" title="Iniciar nova conversa">+ Nova</button><button id="clear-team-filter" title="Remover filtro de atendente" hidden>×</button><button id="refresh" title="Atualizar">↻</button></div></div>
       <div id="conversation-list" class="conversation-list"><div class="skeleton-list"><div class="skeleton skeleton-card"></div><div class="skeleton skeleton-card"></div><div class="skeleton skeleton-card"></div><div class="skeleton skeleton-card"></div><div class="skeleton skeleton-card"></div></div></div>
     </section>
 
@@ -142,6 +143,7 @@
     <h2 id="contact-name"></h2>
     <p id="contact-phone"></p>
   </button>
+  <span id="contact-company" class="company-badge company-badge-header" hidden></span>
 
   <button id="edit-contact-name" class="contact-name-edit" type="button" title="Editar nome do contato">✎</button>
   <button id="merge-contact" class="contact-merge-button" type="button" title="Fundir com outro contato" hidden>Fundir</button>
@@ -182,6 +184,7 @@
           <span id="social-reply-mode-icon" class="social-reply-mode-icon" aria-hidden="true"></span>
           <span id="social-reply-mode-text"></span>
         </div>
+        <div id="composer-sender" class="composer-sender" aria-live="polite" hidden></div>
         <form id="composer" class="composer">
           <div class="composer-tools">
             <label class="attach-image" title="Anexar imagem, vídeo ou documento" aria-label="Anexar imagem, vídeo ou documento"><input id="attachment-input" type="file" accept="image/jpeg,image/png,video/mp4,video/3gpp,video/3gp,application/pdf,text/plain,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,audio/*,.ogg,.opus,.mp3,.m4a,.aac,.amr"><span aria-hidden="true">+</span></label>
@@ -276,6 +279,7 @@
     <form id="audio-quick-reply-form" class="audio-quick-reply-form">
       <label><span>Nome</span><input id="aqr-name" maxlength="100" placeholder="Ex.: Saudação" required></label>
       <label><span>Comando</span><input id="aqr-shortcut" maxlength="31" placeholder="/saudacao_audio" pattern="/[a-z0-9_]{1,30}" title="/ seguido de letras minúsculas, números ou _" required autocomplete="off"></label>
+      <label id="aqr-company-field" hidden><span>Vale para</span><select id="aqr-company"></select></label>
       <label><span>Categoria</span><select id="aqr-category"><option value="">Sem categoria</option></select></label>
       <div class="aqr-audio"><span>Áudio</span>
         <div class="aqr-player-row"><audio id="aqr-player" controls preload="metadata"></audio><small id="aqr-duration"></small></div>
@@ -352,9 +356,10 @@
   <dialog id="category-dialog" class="category-dialog">
     <div class="dialog-header"><div><span>ORGANIZAÇÃO</span><h2>Categorias</h2><p>Crie seções e ajuste como elas aparecem no atendimento.</p></div><button id="close-categories" type="button" aria-label="Fechar">×</button></div>
     <form id="category-form" class="category-create-form">
+      <label id="category-company-field" hidden><span>Empresa</span><select id="category-company" aria-label="Empresa da categoria"></select></label>
       <label><span>Nome da categoria</span><input id="category-name" maxlength="60" placeholder="Ex.: 🛠️ Suporte" required></label>
       <label><span>Dentro de</span><select id="category-parent" aria-label="Categoria principal"><option value="">Categoria principal</option></select></label>
-      <label class="color-field"><span>Cor</span><input id="category-color" type="color" value="#ef5b2a"></label>
+      <label class="color-field"><span>Cor</span><input id="category-color" type="color" value="#6b7280"></label>
       <button type="submit">Criar categoria</button>
     </form>
     <div class="category-manager-title"><strong>Categorias existentes</strong><small>Desative uma categoria para ocultá-la dos novos atendimentos.</small></div>
@@ -385,6 +390,7 @@
           <label class="team-check"><input id="permission-start-conversations" type="checkbox"><span><b>Iniciar conversas</b><small>Exibe o botão Nova e permite iniciar e-mails pelas contas liberadas.</small></span></label>
           <label class="team-check"><input id="permission-merge-contacts" type="checkbox"><span><b>Fundir contatos</b><small>Permite vincular telefone, e-mail e outros canais da mesma pessoa.</small></span></label>
         </fieldset>
+        <fieldset class="team-companies"><legend>Empresas e cargo por empresa</legend><p>Sem empresa marcada, a pessoa não vê nada dela. O cargo pode variar por empresa (ex.: Supervisor na Mibro, Atendente na Sincrofit). Master vê todas.</p><div id="team-company-access"></div></fieldset>
         <fieldset class="team-categories"><legend>Categorias liberadas</legend><p>“Sem categoria”, cada categoria e cada subcategoria devem ser liberadas separadamente.</p><div id="team-category-access"></div></fieldset>
         <div class="team-form-actions"><button id="cancel-team-edit" type="button">Limpar</button><button type="submit">Salvar conta</button></div>
       </form>

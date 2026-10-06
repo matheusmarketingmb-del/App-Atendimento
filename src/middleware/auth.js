@@ -35,7 +35,10 @@ async function requireCampaignsPage(req, res, next) {
     const user = await auth.userFromToken(req.cookies[auth.COOKIE_NAME]);
     if (!user) return res.redirect("/login.html");
     const publicUser = auth.publicUser(user);
-    if (!publicUser.canManageCampaigns) return res.status(403).send("Acesso restrito a Admin/Supervisor ou usuários autorizados.");
+    // Multiempresa: abre se puder gerenciar campanhas em ALGUMA empresa (o
+    // cargo/permissão pode variar por empresa); cada ação revalida a empresa.
+    const companyIds = await require("../services/campaign-service").manageableCompanyIds(publicUser);
+    if (!companyIds.length) return res.status(403).send("Acesso restrito a Admin/Supervisor ou usuários autorizados.");
     req.user = publicUser;
     return next();
   } catch (error) { return next(error); }

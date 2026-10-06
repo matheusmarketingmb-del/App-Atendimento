@@ -13,7 +13,7 @@ let admin;
 
 test.before(async () => {
   originalSettings = await settingsService.getConversationSettings();
-  admin = await prisma.user.create({ data: { name: "Admin Reabertura", email: testEmail, role: "ADMIN" } });
+  admin = await prisma.user.create({ data: { companyAccess: { create: { companyId: "cmp_mibro" } }, name: "Admin Reabertura", email: testEmail, role: "ADMIN" } });
 });
 
 test.after(async () => {
@@ -32,10 +32,10 @@ test.after(async () => {
 
 test("mensagem real do cliente reabre conversa FINALIZADA e registra REOPENED_BY_CUSTOMER_MESSAGE", async () => {
   const contact = await prisma.contact.create({
-    data: { externalId: testContacts[0], phone: "5511900000101", name: "Cliente reabertura" },
+    data: { companyId: "cmp_mibro", externalId: testContacts[0], phone: "5511900000101", name: "Cliente reabertura" },
   });
   const conversation = await prisma.conversation.create({
-    data: { contactId: contact.id, status: "FINALIZADO", finalizedAt: new Date() },
+    data: { companyId: "cmp_mibro", contactId: contact.id, status: "FINALIZADO", finalizedAt: new Date() },
   });
 
   await saveIncoming({
@@ -55,10 +55,10 @@ test("mensagem real do cliente reabre conversa FINALIZADA e registra REOPENED_BY
 
 test("webhook de status (entregue/lido) não reabre conversa finalizada", async () => {
   const contact = await prisma.contact.create({
-    data: { externalId: testContacts[1], phone: "5511900000102", name: "Cliente status" },
+    data: { companyId: "cmp_mibro", externalId: testContacts[1], phone: "5511900000102", name: "Cliente status" },
   });
   const conversation = await prisma.conversation.create({
-    data: { contactId: contact.id, status: "FINALIZADO", finalizedAt: new Date() },
+    data: { companyId: "cmp_mibro", contactId: contact.id, status: "FINALIZADO", finalizedAt: new Date() },
   });
   const message = await prisma.message.create({ data: {
     conversationId: conversation.id, externalId: "wamid.reopen.status", channel: "META",
@@ -78,10 +78,10 @@ test("webhook de status (entregue/lido) não reabre conversa finalizada", async 
 
 test("reopenConversationOnCustomerMessage = false: mensagem do cliente não reabre a conversa", async () => {
   const contact = await prisma.contact.create({
-    data: { externalId: testContacts[2], phone: "5511900000103", name: "Cliente sem reabertura" },
+    data: { companyId: "cmp_mibro", externalId: testContacts[2], phone: "5511900000103", name: "Cliente sem reabertura" },
   });
   const conversation = await prisma.conversation.create({
-    data: { contactId: contact.id, status: "FINALIZADO", finalizedAt: new Date() },
+    data: { companyId: "cmp_mibro", contactId: contact.id, status: "FINALIZADO", finalizedAt: new Date() },
   });
 
   await settingsService.updateConversationSettings(

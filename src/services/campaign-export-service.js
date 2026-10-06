@@ -30,9 +30,7 @@ function statusWhere(filter) {
 }
 
 async function exportCampaignContacts(campaignId, { filter } = {}, viewer) {
-  authorization.assertCanManageCampaigns(viewer);
-  const campaign = await prisma.campaign.findUnique({ where: { id: campaignId }, select: { id: true, name: true } });
-  if (!campaign) throw Object.assign(new Error("Campanha não encontrada."), { statusCode: 404 });
+  const campaign = await require("./campaign-service").findCampaignOr404(campaignId, prisma, viewer);
 
   const rows = await prisma.campaignContact.findMany({
     where: { campaignId, isTest: false, ...statusWhere(filter) },

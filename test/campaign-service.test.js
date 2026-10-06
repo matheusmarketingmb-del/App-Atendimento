@@ -53,6 +53,7 @@ test.before(async () => {
   attendant = await prisma.user.upsert({
     where: { email: attendantEmail }, update: {}, create: { name: "Atendente Campanha", email: attendantEmail, role: "ATENDENTE" },
   });
+  await require("./support/company").grantCompany(prisma, attendant.id);
   await prisma.campaignGlobalSettings.upsert({
     where: { id: "singleton" }, update: { massMessagingEnabled: false, allowImports: true, allowScheduling: true },
     create: { id: "singleton", massMessagingEnabled: false },
@@ -67,7 +68,7 @@ test.after(async () => {
 });
 
 async function createDraftCampaign(overrides = {}) {
-  return campaigns.createCampaign({
+  return campaigns.createCampaign({ companyId: "cmp_mibro",
     name: `${namePrefix} ${Date.now()}-${Math.random()}`,
     templateName: approvedTemplate.name, templateLanguage: approvedTemplate.language,
     variableMapping: { "BODY:1": "firstName", "BODY:2": "static:sua empresa" },
@@ -78,14 +79,14 @@ async function createDraftCampaign(overrides = {}) {
 test("template não aprovado é bloqueado ao criar campanha", async () => {
   const channel = fakeChannel({ listMessageTemplates: async () => [{ ...approvedTemplate, status: "PENDING" }] });
   await assert.rejects(
-    () => campaigns.createCampaign({ name: `${namePrefix} X`, templateName: approvedTemplate.name, templateLanguage: "pt_BR" }, admin, channel),
+    () => campaigns.createCampaign({ companyId: "cmp_mibro", name: `${namePrefix} X`, templateName: approvedTemplate.name, templateLanguage: "pt_BR" }, admin, channel),
     /aprovados/,
   );
 });
 
 test("RBAC: atendente sem canManageCampaigns não pode criar campanha", async () => {
   await assert.rejects(
-    () => campaigns.createCampaign({ name: `${namePrefix} RBAC`, templateName: approvedTemplate.name, templateLanguage: "pt_BR" }, attendant, fakeChannel()),
+    () => campaigns.createCampaign({ companyId: "cmp_mibro", name: `${namePrefix} RBAC`, templateName: approvedTemplate.name, templateLanguage: "pt_BR" }, attendant, fakeChannel()),
     (error) => error.statusCode === 403,
   );
 });
@@ -106,7 +107,7 @@ test("CSV: parser lida com aspas/vírgulas e sanitizeCsvCell neutraliza fórmula
 test("importação: telefone inválido, duplicado no arquivo e opt-out são excluídos automaticamente", async () => {
   await cleanup();
   const campaign = await createDraftCampaign();
-  await optOutService.registerOptOut({ phone: "5511977000009", source: "MANUAL" });
+  await optOutService.registerOptOut({ companyId: "cmp_mibro", phone: "5511977000009", source: "MANUAL" });
 
   const csvText = [
     "phone,firstName",
@@ -297,13 +298,13 @@ test("opt-out por mensagem: 'SAIR' é detectado e exclui o contato de campanhas 
   assert.equal(detectOptOutKeyword("quero SAIR da lista"), true);
   assert.equal(detectOptOutKeyword("oi, tudo bem?"), false);
 
-  await optOutService.registerOptOut({ phone: "5511977000071", source: "REPLY_KEYWORD" });
-  assert.equal(await optOutService.isOptedOut("5511977000071"), true);
+  await optOutService.registerOptOut({ companyId: "cmp_mibro", phone: "5511977000071", source: "REPLY_KEYWORD" });
+  assert.equal(await optOutService.isOptedOut("5511977000071", "cmp_mibro"), true);
 
   await assert.rejects(() => optOutService.removeOptOut("5511977000071", {}, admin), /motivo/);
-  const removed = await optOutService.removeOptOut("5511977000071", { reason: "Cliente pediu para voltar a receber" }, admin);
+  const removed = await optOutService.removeOptOut("5511977000071", { companyId: "cmp_mibro", reason: "Cliente pediu para voltar a receber" }, admin);
   assert.ok(removed.removedAt);
-  assert.equal(await optOutService.isOptedOut("5511977000071"), false);
+  assert.equal(await optOutService.isOptedOut("5511977000071", "cmp_mibro"), false);
 });
 
 test("resposta do cliente vincula o CampaignContact como REPLIED e nunca reatribui uma conversa já triada", async () => {
@@ -313,10 +314,10 @@ test("resposta do cliente vincula o CampaignContact como REPLIED e nunca reatrib
   const contact = await prisma.campaignContact.create({
     data: { campaignId: campaign.id, phone: "5511977000081", status: "SENT", sentAt: new Date() },
   });
-  const conversationContact = await prisma.contact.create({ data: { channel: "META", externalId: "5511977000081", phone: "5511977000081", name: "Cliente" } });
-  const conversation = await prisma.conversation.create({ data: { contactId: conversationContact.id, status: "NOVO" } });
+  const conversationContact = await prisma.contact.create({ data: { companyId: "cmp_mibro", channel: "META", externalId: "5511977000081", phone: "5511977000081", name: "Cliente" } });
+  const conversation = await prisma.conversation.create({ data: { companyId: "cmp_mibro", contactId: conversationContact.id, status: "NOVO" } });
 
-  await campaignReplyService.handleInboundMessage({ phone: "5511977000081", text: "Oi, tenho interesse!", conversationId: conversation.id });
+  await campaignReplyService.handleInboundMessage({ companyId: "cmp_mibro", phone: "5511977000081", text: "Oi, tenho interesse!", conversationId: conversation.id });
 
   const updatedContact = await prisma.campaignContact.findUnique({ where: { id: contact.id } });
   assert.equal(updatedContact.status, "REPLIED");
@@ -329,7 +330,7 @@ test("resposta do cliente vincula o CampaignContact como REPLIED e nunca reatrib
 
 test("resposta aplica responsável e Bot configurados sem sobrescrever estado existente", async () => {
   await cleanup();
-  const bot = await prisma.bot.create({ data: {
+  const bot = await prisma.bot.create({ data: { companyId: "cmp_mibro",
     name: `Bot Campanha ${Date.now()}`, status: "ACTIVE", channel: "META",
     initialMessage: "Olá!", outsideHoursMessage: "Fora.", fallbackMessage: "Não entendi.",
   } });
@@ -338,11 +339,11 @@ test("resposta aplica responsável e Bot configurados sem sobrescrever estado ex
     data: { campaignId: campaign.id, phone: "5511977000083", status: "SENT", sentAt: new Date() },
   });
   const contact = await prisma.contact.create({
-    data: { channel: "META", externalId: "5511977000083", phone: "5511977000083", name: "Cliente Campanha" },
+    data: { companyId: "cmp_mibro", channel: "META", externalId: "5511977000083", phone: "5511977000083", name: "Cliente Campanha" },
   });
-  const conversation = await prisma.conversation.create({ data: { contactId: contact.id, status: "NOVO" } });
+  const conversation = await prisma.conversation.create({ data: { companyId: "cmp_mibro", contactId: contact.id, status: "NOVO" } });
 
-  await campaignReplyService.handleInboundMessage({
+  await campaignReplyService.handleInboundMessage({ companyId: "cmp_mibro",
     phone: "5511977000083", text: "Tenho interesse", conversationId: conversation.id, contactId: contact.id,
   });
 
@@ -365,7 +366,7 @@ test("status atrasado da Meta nunca regride READ para DELIVERED", async () => {
 });
 test("envio de teste nunca entra nas métricas reais da campanha", async () => {
   await cleanup();
-  const campaign = await campaigns.createCampaign({
+  const campaign = await campaigns.createCampaign({ companyId: "cmp_mibro",
     name: `${namePrefix} Teste`, templateName: approvedTemplate.name, templateLanguage: approvedTemplate.language,
     variableMapping: { "BODY:1": "firstName", "BODY:2": "static:empresa" }, testPhone: "5511977000091",
   }, admin, fakeChannel());

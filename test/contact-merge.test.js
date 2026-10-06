@@ -14,13 +14,13 @@ let whatsappConversation;
 let emailConversation;
 
 test.before(async () => {
-  allowed = await prisma.user.create({ data: { name:"Pode fundir", email:`${prefix}-allowed@example.com`, role:"ATENDENTE", canViewUncategorized:true, canMergeContacts:true } });
-  denied = await prisma.user.create({ data: { name:"Não pode fundir", email:`${prefix}-denied@example.com`, role:"ATENDENTE", canViewUncategorized:true } });
-  account = await prisma.channelAccount.create({ data: { channel:"EMAIL", name:prefix, status:"CONNECTED", enabled:true, accessUsers:{ create:{ userId:allowed.id } } } });
-  whatsapp = await prisma.contact.create({ data: { channel:"META", externalId:`${prefix}-phone`, phone:"5511999999999", name:"Cliente WhatsApp" } });
-  email = await prisma.contact.create({ data: { channel:"EMAIL", externalId:`${prefix}-mail`, email:`${prefix}@example.com`, name:"Cliente E-mail" } });
-  whatsappConversation = await prisma.conversation.create({ data: { contactId:whatsapp.id, channel:"META", channelScope:prefix } });
-  emailConversation = await prisma.conversation.create({ data: { contactId:email.id, channel:"EMAIL", channelScope:prefix, channelAccountId:account.id } });
+  allowed = await prisma.user.create({ data: { companyAccess: { create: { companyId: "cmp_mibro" } }, name:"Pode fundir", email:`${prefix}-allowed@example.com`, role:"ATENDENTE", canViewUncategorized:true, canMergeContacts:true } });
+  denied = await prisma.user.create({ data: { companyAccess: { create: { companyId: "cmp_mibro" } }, name:"Não pode fundir", email:`${prefix}-denied@example.com`, role:"ATENDENTE", canViewUncategorized:true } });
+  account = await prisma.channelAccount.create({ data: { companyId: "cmp_mibro", channel:"EMAIL", name:prefix, status:"CONNECTED", enabled:true, accessUsers:{ create:{ userId:allowed.id } } } });
+  whatsapp = await prisma.contact.create({ data: { companyId: "cmp_mibro", channel:"META", externalId:`${prefix}-phone`, phone:"5511999999999", name:"Cliente WhatsApp" } });
+  email = await prisma.contact.create({ data: { companyId: "cmp_mibro", channel:"EMAIL", externalId:`${prefix}-mail`, email:`${prefix}@example.com`, name:"Cliente E-mail" } });
+  whatsappConversation = await prisma.conversation.create({ data: { companyId: "cmp_mibro", contactId:whatsapp.id, channel:"META", channelScope:prefix } });
+  emailConversation = await prisma.conversation.create({ data: { companyId: "cmp_mibro", contactId:email.id, channel:"EMAIL", channelScope:prefix, channelAccountId:account.id } });
 });
 
 test.after(async () => {

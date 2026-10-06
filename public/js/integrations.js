@@ -46,7 +46,14 @@ const OAUTH_OPTIONS_BY_CHANNEL = {
 // inventado: os que ainda não têm API confirmada (Shopee, Reclame Aqui)
 // só guardam configuração básica para quando o acesso for liberado.
 const CHANNEL_FIELDS = {
-  META: null,
+  // Multiempresa: cada número de WhatsApp é uma conta, da empresa escolhida.
+  // Token próprio é opcional (sem ele usa o WHATSAPP_TOKEN do mesmo App Meta).
+  META: [
+    { key: "config.phoneNumberId", label: "Phone Number ID (Meta)", secret: false },
+    { key: "config.wabaId", label: "WABA ID (conta WhatsApp Business — define os templates)", secret: false },
+    { key: "config.displayNumber", label: "Número exibido (ex.: +55 11 4000-0000)", secret: false, optional: true },
+    { key: "secrets.accessToken", label: "Token de acesso próprio", secret: true, optional: true },
+  ],
   EMAIL: [
     { key: "config.provider", label: "Provedor (GMAIL ou MICROSOFT_365)", secret: false },
     { key: "config.gmailSyncLabel", label: "Marcador do Gmail a importar (como aparece na busca, ex.: shopify--site-mibro-)", secret: false, optional: true },
@@ -170,7 +177,7 @@ function renderCards() {
     const accountsHtml = accounts.length ? accounts.map((account) => `
       <div class="account-row" data-account-id="${escapeHtml(account.id)}">
         <div class="account-row-main">
-          <strong>${escapeHtml(account.name)}</strong>
+          <strong>${escapeHtml(account.name)}</strong>${window.CompanyContext.badge(account.company)}
           <span class="status-pill ${statusBadgeClass(account.status)}">${escapeHtml(STATUS_LABELS[account.status] || account.status)}</span>
           <span class="enabled-pill ${account.enabled ? "on" : "off"}">${account.enabled ? "Ativado" : "Desativado"}</span>
         </div>
@@ -196,7 +203,9 @@ function renderCards() {
         </header>
         <div class="cap-badges">${capBadges || '<span class="cap-badge cap-badge-empty">Sem capacidades ativas nesta fase</span>'}</div>
         ${isMeta
-          ? '<p class="meta-note">Gerenciado pelas variáveis de ambiente originais do WhatsApp — este painel não altera essa integração.</p>'
+          ? `<p class="meta-note">Cada número é uma conta vinculada a uma empresa — é o número que recebeu a mensagem que define a empresa da conversa. O número original continua usando as variáveis de ambiente.</p>
+             <div class="account-list">${accountsHtml}</div>
+             <details class="advanced-config"><summary>Adicionar número de WhatsApp</summary><button type="button" class="add-account" data-channel="META">Cadastrar número</button></details>`
           : `<div class="account-list">${accountsHtml}</div>
              ${oauthButtons(entry)
                ? `<div class="oauth-actions">${oauthButtons(entry)}</div>`
@@ -235,6 +244,10 @@ function renderCards() {
 function openAccountDialog(channel, account = null) {
   state.editingChannel = channel;
   state.editingAccountId = account?.id || null;
+  // Empresa: escolhida na criação, imutável depois (define a origem das conversas).
+  $("#account-company-field").innerHTML = account
+    ? (account.company ? `<p class="account-dialog-company">Empresa: ${window.CompanyContext.badge(account.company)} ${escapeHtml(account.company.name)}</p>` : "")
+    : window.CompanyContext.selectHtml("account-company", { value: $("#integration-company")?.value || "" });
   $("#account-dialog-title").textContent = account ? "Reconectar conta" : "Nova conta";
   $("#account-dialog-channel").textContent = CHANNEL_LABELS[channel] || channel;
   $("#account-name").value = account?.name || "";
@@ -275,7 +288,7 @@ async function saveAccount(event) {
       await api(`/api/integrations/accounts/${accountId}`, { method: "PATCH", body: JSON.stringify({ name, config, secrets }) });
       toast("Conta atualizada. Use \"Testar conexão\" para validar.");
     } else {
-      await api("/api/integrations/accounts", { method: "POST", body: JSON.stringify({ channel, name, config, secrets }) });
+      await api("/api/integrations/accounts", { method: "POST", body: JSON.stringify({ channel, name, config, secrets, companyId: $("#account-company")?.value || undefined }) });
       toast("Conta criada. Use \"Testar conexão\" para validar as credenciais.");
     }
     $("#account-dialog").close();
@@ -298,7 +311,7 @@ async function startOAuth(accountId, channel, provider) {
   if (!provider) return toast("OAuth ainda não está disponível para este canal. Use Configuração avançada.", true);
   try {
     const result = await api("/api/integrations/oauth/start", {
-      method: "POST", body: JSON.stringify({ channel, channelAccountId: accountId || null, provider }),
+      method: "POST", body: JSON.stringify({ channel, channelAccountId: accountId || null, provider, companyId: accountId ? undefined : ($("#integration-company")?.value || undefined) }),
     });
     const popup = window.open(result.url, "mibro-oauth", "width=560,height=720");
     if (!popup) return toast("O navegador bloqueou a janela de autorização. Permita pop-ups para este site.", true);
@@ -379,6 +392,12 @@ async function deleteAccount(accountId) {
 }
 
 async function loadOverview() {
+  await window.CompanyContext.load();
+  const companySelect = $("#integration-company");
+  if (companySelect && !companySelect.options.length) {
+    companySelect.innerHTML = window.CompanyContext.companies.map((company) => `<option value="${escapeHtml(company.id)}">${escapeHtml(company.name)}</option>`).join("");
+    companySelect.closest(".integrations-company-bar").hidden = !window.CompanyContext.multi();
+  }
   const overview = await api("/api/integrations/overview");
   state.overview = MARKETPLACE_UI_ENABLED ? overview : overview.filter((entry) => !isMarketplaceChannel(entry.channel));
   renderCards();

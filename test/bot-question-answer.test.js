@@ -83,12 +83,14 @@ test("qualidade coleta nota e comentário antes de concluir", async () => {
   assert.equal(done.state.context.flow.ratingComment, "Ótimo");
 });
 
-test("conversão persistente é seletiva, idempotente e não apaga histórico", async () => {
+// Integração destrutiva: só roda no banco QA isolado (docs/BOTS_PERGUNTAS_RESPOSTAS_LOCAL.md);
+// fora dele aparece como "pulado", nunca como falha.
+test("conversão persistente é seletiva, idempotente e não apaga histórico", { skip: process.env.DATABASE_URL !== "postgresql://bot_qa:isolated-local-qa@127.0.0.1:25432/bot_qa" && "requer o banco QA isolado (127.0.0.1:25432/bot_qa)" }, async () => {
   assert.equal(process.env.DATABASE_URL, "postgresql://bot_qa:isolated-local-qa@127.0.0.1:25432/bot_qa", "Use SOMENTE o banco local isolado indicado neste teste.");
-  for (const category of categories) await prisma.category.upsert({ where: { id: category.id }, update: {}, create: { ...category, code: `QA_${category.code}` } });
-  const bot = await prisma.bot.upsert({ where: { id: "system-triage-bot" }, update: {}, create: { id: "system-triage-bot", name: "Triagem Inicial", type: "SYSTEM_TRIAGE", isSystem: true, status: "ACTIVE", autoReplyEnabled: true, executionMode: "LEGACY", channel: "META", initialMessage: "Olá", outsideHoursMessage: "Fechado", fallbackMessage: "Equipe" } });
+  for (const category of categories) await prisma.category.upsert({ where: { id: category.id }, update: {}, create: { ...category, companyId: "cmp_mibro", code: `QA_${category.code}` } });
+  const bot = await prisma.bot.upsert({ where: { id: "system-triage-bot" }, update: {}, create: { id: "system-triage-bot", companyId: "cmp_mibro", name: "Triagem Inicial", type: "SYSTEM_TRIAGE", isSystem: true, status: "ACTIVE", autoReplyEnabled: true, executionMode: "LEGACY", channel: "META", initialMessage: "Olá", outsideHoursMessage: "Fechado", fallbackMessage: "Equipe" } });
   for (const category of categories) await prisma.botTriageOption.upsert({ where: { botId_categoryId: { botId: bot.id, categoryId: category.id } }, update: { label: `QA ${category.name}` }, create: { botId: bot.id, categoryId: category.id, label: `QA ${category.name}` } });
-  await prisma.bot.upsert({ where: { id: "qa-archive" }, update: {}, create: { id: "qa-archive", name: "Bot extra QA", channel: "META", executionMode: "LEGACY", initialMessage: "Original", outsideHoursMessage: "Original", fallbackMessage: "Original" } });
+  await prisma.bot.upsert({ where: { id: "qa-archive" }, update: {}, create: { id: "qa-archive", companyId: "cmp_mibro", name: "Bot extra QA", channel: "META", executionMode: "LEGACY", initialMessage: "Original", outsideHoursMessage: "Original", fallbackMessage: "Original" } });
   const before = { conversations: await prisma.conversation.count(), messages: await prisma.message.count(), intents: await prisma.botIntent.count() };
   const assistantEnabledBefore = (await prisma.bot.findUnique({ where: { id: "mibro-assistant-observer" } })).autoReplyEnabled;
   await ensureQuestionAnswerBots({ log: { info() {} } });

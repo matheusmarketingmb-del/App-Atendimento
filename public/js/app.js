@@ -19,6 +19,9 @@ const state = {
   outboundChannels: [], categoryVisibility: { hideUncategorized:false, hiddenCategoryIds:[] }, visibilityMode:false,
   quickReplies: [], quickReplyCategoryFilter: "", quickReplyTypeFilter: "", quickReplySearch: "",
   mergedDestinations: [],
+  // Multiempresa: empresas acessíveis (com o cargo em cada uma), filtro
+  // "Todas | Mibro | Sincrofit" (slug ou "ALL") e empresa da conversa aberta.
+  companies: [], companyFilter: "ALL", selectedCompanyId: null,
 };
 const $ = (selector) => document.querySelector(selector);
 const defaultDocumentTitle = document.title;
@@ -33,6 +36,16 @@ let pendingAudio = null;
 let pendingAudioUrl = null;
 const escapeHtml = (value = "") => String(value).replace(/[&<>'"]/g, (char) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", "'":"&#39;", '"':"&quot;" })[char]);
 const initials = (name = "?") => name.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
+// Multiempresa: identidade discreta por empresa. A cor vem sempre de
+// company.primaryColor (validada como #RRGGBB) — nunca fixa no código.
+const companyColor = (company) => (/^#[0-9a-f]{6}$/i.test(company?.primaryColor || "") ? company.primaryColor : "");
+const companyStyleAttr = (company) => (companyColor(company) ? ` style="--company-color:${companyColor(company)}"` : "");
+const companyBadge = (company, extraClass = "") => (company
+  ? `<span class="company-badge ${extraClass}"${companyStyleAttr(company)} title="${escapeHtml(company.name || company.displayName)}">${escapeHtml(company.displayName || company.name)}</span>`
+  : "");
+// Com uma empresa só, o badge seria redundante (a borda continua).
+const multiCompany = () => state.companies.length > 1;
+const companyQuery = () => (state.companyFilter && state.companyFilter !== "ALL" ? state.companyFilter : "");
 const conversationTimeZone = "America/Sao_Paulo";
 const time = (value) => value ? new Intl.DateTimeFormat("pt-BR", { hour:"2-digit", minute:"2-digit", timeZone:conversationTimeZone }).format(new Date(value)) : "";
 const statusLabel = (value) => ({ NOVO:"Novo", EM_ATENDIMENTO:"Em atendimento", AGUARDANDO_EQUIPE:"Aguardando equipe", AGUARDANDO_CLIENTE:"Aguardando cliente", HANDOFF_BOT:"Bot transferiu", BOT:"Bot", FINALIZADO:"Finalizado" })[value] || value;
@@ -127,6 +140,9 @@ function handoffNoticeMarkup(c) {
 
 function closeConversationView() {
   conversationLoadSequence += 1;
+  state.selectedCompanyId = null;
+  if ($("#composer-sender")) { $("#composer-sender").hidden = true; $("#composer-sender").innerHTML = ""; }
+  if ($("#contact-company")) $("#contact-company").hidden = true;
   discardComposerAudio();
   state.selectedId = null;
   state.selectedContactId = null;
@@ -262,6 +278,7 @@ function conversationSignature(conversation) {
   const note = conversation.contact.notes?.[0];
   return JSON.stringify([
     conversation.id, conversation.id === state.selectedId, conversation.status, conversation.channel, conversation.unreadCount, conversation.lastMessageAt,
+    conversation.companyId, conversation.company?.primaryColor, multiCompany(),
     conversation.categoryId, conversation.category?.name, conversation.category?.color, conversation.category?.parent?.name,
     conversation.assignedUserId, conversation.assignedUser?.name,
     conversation.priority, conversation.firstResponseSlaBreached, conversation.responseSlaBreached, conversation.slaMinutesRemaining,
@@ -274,9 +291,9 @@ function conversationSignature(conversation) {
 
 function conversationCardMarkup(c) {
   const last = c.messages[0]; const name = c.contact.customName || c.contact.name || c.contact.email || c.contact.phone; const note = c.contact.notes?.[0];
-  return `<button class="conversation-card ${c.id === state.selectedId ? "active" : ""}" data-id="${escapeHtml(c.id)}">
+  return `<button class="conversation-card ${c.id === state.selectedId ? "active" : ""} ${c.company ? "has-company" : ""}" data-id="${escapeHtml(c.id)}"${c.company ? ` data-company="${escapeHtml(c.company.slug)}"` : ""}${companyStyleAttr(c.company)}${c.id === state.selectedId ? ` aria-current="true"` : ""}>
     <span class="card-grip" aria-hidden="true"></span><span class="avatar">${escapeHtml(initials(name))}</span><span class="card-main">
-    <span class="card-title"><strong>${c.isPinned ? `<i class="conversation-pin" title="Conversa fixada">★</i>` : ""}${escapeHtml(name)}</strong><small>${escapeHtml(c.contact.email || c.contact.phone || "")}</small></span>
+    <span class="card-title"><strong>${c.isPinned ? `<i class="conversation-pin" title="Conversa fixada">★</i>` : ""}${escapeHtml(name)}</strong>${multiCompany() ? companyBadge(c.company, "card-company-badge") : ""}<small>${escapeHtml(c.contact.email || c.contact.phone || "")}</small></span>
     <span class="preview">${escapeHtml(messagePreview(last))}</span>
     <span class="card-labels">${channelBadge(c.channel) ? `<span class="channel-label">${escapeHtml(channelBadge(c.channel))}</span>` : ""}${needsCategoryAlert(c) ? `<span class="category-label category-missing-label" title="Esta conversa ainda não possui categoria definida.">⚠ Sem categoria</span>` : `<span class="category-label" style="color:${c.category?.color || "#666"};border-color:${c.category?.color || "#aaa"}">${escapeHtml(categoryLabel(c.category))}</span>`}<span class="status-label">${escapeHtml(statusLabel(c.status))}</span>${c.assignedUser ? `<span class="assignee-label">${escapeHtml(c.assignedUser.name)}</span>` : ""}${priorityBadge(c.priority)}${slaBadge(c.slaMinutesRemaining)}</span></span>
     <span class="card-side"><span>${time(c.lastMessageAt)}</span><span class="card-elapsed">${escapeHtml(elapsedShort(c.lastMessageAt))}</span>${c.unreadCount ? `<span class="unread">${c.unreadCount}</span>` : ""}</span>
@@ -499,6 +516,10 @@ async function loadCurrentUser() {
   const status = await api("/api/auth/status");
   if (!status.authenticated) return location.replace("/login.html");
   state.currentUser = status.user;
+  state.companies = status.companyAccess?.companies || [];
+  state.companyFilter = status.companyAccess?.preference || "ALL";
+  if (state.companyFilter !== "ALL" && !state.companies.some((company) => company.slug === state.companyFilter)) state.companyFilter = "ALL";
+  renderCompanyFilter();
   $("#current-user").textContent = status.user.name;
   $("#bots-button").hidden = !status.user.isMaster;
   $("#quick-replies-admin-button").hidden = !status.user.isMaster;
@@ -522,6 +543,47 @@ async function loadCurrentUser() {
   try { storedCursor = localStorage.getItem(cursorKey); } catch {}
   state.alertCursor = storedCursor && !Number.isNaN(new Date(storedCursor).getTime()) ? storedCursor : new Date().toISOString();
   try { localStorage.setItem(cursorKey, state.alertCursor); } catch {}
+}
+
+// Filtro de empresa (item 14/15/16): só empresas com acesso; "Todas" só
+// com mais de uma; a escolha fica salva no servidor (preferência do usuário,
+// sempre revalidada contra o acesso no backend).
+// No celular o painel de filtros fica oculto: o mesmo filtro é repetido no
+// topo da lista (#company-filter-mobile).
+function renderCompanyFilter() {
+  const containers = [$("#company-filter"), $("#company-filter-mobile")].filter(Boolean);
+  if (!containers.length) return;
+  containers.forEach((container) => { container.hidden = !multiCompany(); });
+  if (!multiCompany()) { state.companyFilter = "ALL"; containers.forEach((container) => { container.innerHTML = ""; }); return; }
+  const options = [{ slug: "ALL", displayName: "Todas", name: "Todas as empresas" }, ...state.companies];
+  const markup = options.map((company) => `<button type="button" role="radio" class="company-filter-option${company.slug === state.companyFilter ? " active" : ""}" data-company-filter="${escapeHtml(company.slug)}" aria-checked="${company.slug === state.companyFilter}"${companyStyleAttr(company)} title="${escapeHtml(company.name)}">${company.slug === "ALL" ? "" : `<i class="company-dot" aria-hidden="true"></i>`}${escapeHtml(company.slug === "ALL" ? "Todas" : company.displayName)}</button>`).join("");
+  containers.forEach((container) => { container.innerHTML = markup; });
+}
+
+async function setCompanyFilter(slug) {
+  if (slug === state.companyFilter) return;
+  state.companyFilter = slug;
+  renderCompanyFilter();
+  state.categorySignature = "";
+  state.listSignature = "";
+  api("/api/companies/preference", { method: "PUT", body: JSON.stringify({ company: slug }) }).catch(() => {});
+  await loadCategories();
+  await loadConversations();
+}
+
+$("#category-company")?.addEventListener("change", renderCategoryParentOptions);
+for (const container of [$("#company-filter"), $("#company-filter-mobile")]) {
+  container?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-company-filter]");
+    if (button) setCompanyFilter(button.dataset.companyFilter).catch((error) => toast(error.message, true));
+  });
+}
+
+// Responsável: só quem tem acesso à empresa da conversa (o backend também
+// valida). Mantém o responsável atual mesmo que ele tenha perdido acesso.
+function renderAssigneeOptions(companyId, currentAssigneeId) {
+  const eligible = state.users.filter((user) => !companyId || !user.companyIds || user.companyIds.includes(companyId) || user.id === currentAssigneeId);
+  $("#assignee-select").innerHTML = `<option value="">Sem responsável</option>` + eligible.map((user) => `<option value="${user.id}">${escapeHtml(user.name)}</option>`).join("");
 }
 
 async function loadUsers() {
@@ -653,7 +715,7 @@ async function openTemplates() {
   renderTemplateEditor();
   $("#template-dialog").showModal();
   try {
-    state.templates = await api("/api/meta/templates");
+    state.templates = await api(`/api/meta/templates?conversationId=${encodeURIComponent(state.selectedId)}`);
     renderTemplateList();
   } catch (error) {
     $("#template-list").innerHTML = `<div class="template-empty">${escapeHtml(error.message)}</div>`;
@@ -776,10 +838,13 @@ async function setCategoryHidden(categoryId, hidden) {
 async function loadCategories() {
   const previousPrimaryCategory = $("#category-select").value;
   const previousSubcategory = $("#subcategory-select").value;
-  const [categories, visibility] = await Promise.all([api("/api/categories"), api("/api/category-visibility")]);
-  state.categories = categories;
+  const [allCategories, visibility] = await Promise.all([api("/api/categories"), api("/api/category-visibility")]);
+  // state.categories = todas as empresas acessíveis (o select da conversa usa
+  // só as da empresa dela); a barra lateral usa a visão filtrada abaixo.
+  state.categories = allCategories;
   state.categoryVisibility = visibility;
-  const signature = JSON.stringify([state.visibilityMode, visibility, categories.map((category) => [category.id, category.parentId, category.parent?.name, category.code, category.name, category.color, category.active, category.displayOrder, category.hidden])]);
+  const categories = sidebarCategories(allCategories);
+  const signature = JSON.stringify([state.visibilityMode, state.companyFilter, visibility, allCategories.map((category) => [category.id, category.companyId, category.parentId, category.parent?.name, category.code, category.name, category.color, category.active, category.displayOrder, category.hidden])]);
   if (signature === state.categorySignature) return;
   state.categorySignature = signature;
   state.selectedHeaderSignature = "";
@@ -803,8 +868,8 @@ async function loadCategories() {
     const rootRow = rootShown ? row(root) : `<div class="category-group-label"><i class="category-dot" style="background:${root.color || "#999"}"></i><span>${escapeHtml(root.name)}</span><small>principal oculta</small></div>`;
     return `<div class="category-filter-group">${rootRow}${children.length ? `<div class="subcategory-filters" data-category-children="${root.id}" ${expanded ? "" : "hidden"}>${children.map((child) => row(child, true)).join("")}</div>` : ""}</div>`;
   }).join("");
-  $("#category-select").innerHTML = `${state.currentUser?.canViewUncategorized ? `<option value="">Sem categoria</option>` : `<option value="" disabled>Selecione a categoria</option>`}` + roots.map((category) => `<option value="${category.id}" data-selectable="${category.selectable !== false}">${escapeHtml(category.name)}</option>`).join("");
-  $("#category-parent").innerHTML = `<option value="">Categoria principal</option>` + roots.map((category) => `<option value="${category.id}">${escapeHtml(category.name)}</option>`).join("");
+  renderCategorySelect();
+  renderCategoryCompanyOptions();
   if ([...$("#category-select").options].some((option) => option.value === previousPrimaryCategory)) $("#category-select").value = previousPrimaryCategory;
   populateSubcategorySelect($("#category-select").value, previousSubcategory);
   document.querySelectorAll("[data-hide-category]").forEach((button) => button.addEventListener("click", () => setCategoryHidden(button.dataset.hideCategory, button.dataset.hidden !== "true").catch((error) => toast(error.message, true))));
@@ -821,11 +886,63 @@ async function loadCategories() {
   renderCategoryManager();
 }
 
+// Barra lateral: empresa escolhida, ou — em "Todas" — um setor por código
+// (subsetores remapeados para a principal mantida).
+function sidebarCategories(categories) {
+  if (state.companyFilter && state.companyFilter !== "ALL") {
+    return categories.filter((category) => category.company?.slug === state.companyFilter);
+  }
+  if (!multiCompany()) return categories;
+  const keptRoots = new Map();
+  for (const category of categories) if (!category.parentId && !keptRoots.has(category.code)) keptRoots.set(category.code, category);
+  const seenChildren = new Set();
+  return categories.flatMap((category) => {
+    if (!category.parentId) return keptRoots.get(category.code) === category ? [category] : [];
+    const parent = keptRoots.get(category.parent?.code);
+    const key = `${category.parent?.code}/${category.code}`;
+    if (!parent || seenChildren.has(key)) return [];
+    seenChildren.add(key);
+    return [{ ...category, parentId: parent.id }];
+  });
+}
+
+// Select de categoria da conversa aberta: SÓ setores da empresa dela —
+// nunca "Renova Mibro" numa conversa Sincrofit (o backend também barra).
+function renderCategorySelect() {
+  const activeIds = new Set(state.categories.filter((category) => category.active).map((category) => category.id));
+  const roots = orderedCategories(state.categories.filter((category) => category.active && !category.parentId
+    && (!state.selectedCompanyId || category.companyId === state.selectedCompanyId)
+    && (!category.parentId || activeIds.has(category.parentId))));
+  $("#category-select").innerHTML = `${state.currentUser?.canViewUncategorized ? `<option value="">Sem categoria</option>` : `<option value="" disabled>Selecione a categoria</option>`}` + roots.map((category) => `<option value="${category.id}" data-selectable="${category.selectable !== false}">${escapeHtml(category.name)}</option>`).join("");
+}
+
+// Formulário "Criar categoria": empresa primeiro; "Dentro de" só lista
+// principais da empresa escolhida.
+function renderCategoryCompanyOptions() {
+  const select = $("#category-company");
+  const previous = select.value;
+  select.innerHTML = state.companies.map((company) => `<option value="${escapeHtml(company.id)}">${escapeHtml(company.name)}</option>`).join("");
+  if ([...select.options].some((option) => option.value === previous)) select.value = previous;
+  else {
+    const preferred = state.companies.find((company) => company.slug === state.companyFilter);
+    if (preferred) select.value = preferred.id;
+  }
+  $("#category-company-field").hidden = !multiCompany();
+  renderCategoryParentOptions();
+}
+
+function renderCategoryParentOptions() {
+  const companyId = $("#category-company").value;
+  const roots = orderedCategories(state.categories.filter((category) => category.active && !category.parentId && (!companyId || category.companyId === companyId)));
+  $("#category-parent").innerHTML = `<option value="">Categoria principal</option>` + roots.map((category) => `<option value="${category.id}">${escapeHtml(category.name)}</option>`).join("");
+}
+
 function renderCategoryManager() {
   const ordered = orderedCategories(state.categories);
   $("#category-manager-list").innerHTML = ordered.map((category) => {
-    const parents = state.categories.filter((candidate) => candidate.active && !candidate.parentId && candidate.id !== category.id);
+    const parents = state.categories.filter((candidate) => candidate.active && !candidate.parentId && candidate.id !== category.id && candidate.companyId === category.companyId);
     return `<form class="category-manager-row ${category.parentId ? "subcategory-row" : ""}" data-category-id="${category.id}">
+    ${multiCompany() ? companyBadge(category.company, "manager-company-badge") : ""}
     <input class="managed-color" type="color" value="${category.color || "#6b7280"}" aria-label="Cor de ${escapeHtml(category.name)}">
     <input class="managed-name" maxlength="60" value="${escapeHtml(category.name)}" aria-label="Nome da categoria" required>
     <select class="managed-parent" aria-label="Categoria principal"><option value="">Principal</option>${parents.map((parent) => `<option value="${parent.id}" ${parent.id === category.parentId ? "selected" : ""}>${escapeHtml(parent.name)}</option>`).join("")}</select>
@@ -847,10 +964,13 @@ async function loadConversations() {
   if (state.priorityToggle.size) params.set("priority", [...state.priorityToggle].join(","));
   if (state.slaBreached) params.set("slaBreached", "true");
   if (state.unassigned) params.set("unassigned", "true");
+  const company = companyQuery();
+  if (company) params.set("company", company);
+  const companyOnly = company ? `?company=${encodeURIComponent(company)}` : "";
   const [conversations, summary, unfilteredConversations] = await Promise.all([
     api(`/api/conversations?${params}`),
-    api("/api/conversations/summary"),
-    MARKETPLACE_UI_ENABLED ? Promise.resolve(null) : api("/api/conversations"),
+    api(`/api/conversations/summary${companyOnly}`),
+    MARKETPLACE_UI_ENABLED ? Promise.resolve(null) : api(`/api/conversations${companyOnly}`),
   ]);
   const availableConversations = MARKETPLACE_UI_ENABLED
     ? conversations
@@ -873,6 +993,9 @@ async function loadConversations() {
   }, { total: 0, statuses: {}, categories: {}, overdue: 0, urgent: 0, unassigned: 0, attentionWaiting: 0 });
   const filteredUser = state.adminUsers.find((user) => user.id === state.assignedUser);
   $("#list-summary").textContent = `${state.conversations.length} atendimento${state.conversations.length === 1 ? "" : "s"}${filteredUser ? ` ativo${state.conversations.length === 1 ? "" : "s"} • ${filteredUser.name}` : ""}`;
+  // Quebra por empresa (item 41): "Mibro 25 · Sincrofit 17" — só em "Todas".
+  const breakdown = multiCompany() && !company ? state.companies.map((item) => ({ item, open: summary?.openByCompany?.[item.id] || 0 })) : [];
+  $("#list-summary").insertAdjacentHTML("beforeend", breakdown.length ? `<span class="company-breakdown">${breakdown.map(({ item, open }) => `<span class="company-breakdown-item"${companyStyleAttr(item)} title="Conversas abertas — ${escapeHtml(item.name)}"><i class="company-dot" aria-hidden="true"></i>${escapeHtml(item.displayName)} ${open}</span>`).join("")}</span>` : "");
   $("#clear-team-filter").hidden = !state.assignedUser;
   $("#count-all").textContent = displaySummary.total || 0;
   $("#count-new").textContent = displaySummary.statuses.NOVO || 0;
@@ -885,11 +1008,19 @@ async function loadConversations() {
   $("#count-overdue").textContent = displaySummary.overdue || 0;
   $("#count-urgent").textContent = displaySummary.urgent || 0;
   $("#count-unassigned").textContent = displaySummary.unassigned || 0;
+  // Multiempresa: em "Todas", setores de mesmo código (ex.: Suporte da Mibro
+  // e da Sincrofit) aparecem numa linha só — o contador soma por código.
+  const codeById = new Map(state.categories.map((item) => [item.id, item.code]));
+  const countByCode = {};
+  for (const [id, total] of Object.entries(displaySummary.categories || {})) {
+    const code = codeById.get(id);
+    if (code) countByCode[code] = (countByCode[code] || 0) + total;
+  }
   document.querySelectorAll("[data-category-count]").forEach((counter) => {
-    const categoryId = counter.dataset.categoryCount;
-    const category = state.categories.find((item) => item.id === categoryId);
-    const childIds = category?.parentId ? [] : state.categories.filter((item) => item.parentId === categoryId).map((item) => item.id);
-    counter.textContent = [categoryId, ...childIds].reduce((total, id) => total + (displaySummary.categories[id] || 0), 0);
+    const category = state.categories.find((item) => item.id === counter.dataset.categoryCount);
+    if (!category) { counter.textContent = 0; return; }
+    const childCodes = category.parentId ? [] : [...new Set(state.categories.filter((item) => item.parentId && item.parent?.code === category.code).map((item) => item.code))];
+    counter.textContent = [category.code, ...childCodes].reduce((total, code) => total + (countByCode[code] || 0), 0);
   });
   document.querySelector("[data-uncategorized-count]")?.replaceChildren(String(displaySummary.categories.null || 0));
   const signature = JSON.stringify({
@@ -939,8 +1070,11 @@ async function openConversation(id, { refreshList = true, markRead = true } = {}
   if (markRead) await api(`/api/conversations/${id}/read`, { method:"POST" });
   const c = await api(`/api/conversations/${id}`);
   if (loadSequence !== conversationLoadSequence || state.selectedId !== id) return;
+  state.selectedCompanyId = c.companyId || null;
+  renderComposerSender(c);
   const headerSignature = JSON.stringify({
     id: c.id,
+    companyId: c.companyId,
     status: c.status,
     categoryId: c.categoryId,
     category: c.category && [c.category.id, c.category.name, c.category.color, c.category.active, c.category.parentId, c.category.parent?.name],
@@ -976,6 +1110,17 @@ async function openConversation(id, { refreshList = true, markRead = true } = {}
     state.selectedHeaderSignature = headerSignature;
     const name = c.contact.customName || c.contact.name || c.contact.email || c.contact.phone;
     $("#contact-avatar").textContent = initials(name); $("#contact-name").textContent = name; $("#contact-phone").textContent = c.contact.email || (c.contact.phone ? `+${c.contact.phone}` : "");
+    // Empresa sempre explícita na conversa aberta (cor + rótulo, item 26/53).
+    $("#contact-company").hidden = !c.company;
+    if (c.company) {
+      $("#contact-company").textContent = c.company.displayName;
+      $("#contact-company").title = c.company.name;
+      $("#contact-company").style.setProperty("--company-color", companyColor(c.company) || "");
+    }
+    $("#chat-content").dataset.company = c.company?.slug || "";
+    $("#chat-content").style.setProperty("--company-color", companyColor(c.company) || "");
+    renderCategorySelect();
+    renderAssigneeOptions(c.companyId, c.assignedUserId);
     $("#merge-contact").hidden = !state.currentUser?.canMergeContacts;
     renderMergedDestinations(c.mergedDestinations, c.id);
     const primaryCategory = c.category?.parent || (c.category && !c.category.parentId ? c.category : null);
@@ -1106,6 +1251,19 @@ function connectRealtime() {
 // dados já carregados da conversa aberta — os controles interativos
 // (categoria, responsável, prioridade) continuam no cabeçalho/meta da
 // conversa, sem duplicar lógica de formulário/validação aqui.
+// Composer (item 27/28): "Enviando por Mibro Brasil · número" — proteção
+// contra erro humano; só uma linha/rótulo na cor da empresa, nunca o
+// composer inteiro pintado.
+function renderComposerSender(c) {
+  const sender = $("#composer-sender");
+  if (!sender) return;
+  if (!c.company) { sender.hidden = true; sender.innerHTML = ""; return; }
+  const account = c.channelAccount;
+  sender.hidden = false;
+  sender.style.setProperty("--company-color", companyColor(c.company) || "");
+  sender.innerHTML = `<i class="company-dot" aria-hidden="true"></i><span>Enviando por <b>${escapeHtml(c.company.name)}</b>${account?.name && account.name !== c.company.name ? ` · ${escapeHtml(account.name)}` : ""}${account?.displayNumber ? ` · ${escapeHtml(account.displayNumber)}` : ""}</span>${companyBadge(c.company, "composer-company-badge")}`;
+}
+
 function renderContextDetails(c) {
   const name = c.contact.customName || c.contact.name || c.contact.phone;
   const channel = channelBadge(c.channel) || "WhatsApp";
@@ -1116,7 +1274,9 @@ function renderContextDetails(c) {
       <small>+${escapeHtml(c.contact.phone)}</small>
     </div>
     <div class="context-info-list">
+      ${c.company ? `<div class="context-info-row context-company-row"><span>Empresa</span><strong>${companyBadge(c.company)} ${escapeHtml(c.company.name)}</strong></div>` : ""}
       <div class="context-info-row"><span>Canal</span><strong>${escapeHtml(channel)}</strong></div>
+      ${c.channelAccount ? `<div class="context-info-row"><span>Número/conta</span><strong>${escapeHtml(c.channelAccount.name)}${c.channelAccount.displayNumber ? ` · ${escapeHtml(c.channelAccount.displayNumber)}` : ""}</strong></div>` : ""}
       <div class="context-info-row"><span>Categoria</span><strong>${escapeHtml(categoryLabel(c.category))}</strong></div>
       <div class="context-info-row"><span>Status</span><strong>${escapeHtml(statusLabel(c.status))}</strong></div>
       <div class="context-info-row"><span>Responsável</span><strong>${escapeHtml(c.assignedUser?.name || "Sem responsável")}</strong></div>
@@ -1195,10 +1355,53 @@ function renderActivities(activities) {
 
 const roleLabel = (role) => ({ ADMIN:"Master", SUPERVISOR:"Supervisor", ATENDENTE:"Atendente" })[role] || role;
 
+// Multiempresa (item 9/10): acesso N:N com cargo por empresa.
+function renderTeamCompanyAccess(access = []) {
+  const byCompany = new Map(access.map((entry) => [entry.companyId, entry]));
+  $("#team-company-access").innerHTML = state.companies.map((company) => {
+    const entry = byCompany.get(company.id);
+    const checked = entry ? entry.active !== false : false;
+    return `<div class="team-company-row" data-company-row="${escapeHtml(company.id)}"${companyStyleAttr(company)}>
+      <label class="team-company-check"><input class="team-company-input" type="checkbox" value="${escapeHtml(company.id)}" ${checked ? "checked" : ""}>${companyBadge(company)}<span>${escapeHtml(company.name)}</span></label>
+      <select class="team-company-role" aria-label="Cargo em ${escapeHtml(company.name)}">
+        <option value="" ${!entry?.role ? "selected" : ""}>Cargo padrão</option>
+        <option value="SUPERVISOR" ${entry?.role === "SUPERVISOR" ? "selected" : ""}>Supervisor</option>
+        <option value="ATENDENTE" ${entry?.role === "ATENDENTE" ? "selected" : ""}>Atendente</option>
+      </select>
+      <details class="team-company-permissions" ${entry?.permissions ? "open" : ""}>
+        <summary><label><input class="team-company-custom" type="checkbox" ${entry?.permissions ? "checked" : ""}> Personalizar permissões nesta empresa</label></summary>
+        <div class="team-company-permission-list">${COMPANY_PERMISSION_LABELS.map(([key, label]) => `<label><input type="checkbox" data-company-permission="${key}" ${entry?.permissions?.[key] ? "checked" : ""}> ${escapeHtml(label)}</label>`).join("")}</div>
+      </details>
+    </div>`;
+  }).join("");
+}
+
+// Permissões que podem variar por empresa (sem personalizar = as do cadastro).
+const COMPANY_PERMISSION_LABELS = [
+  ["canViewUncategorized", "Ver “Sem categoria”"], ["canTransferConversations", "Transferir conversas"],
+  ["canSetConversationPriority", "Alterar prioridade"], ["canManageCampaigns", "Gerenciar campanhas"],
+  ["canStartConversations", "Iniciar conversas"], ["canMergeContacts", "Fundir contatos"],
+  ["canManageCategories", "Gerenciar categorias"], ["canViewConversationHistory", "Ver histórico da conversa"],
+  ["canViewPreviousMessages", "Ver mensagens anteriores"],
+];
+
+function teamCompanyAccessBody() {
+  return [...document.querySelectorAll("#team-company-access [data-company-row]")].map((row) => ({
+    companyId: row.dataset.companyRow,
+    role: row.querySelector(".team-company-role").value || null,
+    active: row.querySelector(".team-company-input").checked,
+    permissions: row.querySelector(".team-company-custom").checked
+      ? Object.fromEntries([...row.querySelectorAll("[data-company-permission]")].map((input) => [input.dataset.companyPermission, input.checked]))
+      : null,
+  })).filter((entry) => entry.active);
+}
+
 function renderTeamCategoryAccess(selectedIds = [], canViewUncategorized = false) {
   const selected = new Set(selectedIds);
   const active = state.categories.filter((category) => category.active);
-  const roots = active.filter((category) => !category.parentId);
+  // Setores agrupados por empresa (cada setor pertence a uma empresa).
+  const roots = active.filter((category) => !category.parentId)
+    .sort((left, right) => String(left.company?.name || "").localeCompare(String(right.company?.name || ""), "pt-BR"));
   $("#team-category-access").innerHTML = `<div class="team-category-groups">
     <section class="team-category-group uncategorized">
       <label class="team-category-option root"><input id="permission-uncategorized" type="checkbox" ${canViewUncategorized ? "checked" : ""}><i class="category-dot uncategorized-dot"></i><span><b>Sem categoria</b><small>Conversas que ainda não foram classificadas.</small></span></label>
@@ -1206,8 +1409,8 @@ function renderTeamCategoryAccess(selectedIds = [], canViewUncategorized = false
     ${roots.map((root) => {
     const children = active.filter((category) => category.parentId === root.id);
     const rootSelected = selected.has(root.id);
-    return `<section class="team-category-group" data-category-group="${escapeHtml(root.id)}">
-      <label class="team-category-option root"><input class="team-category-root team-category-access-input" type="checkbox" value="${escapeHtml(root.id)}" ${rootSelected ? "checked" : ""}><i class="category-dot" style="background:${root.color || "#999"}"></i><span><b>${escapeHtml(root.name)}</b><small>${children.length ? `${children.length} subcategoria${children.length === 1 ? "" : "s"}` : "Categoria principal"}</small></span></label>
+    return `<section class="team-category-group" data-category-group="${escapeHtml(root.id)}" data-category-company="${escapeHtml(root.companyId || "")}">
+      <label class="team-category-option root"><input class="team-category-root team-category-access-input" type="checkbox" value="${escapeHtml(root.id)}" ${rootSelected ? "checked" : ""}><i class="category-dot" style="background:${root.color || "#999"}"></i><span><b>${escapeHtml(root.name)} ${multiCompany() ? companyBadge(root.company) : ""}</b><small>${children.length ? `${children.length} subcategoria${children.length === 1 ? "" : "s"}` : "Categoria principal"}</small></span></label>
       ${children.length ? `<div class="team-subcategory-list">${children.map((child) => `<label class="team-category-option child"><input class="team-category-access-input" type="checkbox" value="${escapeHtml(child.id)}" ${selected.has(child.id) ? "checked" : ""}><i class="category-dot" style="background:${child.color || root.color || "#999"}"></i><span>${escapeHtml(child.name)}</span></label>`).join("")}</div>` : ""}
     </section>`;
   }).join("")}</div>`;
@@ -1215,7 +1418,7 @@ function renderTeamCategoryAccess(selectedIds = [], canViewUncategorized = false
 
 function syncMasterForm() {
   const master = $("#team-role").value === "ADMIN";
-  document.querySelectorAll(".team-permissions input,.team-categories input").forEach((input) => { input.disabled = master; });
+  document.querySelectorAll(".team-permissions input,.team-categories input,.team-companies input,.team-companies select").forEach((input) => { input.disabled = master; });
 }
 
 function resetTeamForm() {
@@ -1229,6 +1432,7 @@ function resetTeamForm() {
   $("#team-form-eyebrow").textContent = "NOVA CONTA";
   $("#team-form-title").textContent = "Adicionar membro";
   renderTeamCategoryAccess();
+  renderTeamCompanyAccess();
   syncMasterForm();
 }
 
@@ -1254,12 +1458,13 @@ function editTeamUser(userId) {
   $("#team-form-eyebrow").textContent = "EDITAR CONTA";
   $("#team-form-title").textContent = user.name;
   renderTeamCategoryAccess(user.categoryAccess.map((access) => access.categoryId), user.canViewUncategorized);
+  renderTeamCompanyAccess(user.companyAccess || []);
   syncMasterForm();
 }
 
 function renderAdminUsers() {
   $("#team-count").textContent = `${state.adminUsers.length} conta${state.adminUsers.length === 1 ? "" : "s"}`;
-  $("#team-user-list").innerHTML = state.adminUsers.map((user) => `<article class="team-user-card ${user.active ? "" : "inactive"}"><div class="team-user-main"><span class="team-user-avatar">${escapeHtml(initials(user.name))}</span><span class="team-user-info"><b>${escapeHtml(user.name)}</b><small>${escapeHtml(user.email || "Membro da equipe")}</small></span><span class="role-pill">${escapeHtml(roleLabel(user.role))}</span></div><div class="team-user-meta"><span>${user._count.assignedConversations} conversa(s) atribuída(s)</span>${state.currentUser?.isMaster ? `<span>•</span><span>${user._count.sentMessages} resposta(s)</span>` : ""}${user.active ? "" : "<span>• Inativa</span>"}</div><div class="team-user-actions">${state.currentUser?.isMaster ? `<button type="button" data-edit-user="${escapeHtml(user.id)}">Editar</button>` : ""}<button type="button" data-view-user="${escapeHtml(user.id)}">Ver atendimentos</button></div></article>`).join("");
+  $("#team-user-list").innerHTML = state.adminUsers.map((user) => `<article class="team-user-card ${user.active ? "" : "inactive"}"><div class="team-user-main"><span class="team-user-avatar">${escapeHtml(initials(user.name))}</span><span class="team-user-info"><b>${escapeHtml(user.name)}</b><small>${escapeHtml(user.email || "Membro da equipe")}</small></span><span class="role-pill">${escapeHtml(roleLabel(user.role))}</span></div>${user.role === "ADMIN" ? `<div class="team-user-companies"><span class="team-user-company-all">Todas as empresas</span></div>` : `<div class="team-user-companies">${(user.companyAccess || []).filter((entry) => entry.active).map((entry) => `${companyBadge(entry.company)}${entry.role ? `<small>${escapeHtml(roleLabel(entry.role))}</small>` : ""}`).join(" ") || `<small class="team-user-no-company">Sem empresa</small>`}</div>`}<div class="team-user-meta"><span>${user._count.assignedConversations} conversa(s) atribuída(s)</span>${state.currentUser?.isMaster ? `<span>•</span><span>${user._count.sentMessages} resposta(s)</span>` : ""}${user.active ? "" : "<span>• Inativa</span>"}</div><div class="team-user-actions">${state.currentUser?.isMaster ? `<button type="button" data-edit-user="${escapeHtml(user.id)}">Editar</button>` : ""}<button type="button" data-view-user="${escapeHtml(user.id)}">Ver atendimentos</button></div></article>`).join("");
 }
 
 const auditActionLabel = (action) => ({
@@ -1651,6 +1856,7 @@ $("#team-form").addEventListener("submit", async (event) => {
     canStartConversations: $("#permission-start-conversations").checked,
     canMergeContacts: $("#permission-merge-contacts").checked,
     categoryIds: [...document.querySelectorAll("#team-category-access .team-category-access-input:checked")].map((input) => input.value),
+    companyAccess: teamCompanyAccessBody(),
   };
   if (password) body.password = password;
   if (state.editingUserId) body.active = $("#team-active").checked;
@@ -1826,7 +2032,7 @@ $("#claim-conversation").addEventListener("click", async () => { try { await api
 $("#manage-categories").addEventListener("click", () => { renderCategoryManager(); $("#category-dialog").showModal(); });
 $("#close-categories").addEventListener("click", () => $("#category-dialog").close());
 $("#category-dialog").addEventListener("click", (event) => { if (event.target === $("#category-dialog")) $("#category-dialog").close(); });
-$("#category-form").addEventListener("submit", async (event) => { event.preventDefault(); const name = $("#category-name").value.trim(); const color = $("#category-color").value; const parentId = $("#category-parent").value || null; try { await api("/api/categories", { method:"POST", body:JSON.stringify({ name, color, parentId }) }); $("#category-name").value = ""; await loadCategories(); await loadConversations(); toast(parentId ? "Subcategoria criada." : "Categoria criada."); } catch (e) { toast(e.message, true); } });
+$("#category-form").addEventListener("submit", async (event) => { event.preventDefault(); const name = $("#category-name").value.trim(); const color = $("#category-color").value; const parentId = $("#category-parent").value || null; const companyId = $("#category-company").value || undefined; try { await api("/api/categories", { method:"POST", body:JSON.stringify({ name, color, parentId, companyId }) }); $("#category-name").value = ""; await loadCategories(); await loadConversations(); toast(parentId ? "Subcategoria criada." : "Categoria criada."); } catch (e) { toast(e.message, true); } });
 $("#category-manager-list").addEventListener("submit", async (event) => { event.preventDefault(); const row = event.target.closest("[data-category-id]"); const name = row.querySelector(".managed-name").value.trim(); const color = row.querySelector(".managed-color").value; const parentId = row.querySelector(".managed-parent").value || null; const active = row.querySelector(".managed-active").checked; try { await api(`/api/categories/${row.dataset.categoryId}`, { method:"PATCH", body:JSON.stringify({ name, color, parentId, active }) }); await loadCategories(); await loadConversations(); toast("Categoria atualizada."); } catch (e) { toast(e.message, true); } });
 $("#category-manager-list").addEventListener("change", (event) => { if (event.target.classList.contains("managed-active")) event.target.closest("label").querySelector("span").textContent = event.target.checked ? "Ativa" : "Inativa"; });
 $("#toggle-bot-pause").addEventListener("click", async (event) => {
@@ -2296,12 +2502,22 @@ function setAudioQuickReplyPlayer(src, durationMs) {
   $("#aqr-duration").textContent = src ? (durationMs ? formatAudioDuration(durationMs) : "") : "Nenhum áudio selecionado";
 }
 
-function audioQuickReplyCategoryOptions(selectedId) {
-  const active = orderedCategories(state.categories.filter((category) => category.active));
+// Áudio pessoal: opcionalmente restrito a uma empresa (só aparece nas
+// conversas dela). Setores listados são os da empresa escolhida.
+function audioQuickReplyCategoryOptions(selectedId, companyId = $("#aqr-company")?.value || "") {
+  const active = orderedCategories(state.categories.filter((category) => category.active && (!companyId || category.companyId === companyId)));
   return `<option value="">Sem categoria</option>` + active.map((category) => (
-    `<option value="${escapeHtml(category.id)}" ${category.id === selectedId ? "selected" : ""}>${escapeHtml(category.parentId ? `↳ ${category.name}` : category.name)}</option>`
+    `<option value="${escapeHtml(category.id)}" ${category.id === selectedId ? "selected" : ""}>${escapeHtml(category.parentId ? `↳ ${category.name}` : category.name)}${!companyId && multiCompany() && category.company ? ` — ${escapeHtml(category.company.displayName)}` : ""}</option>`
   )).join("");
 }
+
+function renderAudioQuickReplyCompany(companyId = "") {
+  $("#aqr-company").innerHTML = `<option value="">Todas as minhas empresas</option>` + state.companies.map((company) => (
+    `<option value="${escapeHtml(company.id)}" ${company.id === companyId ? "selected" : ""}>${escapeHtml(company.name)}</option>`
+  )).join("");
+  $("#aqr-company-field").hidden = !multiCompany();
+}
+$("#aqr-company")?.addEventListener("change", () => { $("#aqr-category").innerHTML = audioQuickReplyCategoryOptions(""); });
 
 function suggestAudioShortcut(name) {
   const base = normalizeSearchTerm(name).replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 24);
@@ -2315,6 +2531,8 @@ function openAudioQuickReplyDialog({ item = null, audio = null } = {}) {
   $("#aqr-name").value = item?.name || "";
   $("#aqr-shortcut").value = item?.shortcut || "";
   $("#aqr-shortcut").dataset.touched = item ? "true" : "";
+  // Novo áudio gravado numa conversa: já sugere a empresa dela.
+  renderAudioQuickReplyCompany(item ? (item.companyId || "") : (state.selectedCompanyId || ""));
   $("#aqr-category").innerHTML = audioQuickReplyCategoryOptions(item?.categoryId || "");
   $("#aqr-file").value = "";
   $("#aqr-file-label").textContent = item || audio ? "Substituir por um arquivo" : "Escolher arquivo de áudio";
@@ -2387,6 +2605,7 @@ $("#audio-quick-reply-form").addEventListener("submit", async (event) => {
   form.append("name", $("#aqr-name").value.trim());
   form.append("shortcut", $("#aqr-shortcut").value.trim());
   form.append("categoryId", $("#aqr-category").value);
+  form.append("companyId", $("#aqr-company").value);
   if (audio) {
     form.append("audio", audio.blob, audio.fileName || "audio");
     if (audio.durationMs) form.append("durationMs", String(Math.round(audio.durationMs)));

@@ -4,15 +4,24 @@
 // authorization.isMaster antes de qualquer consulta.
 const analytics = require("../services/conversation-analytics-service");
 const authorization = require("../services/authorization-service");
+const companyService = require("../services/company-service");
 const { STATUS_LABELS, CHANNEL_LABELS } = require("../services/conversation-report-constants");
 
 function assertMaster(req) {
   if (!authorization.isMaster(req.user)) throw authorization.forbidden("Somente uma conta Master pode ver o Relatório de Conversas.");
 }
 
+// Multiempresa: ?company=ALL|mibro|sincrofit vira `companyIds` — único
+// ponto de tradução, aplicado em todos os painéis (buildConversationWhere).
+async function reportQuery(req) {
+  const company = req.query.company;
+  if (!company || company === companyService.ALL_COMPANIES) return { ...req.query };
+  return { ...req.query, companyIds: await companyService.resolveCompanyFilter(req.user, company) };
+}
+
 function wrap(handler) {
   return async (req, res, next) => {
-    try { assertMaster(req); return res.json(await handler(req)); }
+    try { assertMaster(req); return res.json(await handler(req, await reportQuery(req))); }
     catch (error) { return next(error); }
   };
 }
@@ -23,27 +32,28 @@ function csvEscape(value) {
 }
 
 module.exports = {
-  summary: wrap((req) => analytics.getSummary(req.query)),
-  timeseries: wrap((req) => analytics.getTimeseries(req.query)),
-  statusBreakdown: wrap((req) => analytics.getStatusBreakdown(req.query)),
-  channelBreakdown: wrap((req) => analytics.getChannelBreakdown(req.query)),
-  categoryBreakdown: wrap((req) => analytics.getCategoryBreakdown(req.query)),
-  agentRanking: wrap((req) => analytics.getAgentRanking(req.query)),
-  agentDetail: wrap(async (req) => {
-    const detail = await analytics.getAgentDetail(req.params.userId, req.query);
+  summary: wrap((req, query) => analytics.getSummary(query)),
+  timeseries: wrap((req, query) => analytics.getTimeseries(query)),
+  statusBreakdown: wrap((req, query) => analytics.getStatusBreakdown(query)),
+  channelBreakdown: wrap((req, query) => analytics.getChannelBreakdown(query)),
+  categoryBreakdown: wrap((req, query) => analytics.getCategoryBreakdown(query)),
+  companyBreakdown: wrap((req, query) => analytics.getCompanyBreakdown(query)),
+  agentRanking: wrap((req, query) => analytics.getAgentRanking(query)),
+  agentDetail: wrap(async (req, query) => {
+    const detail = await analytics.getAgentDetail(req.params.userId, query);
     if (!detail) throw Object.assign(new Error("Vendedor não encontrado."), { statusCode: 404 });
     return detail;
   }),
-  compareAgents: wrap((req) => {
-    const ids = String(req.query.userIds || "").split(",").map((id) => id.trim()).filter(Boolean).slice(0, 3);
+  compareAgents: wrap((req, query) => {
+    const ids = String(query.userIds || "").split(",").map((id) => id.trim()).filter(Boolean).slice(0, 3);
     if (!ids.length) throw Object.assign(new Error("Informe ao menos um vendedor para comparar."), { statusCode: 400 });
-    return analytics.compareAgents(ids, req.query);
+    return analytics.compareAgents(ids, query);
   }),
-  heatmap: wrap((req) => analytics.getHeatmap(req.query)),
-  waitTimeBuckets: wrap((req) => analytics.getWaitTimeBuckets(req.query)),
-  alerts: wrap((req) => analytics.getAlerts(req.query)),
-  listConversations: wrap((req) => analytics.listConversations(req.query)),
-  conversationDetail: wrap(async (req) => {
+  heatmap: wrap((req, query) => analytics.getHeatmap(query)),
+  waitTimeBuckets: wrap((req, query) => analytics.getWaitTimeBuckets(query)),
+  alerts: wrap((req, query) => analytics.getAlerts(query)),
+  listConversations: wrap((req, query) => analytics.listConversations(query)),
+  conversationDetail: wrap(async (req, query) => {
     const detail = await analytics.getConversationDetail(req.params.conversationId);
     if (!detail) throw Object.assign(new Error("Conversa não encontrada."), { statusCode: 404 });
     return detail;
@@ -55,7 +65,8 @@ module.exports = {
   async exportCsv(req, res, next) {
     try {
       assertMaster(req);
-      const { items } = await analytics.listConversations({ ...req.query, page: 1, pageSize: 100 });
+      const query = await reportQuery(req);
+      const { items } = await analytics.listConversations({ ...query, page: 1, pageSize: 100 });
       const header = ["Contato", "Telefone", "Canal", "Categoria", "Status", "Prioridade", "Vendedor", "Criada em", "Última atividade", "Finalizada em", "Última mensagem"];
       const lines = [header.map(csvEscape).join(",")];
       for (const item of items) {
@@ -74,7 +85,8 @@ module.exports = {
   async exportAgentsCsv(req, res, next) {
     try {
       assertMaster(req);
-      const { agents } = await analytics.getAgentRanking(req.query);
+      const query = await reportQuery(req);
+      const { agents } = await analytics.getAgentRanking(query);
       const header = ["Vendedor", "E-mail", "Atendidas", "Assumidas", "Resolvidas", "Finalizadas", "Mensagens enviadas", "Nunca respondidas", "1ª resposta média (s)", "Resposta média (s)", "Resolução média (s)", "Taxa de resolução (%)", "SLA cumprido (%)"];
       const lines = [header.map(csvEscape).join(",")];
       for (const agent of agents) {

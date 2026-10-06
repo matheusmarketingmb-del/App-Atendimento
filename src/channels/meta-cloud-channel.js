@@ -1,19 +1,46 @@
 const axios = require("axios");
 
+// Multiempresa: uma instância pode ficar ligada a um número específico
+// (forAccount) — phoneNumberId/wabaId/token da ChannelAccount. Sem conta,
+// usa o .env (número original), exatamente como antes.
 class MetaCloudChannel {
+  constructor({ phoneNumberId = null, wabaId = null, token = null, accountId = null } = {}) {
+    this.boundPhoneNumberId = phoneNumberId;
+    this.boundWabaId = wabaId;
+    this.boundToken = token;
+    this.accountId = accountId;
+  }
+
+  forAccount(account) {
+    const accounts = require("../services/whatsapp-account-service");
+    return new MetaCloudChannel({
+      accountId: account?.id || null,
+      phoneNumberId: accounts.phoneNumberIdOf(account),
+      wabaId: accounts.wabaIdOf(account),
+      token: accounts.accessTokenOf(account),
+    });
+  }
+
+  phoneNumberId() { return this.boundPhoneNumberId || process.env.PHONE_NUMBER_ID; }
+  wabaId() { return this.boundWabaId || process.env.WHATSAPP_BUSINESS_ACCOUNT_ID; }
+  token() { return this.boundToken || process.env.WHATSAPP_TOKEN; }
+
   assertConfigured() {
-    const required = ["GRAPH_VERSION", "PHONE_NUMBER_ID", "WHATSAPP_TOKEN"];
-    for (const key of required) {
-      if (!process.env[key]) {
-        throw Object.assign(new Error(`Integração com a Meta não está configurada (variável ausente: ${key}).`), { statusCode: 503 });
-      }
+    if (!process.env.GRAPH_VERSION) {
+      throw Object.assign(new Error("Integração com a Meta não está configurada (variável ausente: GRAPH_VERSION)."), { statusCode: 503 });
+    }
+    if (!this.phoneNumberId()) {
+      throw Object.assign(new Error("Número de WhatsApp sem Phone Number ID configurado."), { statusCode: 503 });
+    }
+    if (!this.token()) {
+      throw Object.assign(new Error("Integração com a Meta não está configurada (token de acesso ausente)."), { statusCode: 503 });
     }
   }
 
   assertTemplatesConfigured() {
     this.assertConfigured();
-    if (!process.env.WHATSAPP_BUSINESS_ACCOUNT_ID) {
-      throw Object.assign(new Error("Configure WHATSAPP_BUSINESS_ACCOUNT_ID para consultar os templates da Meta."), { statusCode: 503 });
+    if (!this.wabaId()) {
+      throw Object.assign(new Error("Configure o WABA ID deste número para consultar os templates da Meta."), { statusCode: 503 });
     }
   }
 
@@ -22,7 +49,7 @@ class MetaCloudChannel {
   }
 
   authHeaders() {
-    return { Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}` };
+    return { Authorization: `Bearer ${this.token()}` };
   }
 
   // Mapeia falhas da Graph API para uma mensagem clara e um status HTTP
@@ -60,6 +87,10 @@ class MetaCloudChannel {
     const events = [];
     for (const entry of body?.entry || []) for (const change of entry?.changes || []) {
       const value = change?.value || {};
+      // Multiempresa: número que recebeu o evento — define a ChannelAccount
+      // (e portanto a empresa) da conversa.
+      const phoneNumberId = value.metadata?.phone_number_id || null;
+      const displayPhoneNumber = value.metadata?.display_phone_number || null;
       const contacts = new Map((value.contacts || []).map((item) => [item.wa_id, item]));
       for (const message of value.messages || []) {
         const contact = contacts.get(message.from) || value.contacts?.[0];
@@ -67,7 +98,7 @@ class MetaCloudChannel {
         const interactiveReply = message.interactive?.button_reply || message.interactive?.list_reply || null;
         const reaction = message.type === "reaction" ? message.reaction : null;
         events.push({
-          kind: "message", externalId: message.id, contactExternalId: message.from,
+          kind: "message", externalId: message.id, contactExternalId: message.from, phoneNumberId, displayPhoneNumber,
           phone: message.from, contactName: contact?.profile?.name || message.from,
           type: message.type,
           text: message.type === "text" ? message.text?.body
@@ -81,7 +112,7 @@ class MetaCloudChannel {
         });
       }
       for (const status of value.statuses || []) events.push({
-        kind: "status", externalId: status.id, status: status.status,
+        kind: "status", externalId: status.id, status: status.status, phoneNumberId,
         occurredAt: new Date(Number(status.timestamp) * 1000), rawPayload: status,
       });
     }
@@ -91,7 +122,7 @@ class MetaCloudChannel {
   async sendText(to, text) {
     this.assertConfigured();
     try {
-      const response = await axios.post(this.apiUrl(`${process.env.PHONE_NUMBER_ID}/messages`), {
+      const response = await axios.post(this.apiUrl(`${this.phoneNumberId()}/messages`), {
         messaging_product: "whatsapp", recipient_type: "individual", to, type: "text", text: { body: text },
       }, { headers: { ...this.authHeaders(), "Content-Type": "application/json" } });
       return { externalId: response.data?.messages?.[0]?.id, data: response.data };
@@ -106,7 +137,7 @@ class MetaCloudChannel {
       throw Object.assign(new Error("A lista interativa deve ter entre 1 e 10 opções."), { statusCode: 400 });
     }
     try {
-      const response = await axios.post(this.apiUrl(`${process.env.PHONE_NUMBER_ID}/messages`), {
+      const response = await axios.post(this.apiUrl(`${this.phoneNumberId()}/messages`), {
         messaging_product: "whatsapp", recipient_type: "individual", to, type: "interactive",
         interactive: {
           type: "list", body: { text: body },
@@ -125,7 +156,7 @@ class MetaCloudChannel {
     let after;
     try {
       for (let page = 0; page < 20; page += 1) {
-        const response = await axios.get(this.apiUrl(`${process.env.WHATSAPP_BUSINESS_ACCOUNT_ID}/message_templates`), {
+        const response = await axios.get(this.apiUrl(`${this.wabaId()}/message_templates`), {
           headers: this.authHeaders(),
           params: {
             fields: "id,name,language,status,category,components",
@@ -152,7 +183,7 @@ class MetaCloudChannel {
   async sendTemplate(to, { name, language, components = [] }) {
     this.assertConfigured();
     try {
-      const response = await axios.post(this.apiUrl(`${process.env.PHONE_NUMBER_ID}/messages`), {
+      const response = await axios.post(this.apiUrl(`${this.phoneNumberId()}/messages`), {
         messaging_product: "whatsapp", recipient_type: "individual", to, type: "template",
         template: {
           name,
@@ -169,7 +200,7 @@ class MetaCloudChannel {
   async markAsRead(messageId) {
     this.assertConfigured();
     try {
-      const response = await axios.put(this.apiUrl(`${process.env.PHONE_NUMBER_ID}/messages`), {
+      const response = await axios.put(this.apiUrl(`${this.phoneNumberId()}/messages`), {
         messaging_product: "whatsapp", status: "read", message_id: messageId,
       }, { headers: { ...this.authHeaders(), "Content-Type": "application/json" } });
       return response.data;
@@ -182,7 +213,7 @@ class MetaCloudChannel {
     this.assertConfigured();
     try {
       const metadata = await axios.get(this.apiUrl(mediaId), {
-        params: { phone_number_id: process.env.PHONE_NUMBER_ID }, headers: this.authHeaders(),
+        params: { phone_number_id: this.phoneNumberId() }, headers: this.authHeaders(),
       });
       const mediaUrl = new URL(metadata.data.url);
       const allowedHost = ["facebook.com", "fbcdn.net", "fbsbx.com"]
@@ -222,10 +253,10 @@ class MetaCloudChannel {
       const form = new FormData();
       form.append("messaging_product", "whatsapp");
       form.append("file", new Blob([buffer], { type: mimeType }), fileName);
-      const upload = await axios.post(this.apiUrl(`${process.env.PHONE_NUMBER_ID}/media`), form, {
+      const upload = await axios.post(this.apiUrl(`${this.phoneNumberId()}/media`), form, {
         headers: this.authHeaders(), maxBodyLength: 5 * 1024 * 1024,
       });
-      const response = await axios.post(this.apiUrl(`${process.env.PHONE_NUMBER_ID}/messages`), {
+      const response = await axios.post(this.apiUrl(`${this.phoneNumberId()}/messages`), {
         messaging_product: "whatsapp", recipient_type: "individual", to, type: "image",
         image: { id: upload.data.id, ...(caption ? { caption } : {}) },
       }, { headers: { ...this.authHeaders(), "Content-Type": "application/json" } });
@@ -241,10 +272,10 @@ class MetaCloudChannel {
       const form = new FormData();
       form.append("messaging_product", "whatsapp");
       form.append("file", new Blob([buffer], { type: mimeType }), fileName);
-      const upload = await axios.post(this.apiUrl(`${process.env.PHONE_NUMBER_ID}/media`), form, {
+      const upload = await axios.post(this.apiUrl(`${this.phoneNumberId()}/media`), form, {
         headers: this.authHeaders(), maxBodyLength: 17 * 1024 * 1024,
       });
-      const response = await axios.post(this.apiUrl(`${process.env.PHONE_NUMBER_ID}/messages`), {
+      const response = await axios.post(this.apiUrl(`${this.phoneNumberId()}/messages`), {
         messaging_product: "whatsapp", recipient_type: "individual", to, type: "video",
         video: { id: upload.data.id, ...(caption ? { caption } : {}) },
       }, { headers: { ...this.authHeaders(), "Content-Type": "application/json" } });
@@ -263,10 +294,10 @@ class MetaCloudChannel {
       const form = new FormData();
       form.append("messaging_product", "whatsapp");
       form.append("file", new Blob([buffer], { type: mimeType }), fileName);
-      const upload = await axios.post(this.apiUrl(`${process.env.PHONE_NUMBER_ID}/media`), form, {
+      const upload = await axios.post(this.apiUrl(`${this.phoneNumberId()}/media`), form, {
         headers: this.authHeaders(), maxBodyLength: 17 * 1024 * 1024,
       });
-      const response = await axios.post(this.apiUrl(`${process.env.PHONE_NUMBER_ID}/messages`), {
+      const response = await axios.post(this.apiUrl(`${this.phoneNumberId()}/messages`), {
         messaging_product: "whatsapp", recipient_type: "individual", to, type: "audio",
         audio: { id: upload.data.id },
       }, { headers: { ...this.authHeaders(), "Content-Type": "application/json" } });
@@ -282,10 +313,10 @@ class MetaCloudChannel {
       const form = new FormData();
       form.append("messaging_product", "whatsapp");
       form.append("file", new Blob([buffer], { type: mimeType }), fileName);
-      const upload = await axios.post(this.apiUrl(`${process.env.PHONE_NUMBER_ID}/media`), form, {
+      const upload = await axios.post(this.apiUrl(`${this.phoneNumberId()}/media`), form, {
         headers: this.authHeaders(), maxBodyLength: 101 * 1024 * 1024,
       });
-      const response = await axios.post(this.apiUrl(`${process.env.PHONE_NUMBER_ID}/messages`), {
+      const response = await axios.post(this.apiUrl(`${this.phoneNumberId()}/messages`), {
         messaging_product: "whatsapp", recipient_type: "individual", to, type: "document",
         document: { id: upload.data.id, filename: fileName, ...(caption ? { caption } : {}) },
       }, { headers: { ...this.authHeaders(), "Content-Type": "application/json" } });

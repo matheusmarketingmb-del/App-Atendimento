@@ -10,24 +10,37 @@ const metricsService = require("../services/campaign-metrics-service");
 const settingsService = require("../services/campaign-settings-service");
 const optOutService = require("../services/campaign-optout-service");
 const authorization = require("../services/authorization-service");
+const whatsappAccounts = require("../services/whatsapp-account-service");
 
 function createCampaignController(channel) {
   return {
     // Item 3: listagem de templates aprovados — nunca inventa nada; se a
     // integração Meta estiver indisponível, o erro sobe claro para a UI.
+    // Multiempresa: templates do número escolhido (?channelAccountId) ou do
+    // único número da empresa (?company) — nunca mistura WABAs.
     async listTemplates(req, res, next) {
       try {
-        authorization.assertCanManageCampaigns(req.user);
-        if (!templatesConfigured()) {
-          return res.status(503).json({ error: "Templates da Meta ainda não configurados (WHATSAPP_BUSINESS_ACCOUNT_ID ausente)." });
+        const account = await whatsappAccounts.resolveAccountForUser(req.user, {
+          channelAccountId: req.query.channelAccountId || null, company: req.query.company || null,
+        });
+        await campaigns.assertCampaignCompanyPermission(req.user, account.companyId);
+        if (!templatesConfigured(account)) {
+          return res.status(503).json({ error: "Templates da Meta ainda não configurados para este número (WABA ID ausente)." });
         }
-        return res.json(await listApprovedTemplates(channel));
+        return res.json(await listApprovedTemplates(channel, account));
       } catch (error) { return next(error); }
     },
     async previewTemplate(req, res, next) {
       try {
-        authorization.assertCanManageCampaigns(req.user);
-        return res.json(await campaigns.previewTemplate(channel, req.body));
+        return res.json(await campaigns.previewTemplate(channel, req.body, req.user));
+      } catch (error) { return next(error); }
+    },
+    // Números de WhatsApp disponíveis para campanhas (seletor da criação).
+    async listAccounts(req, res, next) {
+      try {
+        const companyIds = await campaigns.manageableCompanyIds(req.user);
+        const accounts = await whatsappAccounts.listAccountsForUser(req.user, { company: req.query.company || null });
+        return res.json(accounts.filter((account) => companyIds.includes(account.companyId)));
       } catch (error) { return next(error); }
     },
 

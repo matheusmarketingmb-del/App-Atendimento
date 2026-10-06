@@ -51,7 +51,7 @@ async function loadCohort({ start, end, dimensions }, client = prisma) {
       OR: [{ createdAt: { gte: start, lt: end } }, { lastMessageAt: { gte: start, lt: end } }],
     },
     select: {
-      id: true, status: true, priority: true, channel: true, categoryId: true, assignedUserId: true,
+      id: true, companyId: true, status: true, priority: true, channel: true, categoryId: true, assignedUserId: true,
       createdAt: true, lastMessageAt: true, finalizedAt: true,
       firstResponseSlaBreached: true, responseSlaBreached: true,
     },
@@ -314,6 +314,35 @@ async function getChannelBreakdown(query) {
     channel: entry.channel, label: CHANNEL_LABELS[entry.channel] || entry.channel,
     count: entry.count, percent: cohort.length ? (entry.count / cohort.length) * 100 : 0,
     resolved: entry.resolved, firstResponseAvgSeconds: average(entry.firstResponseSeconds),
+  })).sort((a, b) => b.count - a.count);
+  return { total: cohort.length, truncated, items };
+}
+
+// Multiempresa (item 40/41): "Todas" soma tudo, mas também quebra por
+// empresa — mesmas métricas da quebra por canal.
+async function getCompanyBreakdown(query) {
+  const filters = resolvePeriod(query);
+  const dimensions = buildConversationWhere(query);
+  const cohort = await loadCohort({ start: filters.start, end: filters.end, dimensions });
+  const { metricsById, truncated } = await computeCohortMetrics(cohort);
+  const companies = await prisma.company.findMany({ select: { id: true, name: true, slug: true, displayName: true, primaryColor: true } });
+  const byCompany = new Map();
+  for (const conversation of cohort) {
+    const entry = byCompany.get(conversation.companyId) || { companyId: conversation.companyId, count: 0, open: 0, resolved: 0, firstResponseSeconds: [] };
+    entry.count += 1;
+    if (conversation.status === "FINALIZADO") entry.resolved += 1;
+    else entry.open += 1;
+    if (!truncated) {
+      const seconds = metricsById.get(conversation.id)?.firstResponseSeconds;
+      if (seconds !== null && seconds !== undefined) entry.firstResponseSeconds.push(seconds);
+    }
+    byCompany.set(conversation.companyId, entry);
+  }
+  const items = [...byCompany.values()].map((entry) => ({
+    companyId: entry.companyId, company: companies.find((company) => company.id === entry.companyId) || null,
+    count: entry.count, open: entry.open, resolved: entry.resolved,
+    percent: cohort.length ? (entry.count / cohort.length) * 100 : 0,
+    firstResponseAvgSeconds: average(entry.firstResponseSeconds),
   })).sort((a, b) => b.count - a.count);
   return { total: cohort.length, truncated, items };
 }
@@ -644,7 +673,7 @@ async function getConversationDetail(conversationId) {
 }
 
 module.exports = {
-  getSummary, getTimeseries, getStatusBreakdown, getChannelBreakdown, getCategoryBreakdown,
+  getSummary, getTimeseries, getStatusBreakdown, getChannelBreakdown, getCategoryBreakdown, getCompanyBreakdown,
   getAgentRanking, getAgentDetail, compareAgents, getHeatmap, getWaitTimeBuckets, getAlerts,
   listConversations, getConversationDetail,
   MAX_MESSAGE_COHORT,

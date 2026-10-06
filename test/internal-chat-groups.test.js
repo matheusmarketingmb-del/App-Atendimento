@@ -25,7 +25,7 @@ async function cleanup() {
 let seq = 0;
 async function createUser(name, role = "ATENDENTE") {
   seq += 1;
-  return prisma.user.create({ data: { name, email: `g${seq}-${Date.now()}${emailDomain}`, role } });
+  return prisma.user.create({ data: { companyAccess: { create: { companyId: "cmp_mibro" } }, name, email: `g${seq}-${Date.now()}${emailDomain}`, role } });
 }
 
 const unreadOf = async (chatId, viewer) => (await chats.listChats(viewer)).find(({ id }) => id === chatId)?.unreadCount;

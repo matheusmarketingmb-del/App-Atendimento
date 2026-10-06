@@ -64,8 +64,11 @@ function resolvePeriod({ period = "7d", startDate, endDate } = {}) {
 
 // `agentId="unassigned"` filtra conversas sem responsável — vocabulário
 // controlado próprio (nunca confundido com um id real de usuário).
-function buildConversationWhere({ agentId, channel, categoryId, status, priority } = {}) {
+// `companyIds` (multiempresa) já chega resolvido e validado pelo controller
+// (company-service#resolveCompanyFilter) — aqui só vira filtro.
+function buildConversationWhere({ agentId, channel, categoryId, status, priority, companyIds } = {}) {
   const where = {};
+  if (Array.isArray(companyIds) && companyIds.length) where.companyId = { in: companyIds };
   if (agentId === "unassigned") where.assignedUserId = null;
   else if (agentId) where.assignedUserId = agentId;
   if (channel && CHANNELS.includes(channel)) where.channel = channel;

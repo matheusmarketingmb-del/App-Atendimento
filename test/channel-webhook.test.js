@@ -35,7 +35,7 @@ test("webhook do Mercado Livre rejeita payload mal formado (401) sem persistir n
     create: { id: "singleton", newChannelsEnabled: true },
   });
   const account = await prisma.channelAccount.create({
-    data: { channel: "MERCADO_LIVRE", name: "Teste Webhook ML", enabled: true },
+    data: { companyId: "cmp_mibro", channel: "MERCADO_LIVRE", name: "Teste Webhook ML", enabled: true },
   });
   const { server, base } = await startServer();
   try {
@@ -62,7 +62,7 @@ test("webhook do Mercado Livre aceita payload com formato válido e persiste o e
     create: { id: "singleton", newChannelsEnabled: true },
   });
   const account = await prisma.channelAccount.create({
-    data: { channel: "MERCADO_LIVRE", name: "Teste Webhook ML Válido", enabled: true },
+    data: { companyId: "cmp_mibro", channel: "MERCADO_LIVRE", name: "Teste Webhook ML Válido", enabled: true },
   });
   const { server, base } = await startServer();
   try {
@@ -96,10 +96,10 @@ test("webhook do Facebook Messenger processa mensagem e escolhe a ChannelAccount
     create: { id: "singleton", newChannelsEnabled: true },
   });
   const pageA = await prisma.channelAccount.create({
-    data: { channel: "FACEBOOK_MESSENGER", name: "Página A", enabled: true, config: { pageId: "111" } },
+    data: { companyId: "cmp_mibro", channel: "FACEBOOK_MESSENGER", name: "Página A", enabled: true, config: { pageId: "111" } },
   });
   const pageB = await prisma.channelAccount.create({
-    data: { channel: "FACEBOOK_MESSENGER", name: "Página B", enabled: true, config: { pageId: "222" } },
+    data: { companyId: "cmp_mibro", channel: "FACEBOOK_MESSENGER", name: "Página B", enabled: true, config: { pageId: "222" } },
   });
   const { server, base } = await startServer();
   try {
@@ -132,7 +132,7 @@ test("webhook do Facebook Messenger processa mensagem e escolhe a ChannelAccount
 
 test("webhook do Instagram/Facebook fica bloqueado enquanto o master switch de novos canais está desligado", async () => {
   const account = await prisma.channelAccount.create({
-    data: { channel: "INSTAGRAM_DIRECT", name: "Perfil Teste", enabled: true, config: { igUserId: "IG1" } },
+    data: { companyId: "cmp_mibro", channel: "INSTAGRAM_DIRECT", name: "Perfil Teste", enabled: true, config: { igUserId: "IG1" } },
   });
   const { server, base } = await startServer();
   try {

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="theme-color" content="#ef5b2a">
+  <meta name="theme-color" content="#16171a">
   <link rel="icon" type="image/png" sizes="192x192" href="/assets/app-icon-192.png">
   <title>Configurações &bull; Conversas &bull; Central de Atendimento</title>
   <script>try{const saved=localStorage.getItem("mibro-theme");document.documentElement.dataset.theme=saved||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light")}catch{}</script>
@@ -13,7 +13,7 @@
 </head>
 <body>
   <header class="topbar">
-    <a class="brand" href="/"><img src="/assets/mibro-logo.png" alt="Mibro"><span></span><small>Configurações</small></a>
+    <a class="brand" href="/"><img src="/assets/central-mark.svg" alt="Central de Atendimento"><span></span><small>Configurações</small></a>
     <div class="phase-badge">CONFIGURAÇÕES &bull; CONVERSAS</div>
     <a class="back-link" href="/">&larr; Central</a>
     <button id="theme-toggle" class="round-button" type="button" title="Alternar tema">&#9790;</button>
@@ -26,6 +26,11 @@
       <div id="settings-readonly-note" class="readonly-note" hidden>Modo somente leitura — apenas uma conta Master pode alterar estas configurações.</div>
     </div>
 
+    <div id="settings-company-bar" class="settings-company-bar" hidden>
+      <div id="settings-company-filter" class="company-filter" role="radiogroup" aria-label="Configuração de qual empresa"></div>
+      <span id="settings-company-note"></span>
+      <button id="settings-company-reset" type="button" hidden>Voltar a usar a configuração global</button>
+    </div>
     <form id="settings-form" class="settings-grid">
       <details class="card" open>
         <summary><span>GERAL</span><h3>Reabertura e contexto do Bot</h3></summary>
@@ -94,6 +99,7 @@
   </main>
 
   <div id="toast" class="toast"></div>
+  <script src="/js/company-context.js"></script>
   <script src="/js/configuracoes.js"></script>
 </body>
 </html>

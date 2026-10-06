@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="theme-color" content="#ef5b2a">
+  <meta name="theme-color" content="#16171a">
   <link rel="icon" type="image/png" sizes="192x192" href="/assets/app-icon-192.png">
   <title>Respostas rápidas &bull; Central de Atendimento</title>
   <script>try{const saved=localStorage.getItem("mibro-theme");document.documentElement.dataset.theme=saved||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light")}catch{}</script>
@@ -14,7 +14,7 @@
 </head>
 <body>
   <header class="topbar">
-    <a class="brand" href="/"><img src="/assets/mibro-logo.png" alt="Mibro"><span></span><small>Respostas Rápidas</small></a>
+    <a class="brand" href="/"><img src="/assets/central-mark.svg" alt="Central de Atendimento"><span></span><small>Respostas Rápidas</small></a>
     <div class="phase-badge">BIBLIOTECA ÚNICA &bull; ATENDENTE, BOT E IA</div>
     <a class="back-link" href="/">&larr; Central</a>
     <button id="theme-toggle" class="round-button" type="button" title="Alternar tema">&#9790;</button>
@@ -33,6 +33,7 @@
         <select id="qr-filter-channel"><option value="">Todos os canais</option></select>
         <select id="qr-filter-active"><option value="">Ativas e inativas</option><option value="true">Somente ativas</option><option value="false">Somente inativas</option></select>
       </div>
+      <div id="qr-company-filter" class="company-filter" role="radiogroup" aria-label="Filtrar respostas por empresa" hidden></div>
       <div id="qr-list" class="bot-list"><div class="skeleton-list"><div class="skeleton skeleton-card"></div><div class="skeleton skeleton-card"></div><div class="skeleton skeleton-card"></div></div></div>
       <div class="safety-note"><b>Nunca envia sozinho</b><p>Selecionar uma resposta só preenche o composer do atendente. Sugestão de IA/Bot nunca dispara envio automático.</p></div>
     </aside>
@@ -60,13 +61,20 @@
             <div class="fields two-columns">
               <label><span>Nome *</span><input id="qr-name" maxlength="100" required placeholder="Ex.: Solicitar número do pedido"></label>
               <label><span>Atalho * (com /)</span><input id="qr-shortcut" maxlength="31" required placeholder="/pedido"></label>
+              <label><span>Vale para *</span><select id="qr-company" required></select></label>
               <label><span>Categoria / setor</span><select id="qr-category"></select></label>
               <label><span>Tipo</span><select id="qr-type">
                 <option value="QUICK_REPLY">Resposta rápida (ativo)</option>
                 <option value="SUGGESTED_REPLY">Sugestão (experimental)</option>
                 <option value="AUTOMATED_REPLY">Automação (desativado nesta fase)</option>
               </select></label>
-              <label class="full"><span>Texto * (suporta múltiplas linhas e variáveis {{firstName}})</span><textarea id="qr-text" maxlength="4000" required placeholder="Pode me informar o número do pedido para que eu possa verificar?"></textarea></label>
+              <label><span>Conteúdo</span><select id="qr-content-type"><option value="TEXT">Texto</option><option value="AUDIO">Áudio</option></select></label>
+              <label id="qr-text-field" class="full"><span>Texto * (suporta múltiplas linhas e variáveis {{firstName}})</span><textarea id="qr-text" maxlength="4000" required placeholder="Pode me informar o número do pedido para que eu possa verificar?"></textarea></label>
+              <div id="qr-audio-field" class="full" hidden>
+                <span>Áudio * (OGG/Opus, MP3, M4A, AAC ou AMR — até 16 MB)</span>
+                <input id="qr-audio-file" type="file" accept="audio/*,.ogg,.opus,.mp3,.m4a,.aac,.amr">
+                <audio id="qr-audio-player" controls preload="metadata" hidden></audio>
+              </div>
               <div class="full">
                 <span>Canais (vazio = todos)</span>
                 <div id="qr-channels-checklist" class="bot-channels-checklist"></div>
@@ -92,6 +100,7 @@
   </main>
 
   <div id="toast" class="toast"></div>
+  <script src="/js/company-context.js"></script>
   <script src="/js/quick-replies.js"></script>
 </body>
 </html>

@@ -8,7 +8,7 @@ module.exports = {
     catch (error) { return next(error); }
   },
   async activity(req, res, next) {
-    try { return res.json(await users.listTeamActivity(req.user)); }
+    try { return res.json(await users.listTeamActivity(req.user, { company: req.query.company })); }
     catch (error) { return next(error); }
   },
   async create(req, res, next) {

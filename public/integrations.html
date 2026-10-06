@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="theme-color" content="#ef5b2a">
+  <meta name="theme-color" content="#16171a">
   <link rel="icon" type="image/png" sizes="192x192" href="/assets/app-icon-192.png">
   <title>Integrações &bull; Central de Atendimento</title>
   <script>try{const saved=localStorage.getItem("mibro-theme");document.documentElement.dataset.theme=saved||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light")}catch{}</script>
@@ -14,7 +14,7 @@
 </head>
 <body>
   <header class="topbar">
-    <a class="brand" href="/"><img src="/assets/mibro-logo.png" alt="Mibro"><span></span><small>Central de Integrações</small></a>
+    <a class="brand" href="/"><img src="/assets/central-mark.svg" alt="Central de Atendimento"><span></span><small>Central de Integrações</small></a>
     <div class="phase-badge">OMNICHANNEL &bull; WHATSAPP CONTINUA SEM ALTERAÇÕES</div>
     <a class="back-link" href="/">&larr; Central</a>
     <button id="theme-toggle" class="round-button" type="button" title="Alternar tema">&#9790;</button>
@@ -54,6 +54,7 @@
       </div>
     </div>
 
+    <div class="integrations-company-bar"><span>Empresa para novas conexões (OAuth)</span><select id="integration-company" aria-label="Empresa das novas contas conectadas"></select></div>
     <div id="channel-cards" class="channel-cards"><div class="skeleton-list"><div class="skeleton skeleton-card"></div><div class="skeleton skeleton-card"></div></div></div>
 
     <section class="social-mapping-section">
@@ -85,7 +86,8 @@
       <h2 id="account-dialog-title">Configurar conta</h2>
       <p id="account-dialog-channel" class="account-dialog-channel"></p>
 
-      <label>Nome da conta<input id="account-name" type="text" required maxlength="80" placeholder="Ex.: Loja Oficial"></label>
+      <div id="account-company-field"></div>
+      <label>Nome da conta<input id="account-name" type="text" required maxlength="80" placeholder="Ex.: Sincrofit Atendimento"></label>
       <div id="account-secret-fields" class="account-secret-fields"></div>
       <p class="account-hint">Credenciais são cifradas (AES-256-GCM) antes de salvar. Nunca são exibidas novamente por completo.</p>
 
@@ -122,6 +124,7 @@
 
   <div id="toast" class="toast"></div>
 
+  <script src="/js/company-context.js"></script>
   <script src="/js/integrations.js"></script>
 </body>
 </html>

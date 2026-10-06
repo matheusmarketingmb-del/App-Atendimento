@@ -221,11 +221,14 @@ enum QuickReplyType {
   AUTOMATED_REPLY
 }
 
-// Escopo da resposta rápida: GLOBAL (gerida pelo Master, visível conforme
-// canal/setor) ou PERSONAL (biblioteca do próprio atendente — só o dono vê).
+// Escopo da resposta rápida: GLOBAL (gerida pelo Master, visível em todas as
+// empresas conforme canal/setor), COMPANY (só em conversas da empresa
+// `companyId`) ou PERSONAL (biblioteca do próprio atendente — só o dono vê;
+// `companyId` opcional restringe a uma empresa).
 enum QuickReplyScope {
   GLOBAL
   PERSONAL
+  COMPANY
 }
 
 // Conteúdo da resposta rápida: TEXT (texto com variáveis) ou AUDIO
@@ -262,8 +265,69 @@ enum ToolRiskLevel {
   SENSITIVE_ACTION
 }
 
+// =============================================================================
+// Multiempresa (2026-10): uma única central atende várias empresas (Mibro
+// Brasil, Sincrofit, …). A empresa de uma conversa nunca é escolhida pelo
+// atendente — vem do ChannelAccount (número/conta) que recebeu a mensagem.
+// Ver docs/MULTIEMPRESA_AUDITORIA.md e company-service.js.
+// =============================================================================
+model Company {
+  id           String   @id @default(cuid())
+  name         String
+  slug         String   @unique
+  // Rótulo curto do badge ("MIBRO", "SINCROFIT").
+  displayName  String
+  // Cor de identificação (#RRGGBB) — só acento visual, nunca fundo inteiro.
+  primaryColor String
+  logoUrl      String?
+  active       Boolean  @default(true)
+  displayOrder Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  userAccess           UserCompanyAccess[]
+  channelAccounts      ChannelAccount[]
+  contacts             Contact[]
+  conversations        Conversation[]
+  categories           Category[]
+  bots                 Bot[]
+  campaigns            Campaign[]
+  quickReplies         QuickReply[]
+  botResponses         BotResponse[]
+  optOuts              OptOut[]
+  auditLogs            AuditLog[]
+  conversationSettings ConversationSettings[]
+}
+
+// Acesso N:N usuário x empresa com role POR EMPRESA (Ana pode ser SUPERVISOR
+// na Mibro e ATENDENTE na Sincrofit). Master Global = User.role ADMIN — vê e
+// gerencia todas as empresas sem precisar de linha aqui. Sem linha ativa =
+// sem acesso àquela empresa. Setores (UserCategoryAccess) continuam valendo
+// e, como cada Category pertence a uma empresa, já ficam por empresa.
+model UserCompanyAccess {
+  id        String   @id @default(cuid())
+  userId    String
+  companyId String
+  // Nulo = usa o cargo padrão do usuário (User.role) nesta empresa.
+  role      UserRole?
+  // Permissões individuais NESTA empresa (ex.: {"canTransferConversations":
+  // true}). Nulo = usa as permissões do cadastro do usuário.
+  permissions Json?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, companyId])
+  @@index([companyId, active])
+}
+
 model Contact {
   id               String            @id @default(cuid())
+  // Empresa dona deste cadastro: o mesmo telefone pode existir uma vez por
+  // empresa, com históricos separados.
+  companyId        String
   channel          Channel           @default(META)
   externalId       String
   // Opcional: nem todo canal tem telefone (Mercado Livre = buyerId, e-mail =
@@ -279,8 +343,10 @@ model Contact {
   notes            ContactNote[]
   campaignContacts CampaignContact[]
   identity         ContactIdentity?  @relation(fields: [identityId], references: [id], onDelete: SetNull)
+  company          Company           @relation(fields: [companyId], references: [id], onDelete: Restrict)
 
-  @@unique([channel, externalId])
+  @@unique([companyId, channel, externalId])
+  @@index([companyId, phone])
   @@index([phone])
   @@index([email])
   @@index([identityId])
@@ -311,6 +377,9 @@ model ContactNote {
 
 model Conversation {
   id                       String                     @id @default(cuid())
+  // Desnormalizado de ChannelAccount/Contact para filtro e escopo rápidos —
+  // sempre igual a contact.companyId.
+  companyId                String
   contactId                String
   channel                  Channel                    @default(META)
   channelScope             String                     @default("LEGACY")
@@ -368,8 +437,12 @@ model Conversation {
   channelAccount           ChannelAccount?            @relation(fields: [channelAccountId], references: [id], onDelete: SetNull)
   originCampaign           Campaign?                  @relation(fields: [originCampaignId], references: [id], onDelete: SetNull)
   originCampaignContact    CampaignContact?           @relation(fields: [originCampaignContactId], references: [id], onDelete: SetNull)
+  company                  Company                    @relation(fields: [companyId], references: [id], onDelete: Restrict)
 
   @@unique([contactId, channel, channelScope])
+  @@index([companyId, status, lastMessageAt])
+  @@index([companyId, assignedUserId])
+  @@index([companyId, categoryId, lastMessageAt])
   @@index([status, lastMessageAt])
   @@index([priority])
   @@index([firstResponseSlaBreached])
@@ -443,6 +516,9 @@ model User {
   canSetConversationPriority     Boolean                    @default(false)
   canStartConversations          Boolean                    @default(false)
   canMergeContacts               Boolean                    @default(false)
+  // Filtro de empresa preferido ("ALL" ou slug). Sempre revalidado contra
+  // UserCompanyAccess ao ler — nunca concede acesso por si só.
+  companyFilterPreference        String?
   createdAt                      DateTime                   @default(now())
   updatedAt                      DateTime                   @updatedAt
   assignedConversations          Conversation[]             @relation("AssignedConversations")
@@ -476,6 +552,7 @@ model User {
   aiProviderCredentialsUpdated   AiProviderCredential[]     @relation("AiProviderCredentialUpdatedBy")
   localAiProviderSettingsUpdated LocalAiProviderSettings[]  @relation("LocalAiProviderSettingsUpdatedBy")
   socialContentMappingsCreated   SocialContentMapping[]
+  companyAccess                  UserCompanyAccess[]
 }
 
 model PushSubscription {
@@ -504,9 +581,14 @@ model AuditLog {
   entityId    String?
   summary     String
   details     Json?
+  // Empresa do recurso afetado (nulo para ações globais: usuários, empresas,
+  // configurações gerais).
+  companyId   String?
   createdAt   DateTime @default(now())
   actorUser   User?    @relation("AuditLogActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+  company     Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
 
+  @@index([companyId, createdAt])
   @@index([createdAt])
   @@index([action, createdAt])
   @@index([entityType, entityId])
@@ -552,8 +634,11 @@ model ConversationActivity {
 model Category {
   masterOnly      Boolean              @default(false)
   id              String               @id @default(cuid())
+  // Setor/categoria sempre de uma empresa ("Suporte" da Mibro e "Suporte" da
+  // Sincrofit são registros distintos). Subcategoria herda a do pai.
+  companyId       String
   parentId        String?
-  code            String               @unique
+  code            String
   name            String
   color           String?
   active          Boolean              @default(true)
@@ -572,12 +657,18 @@ model Category {
   quickReplies    QuickReply[]
   campaigns       Campaign[]
   triageOptions   BotTriageOption[]
+  company         Company              @relation(fields: [companyId], references: [id], onDelete: Restrict)
 
+  @@unique([companyId, code])
+  @@index([companyId, parentId, displayOrder])
   @@index([parentId, displayOrder])
 }
 
 model Bot {
   id                      String    @id @default(cuid())
+  // Um Bot só executa em conversas da própria empresa (nunca um fluxo
+  // Sincrofit num número Mibro).
+  companyId               String
   name                    String
   description             String?
   status                  BotStatus @default(DRAFT)
@@ -664,7 +755,9 @@ model Bot {
   triageOptions           BotTriageOption[]
   personality             BotPersonality?
   visualFlows             BotFlow[]
+  company                 Company                 @relation(fields: [companyId], references: [id], onDelete: Restrict)
 
+  @@index([companyId, status])
   @@index([status, channel])
   @@index([defaultCategoryId])
   @@index([type])
@@ -1368,8 +1461,14 @@ model BotHandoffContext {
 // texto puro: `encryptedSecrets` guarda um blob cifrado (AES-256-GCM, ver
 // integration-secret-service.js); `secretKeys` só lista QUAIS chaves estão
 // configuradas, para a UI mostrar "Configurado: sim/não" sem decifrar nada.
+// WhatsApp (channel META) também é uma ChannelAccount desde a fase
+// multiempresa: config.phoneNumberId / config.wabaId / config.displayNumber
+// identificam o número. A conta com config.legacyEnv = true usa as variáveis
+// PHONE_NUMBER_ID/WHATSAPP_BUSINESS_ACCOUNT_ID do .env (número Mibro original).
 model ChannelAccount {
   id                String               @id @default(cuid())
+  // A conta (número/página/caixa) define a empresa de tudo que entra por ela.
+  companyId         String
   channel           Channel
   name              String
   status            ChannelAccountStatus @default(NOT_CONFIGURED)
@@ -1396,8 +1495,10 @@ model ChannelAccount {
   events        ExternalChannelEvent[]
   campaigns     Campaign[]
   accessUsers   ChannelAccountUserAccess[]
+  company       Company                    @relation(fields: [companyId], references: [id], onDelete: Restrict)
 
   @@unique([channel, name])
+  @@index([companyId, channel])
   @@index([channel, enabled])
   @@index([status])
 }
@@ -1511,6 +1612,8 @@ model QuickReply {
   contentType       QuickReplyContentType @default(TEXT)
   // Dono de uma resposta PERSONAL (nulo para GLOBAL).
   ownerUserId       String?
+  // Obrigatório em COMPANY, opcional em PERSONAL, sempre nulo em GLOBAL.
+  companyId         String?
   mediaStorageKey   String?
   mediaMimeType     String?
   mediaFileName     String?
@@ -1529,7 +1632,9 @@ model QuickReply {
   favorites               QuickReplyFavorite[]
   usages                  QuickReplyUsage[]
   suggestedInObservations BotObservation[]     @relation("ObservationSuggestedQuickReply")
+  company                 Company?             @relation(fields: [companyId], references: [id], onDelete: Restrict)
 
+  @@index([companyId, scope, active])
   @@index([active, categoryId])
   @@index([shortcut])
   @@index([createdAt])
@@ -1754,6 +1859,12 @@ model CampaignGlobalSettings {
 model ConversationSettings {
   id String @id @default("singleton")
 
+  // Multiempresa: a linha "singleton" (companyId nulo) é o padrão global.
+  // Estrutura pronta para override por empresa (uma linha por companyId) —
+  // nesta fase o runtime ainda lê só o padrão global.
+  companyId String?  @unique
+  company   Company? @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
   // SLA de primeira resposta (item 1)
   firstResponseSlaEnabled Boolean @default(false)
   firstResponseSlaMinutes Int     @default(10)
@@ -1808,6 +1919,8 @@ model ConversationSettings {
 
 model Campaign {
   id               String  @id @default(cuid())
+  // Escolhida primeiro na criação: limita números, templates e contatos.
+  companyId        String
   name             String
   description      String? @db.Text
   channel          Channel @default(META)
@@ -1863,7 +1976,9 @@ model Campaign {
   contacts       CampaignContact[]
   imports        CampaignImport[]
   conversations  Conversation[]
+  company        Company           @relation(fields: [companyId], references: [id], onDelete: Restrict)
 
+  @@index([companyId, status])
   @@index([status, scheduledAt])
   @@index([createdByUserId])
 }
@@ -1948,9 +2063,12 @@ model CampaignImport {
 // um opt-out vale para TODAS as campanhas futuras. Nunca removido (apagado)
 // de verdade: `removedAt` marca a reversão manual, mantendo o histórico
 // completo para auditoria (item 13/26).
+// Multiempresa: opt-out POR EMPRESA (sair da lista da Mibro não bloqueia a
+// Sincrofit). Registros anteriores à fase multiempresa ficam com a Mibro.
 model OptOut {
   id              String    @id @default(cuid())
-  phone           String    @unique
+  companyId       String
+  phone           String
   contactId       String?
   reason          String?   @db.Text
   source          String // ex.: "REPLY_KEYWORD", "MANUAL", "IMPORT_FLAG"
@@ -1959,8 +2077,10 @@ model OptOut {
   removedByUserId String?
   removalReason   String?   @db.Text
 
-  removedByUser User? @relation("OptOutRemovedBy", fields: [removedByUserId], references: [id], onDelete: SetNull)
+  removedByUser User?   @relation("OptOutRemovedBy", fields: [removedByUserId], references: [id], onDelete: SetNull)
+  company       Company @relation(fields: [companyId], references: [id], onDelete: Restrict)
 
+  @@unique([companyId, phone])
   @@index([phone])
 }
 
@@ -2187,7 +2307,9 @@ model BotFlowExecutionLog {
 // PARCERIAS) — validada em bot-response-library-service.js.
 model BotResponse {
   id              String   @id @default(cuid())
-  key             String   @unique
+  // Nulo = texto global; preenchido = só Bots daquela empresa usam.
+  companyId       String?
+  key             String
   title           String
   category        String   @default("GERAL")
   text            String   @db.Text
@@ -2198,7 +2320,11 @@ model BotResponse {
   updatedByName   String?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
+  company         Company? @relation(fields: [companyId], references: [id], onDelete: Restrict)
 
+  // Unicidade (companyId, key) com NULL tratado como valor único é garantida
+  // por índice parcial na migration (Postgres trata NULLs como distintos).
+  @@unique([companyId, key])
   @@index([category, active])
 }
 

@@ -24,9 +24,9 @@ const baseSettings = {
 };
 
 async function createContactAndConversation(externalId, phone, status, lastMessageAt, extra = {}) {
-  const contact = await prisma.contact.create({ data: { externalId, phone, name: `Cliente ${externalId}` } });
+  const contact = await prisma.contact.create({ data: { companyId: "cmp_mibro", externalId, phone, name: `Cliente ${externalId}` } });
   const conversation = await prisma.conversation.create({
-    data: { contactId: contact.id, status, lastMessageAt, ...extra },
+    data: { companyId: "cmp_mibro", contactId: contact.id, status, lastMessageAt, ...extra },
   });
   return { contact, conversation };
 }

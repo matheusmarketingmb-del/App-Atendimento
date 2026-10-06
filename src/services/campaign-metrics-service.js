@@ -11,8 +11,7 @@ function rate(numerator, denominator) {
 }
 
 async function campaignMetrics(campaignId, viewer) {
-  authorization.assertCanManageCampaigns(viewer);
-  await findCampaignOr404(campaignId);
+  await findCampaignOr404(campaignId, prisma, viewer);
 
   const grouped = await prisma.campaignContact.groupBy({
     by: ["status"], where: { campaignId, isTest: false }, _count: { _all: true },

@@ -8,6 +8,13 @@ const audit = require("./audit-service");
 const { contextFromConversation, previewContext, renderTemplate } = require("./quick-reply-template-service");
 const { normalizeOutgoingAudio } = require("./audio-normalization-service");
 const { removeImage, storeAudio } = require("./media-storage-service");
+const companyService = require("./company-service");
+
+// Multiempresa (item 31/32): GLOBAL = todas as empresas; COMPANY = só
+// conversas da empresa `companyId`; PERSONAL = só o dono (com `companyId`
+// opcional restringindo a uma empresa). Tela administrativa gerencia
+// GLOBAL + COMPANY.
+const MANAGED_SCOPES = new Set(["GLOBAL", "COMPANY"]);
 
 // Biblioteca pessoal (respostas rápidas de áudio): PERSONAL só aparece para
 // o dono — nunca para outros atendentes, nem na tela administrativa de
@@ -104,6 +111,10 @@ function assertApplicableToConversation(quickReply, conversation) {
   if (quickReply.contentType === "AUDIO" && !AUDIO_CHANNELS.has(conversation.channel)) {
     throw fail("O canal desta conversa ainda não suporta envio de áudio.");
   }
+  // Nunca oferece/usa resposta de outra empresa (Mibro x Sincrofit).
+  if (quickReply.companyId && quickReply.companyId !== conversation.companyId) {
+    throw fail("Esta resposta rápida é de outra empresa.");
+  }
   // Pessoal: a categoria é só organização da biblioteca do atendente, não
   // restringe em qual conversa ele pode usar.
   if (quickReply.scope === "PERSONAL") return;
@@ -115,11 +126,24 @@ function assertApplicableToConversation(quickReply, conversation) {
   }
 }
 
-async function validateCategoryId(categoryId) {
+// Setor é sempre de uma empresa: só combina com resposta da mesma empresa.
+async function validateCategoryId(categoryId, companyId = null) {
   if (!categoryId) return null;
-  const category = await prisma.category.findUnique({ where: { id: categoryId }, select: { id: true } });
+  const category = await prisma.category.findUnique({ where: { id: categoryId }, select: { id: true, companyId: true } });
   if (!category) throw fail("Categoria/setor não encontrado.");
+  if (!companyId) throw fail("Resposta global não pode ser restrita a um setor (setores pertencem a uma empresa).");
+  if (category.companyId !== companyId) throw fail("O setor escolhido é de outra empresa.");
   return categoryId;
+}
+
+// Escopo + empresa de uma resposta administrada (GLOBAL/COMPANY).
+async function resolveManagedScope(data, actor, current = null) {
+  const scope = data.scope !== undefined ? String(data.scope) : (current?.scope || "COMPANY");
+  if (!MANAGED_SCOPES.has(scope)) throw fail("Escopo inválido (use GLOBAL ou COMPANY).");
+  if (scope === "GLOBAL") return { scope, companyId: null };
+  const requested = data.companyId !== undefined ? data.companyId : current?.companyId;
+  if (!requested) throw fail("Selecione a empresa da resposta rápida.");
+  return { scope, companyId: await companyService.resolveCompanyForCreate(actor, requested) };
 }
 
 async function validateIntentIds(intentIds) {
@@ -135,10 +159,19 @@ async function validateIntentIds(intentIds) {
 // Globais não colidem com pessoais de terceiros (o Master nem pode saber que
 // existem); uma pessoal não pode repetir uma global ativa nem outra pessoal
 // do mesmo dono.
-async function assertShortcutAvailable(shortcut, excludeId = null, { ownerUserId = null } = {}) {
-  const scopeFilter = ownerUserId
-    ? { OR: [{ scope: "GLOBAL" }, { scope: "PERSONAL", ownerUserId }] }
-    : { scope: "GLOBAL" };
+// Multiempresa: /renova pode existir na Mibro e na Sincrofit; uma GLOBAL
+// colide com qualquer empresa; uma COMPANY colide com GLOBAL e com a mesma
+// empresa; uma PERSONAL colide com GLOBAL, COMPANY das empresas do dono e
+// com outra pessoal do mesmo dono.
+async function assertShortcutAvailable(shortcut, excludeId = null, { ownerUserId = null, scope = "GLOBAL", companyId = null, ownerCompanyIds = [] } = {}) {
+  let scopeFilter;
+  if (ownerUserId) {
+    scopeFilter = { OR: [{ scope: "GLOBAL" }, { scope: "PERSONAL", ownerUserId }, { scope: "COMPANY", companyId: { in: ownerCompanyIds } }] };
+  } else if (scope === "COMPANY") {
+    scopeFilter = { OR: [{ scope: "GLOBAL" }, { scope: "COMPANY", companyId }] };
+  } else {
+    scopeFilter = { scope: { in: ["GLOBAL", "COMPANY"] } };
+  }
   const conflict = await prisma.quickReply.findFirst({
     where: { shortcut, archivedAt: null, ...scopeFilter, ...(excludeId ? { id: { not: excludeId } } : {}) },
     select: { id: true },
@@ -148,6 +181,7 @@ async function assertShortcutAvailable(shortcut, excludeId = null, { ownerUserId
 
 const quickReplyInclude = {
   category: { select: { id: true, name: true, code: true, color: true } },
+  company: { select: { id: true, name: true, slug: true, displayName: true, primaryColor: true } },
   createdBy: { select: { id: true, name: true } },
   intents: { include: { botIntent: { select: { id: true, name: true, botId: true } } } },
   _count: { select: { usages: true, favorites: true } },
@@ -166,6 +200,8 @@ function serialize(quickReply, { favoritedByUserId } = {}) {
     availableToBots: quickReply.availableToBots,
     type: quickReply.type,
     scope: quickReply.scope || "GLOBAL",
+    companyId: quickReply.companyId || null,
+    company: quickReply.company || null,
     contentType: quickReply.contentType || "TEXT",
     ownerUserId: quickReply.ownerUserId || null,
     // Áudio: só metadados + URL autenticada (nunca o storageKey interno).
@@ -193,11 +229,11 @@ async function ensureQuickReply(id) {
   return quickReply;
 }
 
-// Tela administrativa (Master) só gerencia as globais — pessoais têm rotas
-// próprias (personal-audio) e não aparecem nela.
+// Tela administrativa (Master) gerencia GLOBAL e COMPANY — pessoais têm
+// rotas próprias (personal-audio) e não aparecem nela.
 async function ensureGlobalQuickReply(id) {
   const quickReply = await ensureQuickReply(id);
-  if (quickReply.scope === "PERSONAL") throw fail("Resposta rápida não encontrada.", 404);
+  if (!MANAGED_SCOPES.has(quickReply.scope)) throw fail("Resposta rápida não encontrada.", 404);
   return quickReply;
 }
 
@@ -212,7 +248,7 @@ function assertCanSeePersonal(quickReply, viewer, { allowMaster = false } = {}) 
 // Auditoria nunca guarda conteúdo binário — só metadados do áudio.
 function snapshot(quickReply) {
   return {
-    scope: quickReply.scope, contentType: quickReply.contentType,
+    scope: quickReply.scope, companyId: quickReply.companyId || null, contentType: quickReply.contentType,
     ...(quickReply.contentType === "AUDIO" ? {
       audio: { mimeType: quickReply.mediaMimeType, size: quickReply.mediaSize, durationMs: quickReply.mediaDurationMs },
     } : {}),
@@ -226,7 +262,12 @@ function snapshot(quickReply) {
 // N+1 (um único findMany com include).
 async function listQuickReplies(filters, viewer) {
   assertQuickReplyManager(viewer);
-  const where = { scope: "GLOBAL" };
+  const where = { scope: { in: ["GLOBAL", "COMPANY"] } };
+  // Filtro de empresa: as da empresa + as globais (que também valem nela).
+  if (filters.company && filters.company !== companyService.ALL_COMPANIES) {
+    const companyIds = await companyService.resolveCompanyFilter(viewer, filters.company);
+    where.AND = [{ OR: [{ scope: "GLOBAL" }, { companyId: { in: companyIds } }] }];
+  }
   if (filters.active === "true") where.active = true;
   if (filters.active === "false") where.active = false;
   if (filters.includeArchived !== "true") where.archivedAt = null;
@@ -235,7 +276,7 @@ async function listQuickReplies(filters, viewer) {
   if (filters.type) where.type = validateType(filters.type);
   if (filters.search?.trim()) {
     const term = filters.search.trim().slice(0, 120);
-    where.AND = [{
+    where.AND = [...(where.AND || []), {
       OR: [
         { name: { contains: term, mode: "insensitive" } },
         { shortcut: { contains: term, mode: "insensitive" } },
@@ -257,11 +298,13 @@ async function getQuickReply(id, viewer) {
 
 async function createQuickReply(data, actor) {
   assertQuickReplyManager(actor);
+  const { scope, companyId } = await resolveManagedScope(data, actor);
   const create = {
+    scope, companyId,
     name: requiredText(data.name, "Nome", 100),
     shortcut: validateShortcut(data.shortcut),
     text: requiredBody(data.text, "Texto", 4000),
-    categoryId: await validateCategoryId(data.categoryId),
+    categoryId: await validateCategoryId(data.categoryId, companyId),
     channels: validateChannels(data.channels),
     availableToAgents: data.availableToAgents === undefined ? true : validateBoolean(data.availableToAgents, "availableToAgents"),
     availableToBots: data.availableToBots === undefined ? false : validateBoolean(data.availableToBots, "availableToBots"),
@@ -269,7 +312,7 @@ async function createQuickReply(data, actor) {
     active: data.active === undefined ? true : validateBoolean(data.active, "active"),
     createdByUserId: actor?.id || null,
   };
-  await assertShortcutAvailable(create.shortcut);
+  await assertShortcutAvailable(create.shortcut, null, { scope, companyId });
   const intentIds = await validateIntentIds(data.intentIds);
 
   const quickReply = await prisma.$transaction(async (transaction) => {
@@ -280,7 +323,7 @@ async function createQuickReply(data, actor) {
       });
     }
     await audit.recordAudit({
-      actor, action: "QUICK_REPLY_CREATED", entityType: "QUICK_REPLY", entityId: created.id,
+      actor, action: "QUICK_REPLY_CREATED", entityType: "QUICK_REPLY", entityId: created.id, companyId,
       summary: `Criou a resposta rápida "${created.name}" (${created.shortcut})`,
       details: { after: snapshot(created) },
     }, transaction);
@@ -293,13 +336,21 @@ async function updateQuickReply(id, data, actor) {
   assertQuickReplyManager(actor);
   const existing = await ensureGlobalQuickReply(id);
   const update = {};
+  // Promover a GLOBAL / restringir a uma empresa (o Master revisa as
+  // antigas, que viraram COMPANY Mibro na migração).
+  const target = await resolveManagedScope(data, actor, existing);
+  if (target.scope !== existing.scope || target.companyId !== existing.companyId) {
+    Object.assign(update, target);
+    const categoryId = data.categoryId !== undefined ? data.categoryId : existing.categoryId;
+    update.categoryId = await validateCategoryId(categoryId, target.companyId);
+  }
   if (data.name !== undefined) update.name = requiredText(data.name, "Nome", 100);
-  if (data.shortcut !== undefined) {
-    update.shortcut = validateShortcut(data.shortcut);
-    await assertShortcutAvailable(update.shortcut, id);
+  if (data.shortcut !== undefined || update.scope) {
+    update.shortcut = validateShortcut(data.shortcut ?? existing.shortcut);
+    await assertShortcutAvailable(update.shortcut, id, target);
   }
   if (data.text !== undefined) update.text = requiredBody(data.text, "Texto", 4000);
-  if (data.categoryId !== undefined) update.categoryId = await validateCategoryId(data.categoryId);
+  if (data.categoryId !== undefined) update.categoryId = await validateCategoryId(data.categoryId, target.companyId);
   if (data.channels !== undefined) update.channels = validateChannels(data.channels);
   if (data.availableToAgents !== undefined) update.availableToAgents = validateBoolean(data.availableToAgents, "availableToAgents");
   if (data.availableToBots !== undefined) update.availableToBots = validateBoolean(data.availableToBots, "availableToBots");
@@ -323,7 +374,7 @@ async function updateQuickReply(id, data, actor) {
     }
     const after = await transaction.quickReply.findUnique({ where: { id }, include: quickReplyInclude });
     await audit.recordAudit({
-      actor, action: "QUICK_REPLY_UPDATED", entityType: "QUICK_REPLY", entityId: id,
+      actor, action: "QUICK_REPLY_UPDATED", entityType: "QUICK_REPLY", entityId: id, companyId: after.companyId,
       summary: `Alterou a resposta rápida "${after.name}" (${after.shortcut})`,
       details: { before: snapshot(existing), after: snapshot(after) },
     }, transaction);
@@ -357,14 +408,22 @@ async function listForComposer({ conversationId, search, categoryId }, viewer) {
     throw authorization.forbidden("O filtro informado não pertence à conversa selecionada.");
   }
 
-  const globalWhere = { scope: "GLOBAL", active: true, archivedAt: null, availableToAgents: true };
-  globalWhere.OR = [{ channels: { isEmpty: true } }, { channels: { has: conversation.channel } }];
+  // Multiempresa: globais + as da empresa DA CONVERSA (nunca de outra).
+  const globalWhere = { active: true, archivedAt: null, availableToAgents: true };
+  globalWhere.AND = [
+    { OR: [{ scope: "GLOBAL" }, { scope: "COMPANY", companyId: conversation.companyId }] },
+    { OR: [{ channels: { isEmpty: true } }, { channels: { has: conversation.channel } }] },
+  ];
   if (categoryId) globalWhere.categoryId = categoryId;
   else if (conversation?.categoryId) {
-    globalWhere.AND = [{ OR: [{ categoryId: null }, { categoryId: conversation.categoryId }] }];
+    globalWhere.AND.push({ OR: [{ categoryId: null }, { categoryId: conversation.categoryId }] });
   }
-  // Pessoais: só as do próprio atendente (nunca de outro usuário).
-  const personalWhere = { scope: "PERSONAL", ownerUserId: viewer.id, active: true, archivedAt: null };
+  // Pessoais: só as do próprio atendente (nunca de outro usuário), sem
+  // empresa ou da empresa da conversa.
+  const personalWhere = {
+    scope: "PERSONAL", ownerUserId: viewer.id, active: true, archivedAt: null,
+    OR: [{ companyId: null }, { companyId: conversation.companyId }],
+  };
   if (categoryId) personalWhere.categoryId = categoryId;
   const where = { OR: [globalWhere, personalWhere] };
   if (search?.trim()) {
@@ -510,12 +569,51 @@ async function storePersonalAudio(file, declaredDurationMs) {
   return { ...media, durationMs: audio.durationMs };
 }
 
+// Empresa opcional de uma resposta pessoal: só empresas que o dono acessa.
+async function personalCompanyId(value, actor) {
+  if (!value) return null;
+  return companyService.resolveCompanyForCreate(actor, value);
+}
+
+// Áudio rápido da EMPRESA ou GLOBAL (item 32) — gerido pelo Master, mesma
+// regra das respostas de texto: COMPANY só aparece em conversas da empresa.
+async function createManagedAudio(data, file, actor) {
+  assertQuickReplyManager(actor);
+  const { scope, companyId } = await resolveManagedScope(data, actor);
+  const name = requiredText(data.name, "Nome", 100);
+  const shortcut = validateShortcut(data.shortcut);
+  const categoryId = await validateCategoryId(data.categoryId || null, companyId);
+  await assertShortcutAvailable(shortcut, null, { scope, companyId });
+  const media = await storePersonalAudio(file, data.durationMs);
+  try {
+    const quickReply = await prisma.$transaction(async (transaction) => {
+      const created = await transaction.quickReply.create({ data: {
+        name, shortcut, text: "", categoryId, companyId, channels: [], availableToAgents: true, availableToBots: false,
+        type: "QUICK_REPLY", scope, contentType: "AUDIO", createdByUserId: actor.id,
+        mediaStorageKey: media.storageKey, mediaMimeType: media.mimeType, mediaFileName: media.fileName,
+        mediaSize: media.size, mediaDurationMs: media.durationMs,
+      } });
+      await audit.recordAudit({
+        actor, action: "QUICK_REPLY_CREATED", entityType: "QUICK_REPLY", entityId: created.id, companyId,
+        summary: `Criou o áudio rápido ${scope === "GLOBAL" ? "global" : "da empresa"} "${created.name}" (${created.shortcut})`,
+        details: { after: snapshot(created) },
+      }, transaction);
+      return transaction.quickReply.findUnique({ where: { id: created.id }, include: quickReplyInclude });
+    });
+    return serialize(quickReply);
+  } catch (error) {
+    await removeImage(media.storageKey).catch(() => {});
+    throw error;
+  }
+}
+
 async function createPersonalAudio(data, file, actor) {
   if (!actor?.id) throw authorization.forbidden();
   const name = requiredText(data.name, "Nome", 100);
   const shortcut = validateShortcut(data.shortcut);
-  const categoryId = await validateCategoryId(data.categoryId || null);
-  await assertShortcutAvailable(shortcut, null, { ownerUserId: actor.id });
+  const companyId = await personalCompanyId(data.companyId, actor);
+  const categoryId = data.categoryId ? await validateCategoryId(data.categoryId, companyId || (await prisma.category.findUnique({ where: { id: data.categoryId }, select: { companyId: true } }))?.companyId) : null;
+  await assertShortcutAvailable(shortcut, null, { ownerUserId: actor.id, ownerCompanyIds: await companyService.accessibleCompanyIds(actor) });
   const owned = await prisma.quickReply.count({ where: { scope: "PERSONAL", ownerUserId: actor.id, archivedAt: null } });
   if (owned >= MAX_PERSONAL_QUICK_REPLIES) {
     throw fail(`Limite de ${MAX_PERSONAL_QUICK_REPLIES} respostas rápidas pessoais atingido.`);
@@ -524,7 +622,7 @@ async function createPersonalAudio(data, file, actor) {
   try {
     const quickReply = await prisma.$transaction(async (transaction) => {
       const created = await transaction.quickReply.create({ data: {
-        name, shortcut, text: "", categoryId, channels: [], availableToAgents: true, availableToBots: false,
+        name, shortcut, text: "", categoryId, companyId, channels: [], availableToAgents: true, availableToBots: false,
         type: "QUICK_REPLY", scope: "PERSONAL", contentType: "AUDIO", ownerUserId: actor.id, createdByUserId: actor.id,
         mediaStorageKey: media.storageKey, mediaMimeType: media.mimeType, mediaFileName: media.fileName,
         mediaSize: media.size, mediaDurationMs: media.durationMs,
@@ -549,9 +647,15 @@ async function updatePersonalAudio(id, data, file, actor) {
   if (data.name !== undefined) update.name = requiredText(data.name, "Nome", 100);
   if (data.shortcut !== undefined) {
     update.shortcut = validateShortcut(data.shortcut);
-    await assertShortcutAvailable(update.shortcut, id, { ownerUserId: existing.ownerUserId });
+    await assertShortcutAvailable(update.shortcut, id, { ownerUserId: existing.ownerUserId, ownerCompanyIds: await companyService.accessibleCompanyIds(actor) });
   }
-  if (data.categoryId !== undefined) update.categoryId = await validateCategoryId(data.categoryId || null);
+  if (data.companyId !== undefined) update.companyId = await personalCompanyId(data.companyId, actor);
+  const effectiveCompanyId = update.companyId !== undefined ? update.companyId : existing.companyId;
+  if (data.categoryId !== undefined) {
+    update.categoryId = data.categoryId
+      ? await validateCategoryId(data.categoryId, effectiveCompanyId || (await prisma.category.findUnique({ where: { id: data.categoryId }, select: { companyId: true } }))?.companyId)
+      : null;
+  }
   const media = file?.buffer?.length ? await storePersonalAudio(file, data.durationMs) : null;
   if (media) {
     Object.assign(update, {
@@ -600,11 +704,14 @@ async function getQuickReplyAudio(id, viewer) {
   const quickReply = await ensureQuickReply(id);
   if (quickReply.contentType !== "AUDIO" || !quickReply.mediaStorageKey) throw fail("Áudio não encontrado.", 404);
   assertCanSeePersonal(quickReply, viewer, { allowMaster: true });
+  if (quickReply.scope === "COMPANY" && !(await companyService.canAccessCompany(viewer, quickReply.companyId))) {
+    throw fail("Áudio não encontrado.", 404);
+  }
   return { storageKey: quickReply.mediaStorageKey, mimeType: quickReply.mediaMimeType, fileName: quickReply.mediaFileName };
 }
 
 module.exports = {
-  AUDIO_CHANNELS, MAX_PERSONAL_QUICK_REPLIES, createPersonalAudio, deletePersonalAudio, getQuickReplyAudio, updatePersonalAudio,
+  AUDIO_CHANNELS, MAX_PERSONAL_QUICK_REPLIES, createManagedAudio, createPersonalAudio, deletePersonalAudio, getQuickReplyAudio, updatePersonalAudio,
   archiveQuickReply, assertQuickReplyManager, createQuickReply, getQuickReply, listForComposer,
   listQuickReplies, listSuggestions, previewQuickReplyText, setFavorite, suggestQuickReplyForIntent,
   updateQuickReply, useQuickReply,

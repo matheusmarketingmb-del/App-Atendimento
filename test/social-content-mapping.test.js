@@ -10,7 +10,7 @@ const prefix = `content-mapping-${process.pid}`;
 let master;
 
 test.before(async () => {
-  master = await prisma.user.create({ data: { name: "Master Mapping Teste", email: `${prefix}@example.com`, role: "ADMIN" } });
+  master = await prisma.user.create({ data: { companyAccess: { create: { companyId: "cmp_mibro" } }, name: "Master Mapping Teste", email: `${prefix}@example.com`, role: "ADMIN" } });
 });
 
 test.after(async () => {

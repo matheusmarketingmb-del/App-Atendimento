@@ -17,6 +17,26 @@ const categories = [
 // fluxo visual (flow-builder-migration-service.js#ensureTriageFlow, rodada no
 // boot) — o Bot nasce com a resposta automática desligada.
 const triageBotId = "system-triage-bot";
+// Multiempresa: mesmos IDs/valores da migration
+// 20261006100100_multiempresa_company (o `npm test` usa `db push`, que não
+// roda migrations). As categorias e o Bot de Triagem iniciais são da Mibro.
+const companies = [
+  { id: "cmp_mibro", name: "Mibro Brasil", slug: "mibro", displayName: "MIBRO", primaryColor: "#FF6633", displayOrder: 0 },
+  { id: "cmp_sincrofit", name: "Sincrofit", slug: "sincrofit", displayName: "SINCROFIT", primaryColor: "#24A8B4", displayOrder: 1 },
+];
+const DEFAULT_COMPANY_ID = "cmp_mibro";
+const legacyWhatsappAccount = {
+  id: "chacc_mibro_whatsapp", companyId: DEFAULT_COMPANY_ID, channel: "META", name: "Mibro Brasil WhatsApp",
+  status: "CONNECTED", enabled: true, config: { legacyEnv: true },
+};
+
+async function seedCompanies(client = prisma) {
+  for (const company of companies) {
+    await client.company.upsert({ where: { slug: company.slug }, update: {}, create: company });
+  }
+  const existing = await client.channelAccount.findFirst({ where: { channel: "META", config: { path: ["legacyEnv"], equals: true } } });
+  if (!existing) await client.channelAccount.create({ data: legacyWhatsappAccount });
+}
 const triageSchedules = [
   [0, false], [1, true], [2, true], [3, true], [4, true], [5, true], [6, false],
 ].map(([dayOfWeek, enabled]) => ({ dayOfWeek, enabled, startTime: "08:00", endTime: "17:00" }));
@@ -33,6 +53,7 @@ async function seedTriageBot(client = prisma) {
     update: {},
     create: {
       id: triageBotId,
+      companyId: DEFAULT_COMPANY_ID,
       name: "Triagem Inicial",
       description: "Bot do sistema: recebe a primeira mensagem do cliente, mostra o menu de setores e encaminha a conversa. Migrado do fluxo hardcoded para configuração.",
       status: "ACTIVE",
@@ -59,7 +80,7 @@ async function seedTriageBot(client = prisma) {
   }
 
   for (const [code, label, order] of triageOptions) {
-    const category = await client.category.findUnique({ where: { code } });
+    const category = await client.category.findUnique({ where: { companyId_code: { companyId: DEFAULT_COMPANY_ID, code } } });
     if (!category) continue;
     await client.botTriageOption.upsert({
       where: { botId_categoryId: { botId: bot.id, categoryId: category.id } },
@@ -70,13 +91,17 @@ async function seedTriageBot(client = prisma) {
 }
 
 async function main() {
+  await seedCompanies();
   for (const [index, [code, name, color]] of categories.entries()) {
     const data = { code, name, color, displayOrder: (index + 1) * 10 };
-    await prisma.category.upsert({ where: { code }, update: data, create: data });
+    await prisma.category.upsert({
+      where: { companyId_code: { companyId: DEFAULT_COMPANY_ID, code } },
+      update: data, create: { ...data, companyId: DEFAULT_COMPANY_ID },
+    });
   }
   await seedTriageBot();
 }
-module.exports = { main, seedTriageBot };
+module.exports = { DEFAULT_COMPANY_ID, main, seedCompanies, seedTriageBot };
 
 // Só roda sozinho quando chamado como script (`node prisma/seed.js` /
 // `npm run db:seed` / `db:seed` do run-tests.js) — quando importado por um

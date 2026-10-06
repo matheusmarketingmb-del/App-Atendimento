@@ -9,6 +9,15 @@ const { createAdapter, getAdapterClass } = require("./channel-adapter-registry")
 const { ALL_MANAGED_CHANNELS, CHANNEL_LABELS, NEW_CHANNELS } = require("./channel-constants");
 const oauth = require("./integration-oauth-service");
 const { getGlobalSettings } = require("./integration-global-settings-service");
+const companyService = require("../company-service");
+
+// Multiempresa: toda conta (número/página/caixa/loja) pertence a uma empresa
+// — é ela que define a empresa de tudo que entra por essa conta.
+async function resolveAccountCompany(data, actor) {
+  return companyService.resolveCompanyForCreate(actor, data.companyId || data.company || null);
+}
+
+const ACCOUNT_INCLUDE = { accessUsers: { include: { user: { select: { id: true, name: true, email: true } } } }, company: { select: { id: true, name: true, slug: true, displayName: true, primaryColor: true } } };
 
 function fail(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -37,7 +46,7 @@ function publicAccount(account) {
 
 async function listAccounts(viewer) {
   assertIntegrationManager(viewer);
-  const accounts = await prisma.channelAccount.findMany({ include: { accessUsers: { include: { user: { select: { id: true, name: true, email: true } } } } }, orderBy: [{ channel: "asc" }, { name: "asc" }] });
+  const accounts = await prisma.channelAccount.findMany({ include: ACCOUNT_INCLUDE, orderBy: [{ channel: "asc" }, { name: "asc" }] });
   return accounts.map(publicAccount);
 }
 
@@ -50,7 +59,7 @@ async function ensureAccount(id) {
 async function getAccount(id, viewer) {
   assertIntegrationManager(viewer);
   await ensureAccount(id);
-  return publicAccount(await prisma.channelAccount.findUnique({ where: { id }, include: { accessUsers: { include: { user: { select: { id: true, name: true, email: true } } } } } }));
+  return publicAccount(await prisma.channelAccount.findUnique({ where: { id }, include: ACCOUNT_INCLUDE }));
 }
 
 const FORBIDDEN_CONFIG_SECRET_KEYS = new Set([
@@ -92,6 +101,19 @@ function validateChannel(channel) {
   return channel;
 }
 
+// Um phone_number_id só pode pertencer a uma conta — senão o webhook não
+// saberia a qual empresa atribuir a mensagem.
+async function assertWhatsappNumberAvailable(phoneNumberId, exceptId = null) {
+  if (!phoneNumberId) throw fail("Informe o Phone Number ID do número de WhatsApp (config.phoneNumberId).");
+  const duplicate = await prisma.channelAccount.findFirst({
+    where: { channel: "META", config: { path: ["phoneNumberId"], equals: String(phoneNumberId) }, ...(exceptId ? { id: { not: exceptId } } : {}) },
+    select: { id: true },
+  });
+  if (duplicate || (process.env.PHONE_NUMBER_ID && String(phoneNumberId) === String(process.env.PHONE_NUMBER_ID))) {
+    throw fail("Este número de WhatsApp já está cadastrado em outra conta.", 409);
+  }
+}
+
 async function createAccount(data, actor) {
   assertIntegrationManager(actor);
   const channel = validateChannel(data.channel);
@@ -106,18 +128,21 @@ async function createAccount(data, actor) {
 
   const secretData = Object.keys(secrets).length ? encryptSecrets(secrets) : { secretKeys: [] };
   const hints = Object.fromEntries(Object.entries(secrets).map(([key, value]) => [key, maskSecret(String(value))]));
+  const companyId = await resolveAccountCompany(data, actor);
+  delete config.legacyEnv;
+  if (channel === "META") await assertWhatsappNumberAvailable(config.phoneNumberId);
 
   const account = await prisma.channelAccount.create({
     data: {
-      channel, name, externalAccountId: data.externalAccountId || null,
+      companyId, channel, name, externalAccountId: data.externalAccountId || null,
       config: { ...config, _secretHints: hints },
       status: secretData.secretKeys.length ? "CONFIGURED" : "NOT_CONFIGURED",
       ...secretData,
     },
   });
   await audit.recordAudit({
-    actor, action: "CHANNEL_ACCOUNT_CREATED", entityType: "CHANNEL_ACCOUNT", entityId: account.id,
-    summary: `Criou a conta "${name}" do canal ${channel}`, details: { channel, name },
+    actor, action: "CHANNEL_ACCOUNT_CREATED", entityType: "CHANNEL_ACCOUNT", entityId: account.id, companyId,
+    summary: `Criou a conta "${name}" do canal ${channel}`, details: { channel, name, companyId },
   });
   return publicAccount(account);
 }
@@ -132,12 +157,23 @@ async function updateAccount(id, data, actor) {
     update.name = name;
   }
   if (data.externalAccountId !== undefined) update.externalAccountId = data.externalAccountId || null;
+  // Trocar a empresa de uma conta mudaria a "origem" de conversas já
+  // existentes — nunca permitido (crie outra conta para a outra empresa).
+  if (data.companyId !== undefined && data.companyId !== existing.companyId) {
+    throw fail("A empresa de uma conta de canal não pode ser alterada.");
+  }
 
   const existingConfig = existing.config && typeof existing.config === "object" ? existing.config : {};
   const existingHints = existingConfig._secretHints || {};
   assertObjectInput(data.config, "config");
   assertObjectInput(data.secrets, "secrets");
   const incomingConfig = plainObject(data.config);
+  // legacyEnv (número do .env) só é definido pela migration — nunca pela API.
+  delete incomingConfig.legacyEnv;
+  if (existing.channel === "META" && incomingConfig.phoneNumberId !== undefined
+    && String(incomingConfig.phoneNumberId) !== String(existingConfig.phoneNumberId || "")) {
+    await assertWhatsappNumberAvailable(incomingConfig.phoneNumberId, existing.id);
+  }
   assertNoPlaintextSecrets(incomingConfig);
   assertSecretValues(plainObject(data.secrets));
   let config = data.config !== undefined ? { ...existingConfig, ...incomingConfig } : existingConfig;
@@ -194,7 +230,7 @@ function safeOAuthCandidate(candidate) {
   return { id: candidate.id, name: candidate.name, username: candidate.username || null, config: candidate.config || {} };
 }
 
-async function saveOAuthConnection({ accountId = null, channel, provider, token, scopes = [], candidates = [], preferredName = null }, actor) {
+async function saveOAuthConnection({ accountId = null, channel, provider, token, scopes = [], candidates = [], preferredName = null, companyId = null }, actor) {
   assertIntegrationManager(actor);
   if (!candidates.length) throw fail("Nenhuma conta compatível foi encontrada após a autorização.", 400);
   const existing = accountId ? await ensureAccount(accountId) : null;
@@ -227,7 +263,7 @@ async function saveOAuthConnection({ accountId = null, channel, provider, token,
   };
   let account;
   if (existing) account = await prisma.channelAccount.update({ where: { id: existing.id }, data });
-  else account = await prisma.channelAccount.create({ data: { channel, name: await uniqueOAuthName(channel, preferredName || selected?.name), ...data } });
+  else account = await prisma.channelAccount.create({ data: { companyId: await companyService.resolveCompanyForCreate(actor, companyId), channel, name: await uniqueOAuthName(channel, preferredName || selected?.name), ...data } });
   await audit.recordAudit({
     actor, action: multiple ? "CHANNEL_OAUTH_SELECTION_REQUIRED" : "CHANNEL_OAUTH_CONNECTED",
     entityType: "CHANNEL_ACCOUNT", entityId: account.id,
@@ -282,9 +318,18 @@ async function setEnabled(id, enabled, actor) {
 async function deleteAccount(id, actor) {
   assertIntegrationManager(actor);
   const existing = await ensureAccount(id);
+  // Multiempresa: número de WhatsApp com conversas (ou o número original do
+  // .env) nunca é removido — as conversas perderiam o número/empresa de
+  // envio. Desative a conta em vez de remover.
+  if (existing.channel === "META") {
+    const conversations = await prisma.conversation.count({ where: { channelAccountId: id } });
+    if (existing.config?.legacyEnv || conversations) {
+      throw fail("Este número de WhatsApp tem conversas vinculadas e não pode ser removido. Desative a conta se necessário.", 409);
+    }
+  }
   await prisma.channelAccount.delete({ where: { id } });
   await audit.recordAudit({
-    actor, action: "CHANNEL_ACCOUNT_DELETED", entityType: "CHANNEL_ACCOUNT", entityId: id,
+    actor, action: "CHANNEL_ACCOUNT_DELETED", entityType: "CHANNEL_ACCOUNT", entityId: id, companyId: existing.companyId,
     summary: `Removeu a conta "${existing.name}" do canal ${existing.channel}`,
   });
   return { deleted: true };
@@ -375,7 +420,7 @@ async function testConnection(id, actor) {
 // canais sem nenhuma conta ainda cadastrada.
 async function listChannelOverview(viewer) {
   assertIntegrationManager(viewer);
-  const accounts = await prisma.channelAccount.findMany({ include: { accessUsers: { include: { user: { select: { id: true, name: true, email: true } } } } }, orderBy: { createdAt: "asc" } });
+  const accounts = await prisma.channelAccount.findMany({ include: ACCOUNT_INCLUDE, orderBy: { createdAt: "asc" } });
   const byChannel = new Map();
   for (const account of accounts) {
     if (!byChannel.has(account.channel)) byChannel.set(account.channel, []);

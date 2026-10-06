@@ -27,9 +27,10 @@ test.before(async () => {
     where: { email: "qr-agent@teste.local" }, update: {},
     create: { email: "qr-agent@teste.local", name: "Atendente QR", role: "ATENDENTE", passwordHash: "x" },
   });
+  await require("./support/company").grantCompany(prisma, agent.id);
   await cleanup();
-  const contact = await prisma.contact.create({ data: { externalId: "qr-agent-context", phone: "5511900000098", channel: "META" } });
-  agentConversation = await prisma.conversation.create({ data: { contactId: contact.id, channel: "META", assignedUserId: agent.id } });
+  const contact = await prisma.contact.create({ data: { companyId: "cmp_mibro", externalId: "qr-agent-context", phone: "5511900000098", channel: "META" } });
+  agentConversation = await prisma.conversation.create({ data: { companyId: "cmp_mibro", contactId: contact.id, channel: "META", assignedUserId: agent.id } });
 });
 
 test.after(async () => {
@@ -39,7 +40,7 @@ test.after(async () => {
 });
 
 test("Master cria resposta rápida com nome, atalho e texto", async () => {
-  const created = await quickReplies.createQuickReply({
+  const created = await quickReplies.createQuickReply({ companyId: "cmp_mibro",
     name: `${namePrefix} Pedido`, shortcut: "/qrpedido", text: "Pode me informar o número do pedido?",
   }, master);
   assert.equal(created.shortcut, "/qrpedido");
@@ -49,11 +50,11 @@ test("Master cria resposta rápida com nome, atalho e texto", async () => {
 });
 
 test("Atendente não pode criar/editar a resposta global (só Master)", async () => {
-  await assert.rejects(() => quickReplies.createQuickReply({
+  await assert.rejects(() => quickReplies.createQuickReply({ companyId: "cmp_mibro",
     name: `${namePrefix} Bloqueado`, shortcut: "/qrbloqueado", text: "x",
   }, agent), (error) => { assert.equal(error.statusCode, 403); return true; });
 
-  const created = await quickReplies.createQuickReply({
+  const created = await quickReplies.createQuickReply({ companyId: "cmp_mibro",
     name: `${namePrefix} Editar`, shortcut: "/qreditar", text: "x",
   }, master);
   await assert.rejects(() => quickReplies.updateQuickReply(created.id, { text: "y" }, agent), (error) => {
@@ -63,29 +64,29 @@ test("Atendente não pode criar/editar a resposta global (só Master)", async ()
 });
 
 test("atalho duplicado entre respostas ativas é rejeitado no backend", async () => {
-  await quickReplies.createQuickReply({ name: `${namePrefix} A`, shortcut: "/qrdup", text: "x" }, master);
-  await assert.rejects(() => quickReplies.createQuickReply({
+  await quickReplies.createQuickReply({ companyId: "cmp_mibro", name: `${namePrefix} A`, shortcut: "/qrdup", text: "x" }, master);
+  await assert.rejects(() => quickReplies.createQuickReply({ companyId: "cmp_mibro",
     name: `${namePrefix} B`, shortcut: "/qrdup", text: "y",
   }, master), /já está em uso/);
 });
 
 test("atalho de resposta arquivada pode ser reutilizado", async () => {
-  const original = await quickReplies.createQuickReply({ name: `${namePrefix} C`, shortcut: "/qrreuso", text: "x" }, master);
+  const original = await quickReplies.createQuickReply({ companyId: "cmp_mibro", name: `${namePrefix} C`, shortcut: "/qrreuso", text: "x" }, master);
   await quickReplies.archiveQuickReply(original.id, master);
-  const reused = await quickReplies.createQuickReply({ name: `${namePrefix} D`, shortcut: "/qrreuso", text: "y" }, master);
+  const reused = await quickReplies.createQuickReply({ companyId: "cmp_mibro", name: `${namePrefix} D`, shortcut: "/qrreuso", text: "y" }, master);
   assert.equal(reused.shortcut, "/qrreuso");
 });
 
 test("atalho inválido (sem /, com espaço ou script) é rejeitado", async () => {
   for (const shortcut of ["pedido", "/pedido ok", "/<script>", "/PEDIDO com espaço"]) {
-    await assert.rejects(() => quickReplies.createQuickReply({
+    await assert.rejects(() => quickReplies.createQuickReply({ companyId: "cmp_mibro",
       name: `${namePrefix} Inválido`, shortcut, text: "x",
     }, master), /Atalho inválido/);
   }
 });
 
 test("texto sanitiza HTML arbitrário mas preserva quebras de linha", async () => {
-  const created = await quickReplies.createQuickReply({
+  const created = await quickReplies.createQuickReply({ companyId: "cmp_mibro",
     name: `${namePrefix} Multi`, shortcut: "/qrmulti", text: "<script>alert(1)</script>Linha 1\nLinha 2\nLinha 3",
   }, master);
   assert.equal(created.text.includes("<script>"), false);
@@ -93,23 +94,23 @@ test("texto sanitiza HTML arbitrário mas preserva quebras de linha", async () =
 });
 
 test("busca considera nome, atalho, texto e categoria", async () => {
-  await quickReplies.createQuickReply({ name: `${namePrefix} Rastreio`, shortcut: "/qrrastreio", text: "Rastreio do pedido" }, master);
+  await quickReplies.createQuickReply({ companyId: "cmp_mibro", name: `${namePrefix} Rastreio`, shortcut: "/qrrastreio", text: "Rastreio do pedido" }, master);
   const results = await quickReplies.listQuickReplies({ search: "rastreio" }, master);
   assert.ok(results.some((item) => item.shortcut === "/qrrastreio"));
 });
 
 test("filtro por categoria/setor: resposta sem setor aparece para todos; com setor só aparece para o setor certo", async () => {
-  const category = await prisma.category.findUniqueOrThrow({ where: { code: "PEDIDOS" } });
-  const otherCategory = await prisma.category.findUniqueOrThrow({ where: { code: "SUPORTE" } });
-  const generic = await quickReplies.createQuickReply({ name: `${namePrefix} Genérica`, shortcut: "/qrgenerica", text: "x" }, master);
-  const sectorized = await quickReplies.createQuickReply({
+  const category = await prisma.category.findUniqueOrThrow({ where: { companyId_code: { companyId: "cmp_mibro", code: "PEDIDOS" } } });
+  const otherCategory = await prisma.category.findUniqueOrThrow({ where: { companyId_code: { companyId: "cmp_mibro", code: "SUPORTE" } } });
+  const generic = await quickReplies.createQuickReply({ companyId: "cmp_mibro", name: `${namePrefix} Genérica`, shortcut: "/qrgenerica", text: "x" }, master);
+  const sectorized = await quickReplies.createQuickReply({ companyId: "cmp_mibro",
     name: `${namePrefix} Setorizada`, shortcut: "/qrsetor", text: "x", categoryId: category.id,
   }, master);
 
-  const contactRight = await prisma.contact.create({ data: { externalId: "qr-sector-contact-right", phone: "5511900000000", channel: "META" } });
-  const conversationRight = await prisma.conversation.create({ data: { contactId: contactRight.id, channel: "META", categoryId: category.id } });
-  const contactWrong = await prisma.contact.create({ data: { externalId: "qr-sector-contact-wrong", phone: "5511900000003", channel: "META" } });
-  const conversationWrong = await prisma.conversation.create({ data: { contactId: contactWrong.id, channel: "META", categoryId: otherCategory.id } });
+  const contactRight = await prisma.contact.create({ data: { companyId: "cmp_mibro", externalId: "qr-sector-contact-right", phone: "5511900000000", channel: "META" } });
+  const conversationRight = await prisma.conversation.create({ data: { companyId: "cmp_mibro", contactId: contactRight.id, channel: "META", categoryId: category.id } });
+  const contactWrong = await prisma.contact.create({ data: { companyId: "cmp_mibro", externalId: "qr-sector-contact-wrong", phone: "5511900000003", channel: "META" } });
+  const conversationWrong = await prisma.conversation.create({ data: { companyId: "cmp_mibro", contactId: contactWrong.id, channel: "META", categoryId: otherCategory.id } });
 
   const listedRight = await quickReplies.listForComposer({ conversationId: conversationRight.id }, master);
   const listedWrong = await quickReplies.listForComposer({ conversationId: conversationWrong.id }, master);
@@ -121,18 +122,18 @@ test("filtro por categoria/setor: resposta sem setor aparece para todos; com set
 });
 
 test("filtro por canal: resposta restrita a um canal não aparece em conversa de outro canal", async () => {
-  const restricted = await quickReplies.createQuickReply({
+  const restricted = await quickReplies.createQuickReply({ companyId: "cmp_mibro",
     name: `${namePrefix} Canal`, shortcut: "/qrcanal", text: "x", channels: ["EMAIL"],
   }, master);
-  const contact = await prisma.contact.create({ data: { externalId: "qr-channel-contact", phone: "5511900000001", channel: "META" } });
-  const conversation = await prisma.conversation.create({ data: { contactId: contact.id, channel: "META" } });
+  const contact = await prisma.contact.create({ data: { companyId: "cmp_mibro", externalId: "qr-channel-contact", phone: "5511900000001", channel: "META" } });
+  const conversation = await prisma.conversation.create({ data: { companyId: "cmp_mibro", contactId: contact.id, channel: "META" } });
 
   const listed = await quickReplies.listForComposer({ conversationId: conversation.id }, master);
   assert.ok(!listed.some((item) => item.id === restricted.id));
 });
 
 test("favorito é por usuário, não global", async () => {
-  const created = await quickReplies.createQuickReply({ name: `${namePrefix} Favorita`, shortcut: "/qrfav", text: "x" }, master);
+  const created = await quickReplies.createQuickReply({ companyId: "cmp_mibro", name: `${namePrefix} Favorita`, shortcut: "/qrfav", text: "x" }, master);
   await quickReplies.setFavorite(created.id, { conversationId: agentConversation.id, favorite: true }, agent);
 
   const listedForAgent = await quickReplies.listForComposer({ conversationId: agentConversation.id }, agent);
@@ -142,8 +143,8 @@ test("favorito é por usuário, não global", async () => {
 });
 
 test("favoritas aparecem primeiro na listagem do composer", async () => {
-  const a = await quickReplies.createQuickReply({ name: `${namePrefix} Ordem A`, shortcut: "/qrordema", text: "x" }, master);
-  const b = await quickReplies.createQuickReply({ name: `${namePrefix} Ordem B`, shortcut: "/qrordemb", text: "x" }, master);
+  const a = await quickReplies.createQuickReply({ companyId: "cmp_mibro", name: `${namePrefix} Ordem A`, shortcut: "/qrordema", text: "x" }, master);
+  const b = await quickReplies.createQuickReply({ companyId: "cmp_mibro", name: `${namePrefix} Ordem B`, shortcut: "/qrordemb", text: "x" }, master);
   await quickReplies.setFavorite(b.id, { conversationId: agentConversation.id, favorite: true }, agent);
   const listed = await quickReplies.listForComposer({ conversationId: agentConversation.id, search: "Ordem" }, agent);
   const indexA = listed.findIndex((item) => item.id === a.id);
@@ -152,11 +153,11 @@ test("favoritas aparecem primeiro na listagem do composer", async () => {
 });
 
 test("variável resolvida quando o dado existe no contexto da conversa", async () => {
-  const created = await quickReplies.createQuickReply({
+  const created = await quickReplies.createQuickReply({ companyId: "cmp_mibro",
     name: `${namePrefix} Var`, shortcut: "/qrvar", text: "Olá {{firstName}}, sou {{agentName}}.",
   }, master);
-  const contact = await prisma.contact.create({ data: { externalId: "qr-var-contact", phone: "5511900000002", name: "Fabio Almeida", channel: "META" } });
-  const conversation = await prisma.conversation.create({ data: { contactId: contact.id, channel: "META", assignedUserId: agent.id } });
+  const contact = await prisma.contact.create({ data: { companyId: "cmp_mibro", externalId: "qr-var-contact", phone: "5511900000002", name: "Fabio Almeida", channel: "META" } });
+  const conversation = await prisma.conversation.create({ data: { companyId: "cmp_mibro", contactId: contact.id, channel: "META", assignedUserId: agent.id } });
 
   const { text, unresolved } = await quickReplies.useQuickReply(created.id, { conversationId: conversation.id }, agent);
   assert.equal(text, "Olá Fabio, sou Atendente QR.");
@@ -164,7 +165,7 @@ test("variável resolvida quando o dado existe no contexto da conversa", async (
 });
 
 test("variável ausente mantém o placeholder e é reportada, nunca inventa valor", async () => {
-  const created = await quickReplies.createQuickReply({
+  const created = await quickReplies.createQuickReply({ companyId: "cmp_mibro",
     name: `${namePrefix} VarAusente`, shortcut: "/qrvarausente", text: "Pedido {{orderNumber}} confirmado.",
   }, master);
   const { text, unresolved } = await quickReplies.useQuickReply(created.id, { conversationId: agentConversation.id }, agent);
@@ -173,7 +174,7 @@ test("variável ausente mantém o placeholder e é reportada, nunca inventa valo
 });
 
 test("usar uma resposta grava métrica de uso (quickReplyId, userId, source)", async () => {
-  const created = await quickReplies.createQuickReply({ name: `${namePrefix} Métrica`, shortcut: "/qrmetrica", text: "x" }, master);
+  const created = await quickReplies.createQuickReply({ companyId: "cmp_mibro", name: `${namePrefix} Métrica`, shortcut: "/qrmetrica", text: "x" }, master);
   await quickReplies.useQuickReply(created.id, { conversationId: agentConversation.id }, agent);
   const usage = await prisma.quickReplyUsage.findFirst({ where: { quickReplyId: created.id } });
   assert.equal(usage.userId, agent.id);
@@ -181,7 +182,7 @@ test("usar uma resposta grava métrica de uso (quickReplyId, userId, source)", a
 });
 
 test("resposta inativa não é retornada pelo seletor do composer nem pode ser usada", async () => {
-  const created = await quickReplies.createQuickReply({ name: `${namePrefix} Inativa`, shortcut: "/qrinativa", text: "x" }, master);
+  const created = await quickReplies.createQuickReply({ companyId: "cmp_mibro", name: `${namePrefix} Inativa`, shortcut: "/qrinativa", text: "x" }, master);
   await quickReplies.updateQuickReply(created.id, { active: false }, master);
   const listed = await quickReplies.listForComposer({ conversationId: agentConversation.id }, agent);
   assert.ok(!listed.some((item) => item.id === created.id));
@@ -189,7 +190,7 @@ test("resposta inativa não é retornada pelo seletor do composer nem pode ser u
 });
 
 test("arquivar preserva o registro e o histórico de uso (nunca apaga de verdade)", async () => {
-  const created = await quickReplies.createQuickReply({ name: `${namePrefix} Arquivo`, shortcut: "/qrarquivo", text: "x" }, master);
+  const created = await quickReplies.createQuickReply({ companyId: "cmp_mibro", name: `${namePrefix} Arquivo`, shortcut: "/qrarquivo", text: "x" }, master);
   await quickReplies.useQuickReply(created.id, { conversationId: agentConversation.id }, agent);
   await quickReplies.archiveQuickReply(created.id, master);
   const stillThere = await quickReplies.getQuickReply(created.id, master);
@@ -201,13 +202,13 @@ test("arquivar preserva o registro e o histórico de uso (nunca apaga de verdade
 
 test("intenções associadas não duplicam texto — só ligam por referência", async () => {
   const bot = await prisma.bot.create({
-    data: {
+    data: { companyId: "cmp_mibro",
       name: `${namePrefix} Bot`, channel: "META", initialMessage: "oi", outsideHoursMessage: "fora", fallbackMessage: "?",
       intents: { create: [{ name: "Acompanhar pedido", priority: 1, active: true, fallbackAction: "USE_BOT_FALLBACK" }] },
     },
     include: { intents: true },
   });
-  const created = await quickReplies.createQuickReply({
+  const created = await quickReplies.createQuickReply({ companyId: "cmp_mibro",
     name: `${namePrefix} Intent`, shortcut: "/qrintent", text: "x", intentIds: [bot.intents[0].id],
   }, master);
   assert.deepEqual(created.intentIds, [bot.intents[0].id]);

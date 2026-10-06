@@ -3,9 +3,11 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 
-const html = fs.readFileSync(path.join(process.cwd(), "public", "index.html"), "utf8");
-const js = fs.readFileSync(path.join(process.cwd(), "public", "js", "app.js"), "utf8");
-const css = fs.readFileSync(path.join(process.cwd(), "public", "css", "app.css"), "utf8");
+// Checkout no Windows usa CRLF: normaliza para LF (os regex abaixo usam \n).
+const read = (...parts) => fs.readFileSync(path.join(process.cwd(), ...parts), "utf8").replace(/\r\n/g, "\n");
+const html = read("public", "index.html");
+const js = read("public", "js", "app.js");
+const css = read("public", "css", "app.css");
 
 function loadNeedsCategoryAlert() {
   const source = js.match(/const needsCategoryAlert = [^\n]+/)[0];

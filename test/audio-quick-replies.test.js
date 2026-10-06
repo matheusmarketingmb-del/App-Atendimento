@@ -43,6 +43,9 @@ test.before(async () => {
     { name: "Atendente B Áudio", email: EMAILS.b, passwordHash, role: "ATENDENTE" },
     { name: "Master Áudio", email: EMAILS.master, passwordHash, role: "ADMIN" },
   ] });
+  for (const user of await prisma.user.findMany({ where: { email: { in: Object.values(EMAILS) } }, select: { id: true } })) {
+    await require("./support/company").grantCompany(prisma, user.id);
+  }
 });
 test.after(async () => { await cleanup(); await prisma.$disconnect(); });
 
@@ -63,8 +66,8 @@ async function login(base, email) {
 // Conversa WhatsApp com mensagem recebida recente (janela de 24 h aberta).
 async function conversationFor(email, { channel = "META", suffix }) {
   const user = await prisma.user.findUniqueOrThrow({ where: { email } });
-  const contact = await prisma.contact.create({ data: { externalId: `${PREFIX}${suffix}`, phone: `55119${String(Date.now()).slice(-8)}`, channel } });
-  const conversation = await prisma.conversation.create({ data: { contactId: contact.id, channel, assignedUserId: user.id } });
+  const contact = await prisma.contact.create({ data: { companyId: "cmp_mibro", externalId: `${PREFIX}${suffix}`, phone: `55119${String(Date.now()).slice(-8)}`, channel } });
+  const conversation = await prisma.conversation.create({ data: { companyId: "cmp_mibro", contactId: contact.id, channel, assignedUserId: user.id } });
   await prisma.message.create({ data: {
     conversationId: conversation.id, channel, direction: "RECEBIDA", status: "RECEBIDA", type: "text",
     text: "Olá", occurredAt: new Date(),

@@ -11,6 +11,7 @@
 // pelo Master em "Histórico técnico" (listLegacyBots).
 const prisma = require("../database/prisma");
 const audit = require("./audit-service");
+const companyService = require("./company-service");
 const { assertBotManager, fail } = require("./bot-governance-service");
 const { defaultGraph } = require("./bot-visual-flow-graph");
 
@@ -87,6 +88,7 @@ function validateHolidays(value) {
 }
 
 const botInclude = {
+  company: true,
   schedules: { orderBy: { dayOfWeek: "asc" } },
   holidays: { orderBy: { date: "asc" } },
   visualFlows: {
@@ -106,6 +108,7 @@ function botSummary(bot) {
   }));
   return {
     id: bot.id, name: bot.name, description: bot.description, status: bot.status, type: bot.type, isSystem: bot.isSystem,
+    companyId: bot.companyId, company: bot.company ? companyService.publicCompany(bot.company) : null,
     channels: bot.channels?.length ? bot.channels : [bot.channel], timezone: bot.timezone,
     autoReplyEnabled: bot.autoReplyEnabled, createdAt: bot.createdAt, updatedAt: bot.updatedAt,
     initialMessage: bot.initialMessage, outsideHoursMessage: bot.outsideHoursMessage,
@@ -129,10 +132,12 @@ async function ensureBot(botId, client = prisma) {
   return bot;
 }
 
-async function listBots(viewer) {
+// Multiempresa: filtro "Todas | Mibro | Sincrofit" (?company).
+async function listBots(viewer, { company } = {}) {
   assertBotManager(viewer);
+  const companyIds = await companyService.resolveCompanyFilter(viewer, company);
   const bots = await prisma.bot.findMany({
-    where: { archivedAt: null, status: { not: "ARCHIVED_LEGACY" } },
+    where: { archivedAt: null, status: { not: "ARCHIVED_LEGACY" }, companyId: { in: companyIds } },
     include: botInclude,
     orderBy: [{ isSystem: "desc" }, { name: "asc" }],
   });
@@ -151,9 +156,12 @@ async function createBot(data, actor) {
   assertBotManager(actor);
   const channels = validateChannels(data.channels);
   const name = requiredText(data.name, "Nome", 100);
+  // Empresa obrigatória e imutável: o Bot só roda em conversas dela.
+  const companyId = await companyService.resolveCompanyForCreate(actor, data.companyId);
   const created = await prisma.$transaction(async (transaction) => {
     const bot = await transaction.bot.create({
       data: {
+        companyId,
         name, description: optionalText(data.description, "Descrição", 500),
         channel: channels[0], channels, timezone: validateTimezone(data.timezone),
         status: "ACTIVE", autoReplyEnabled: false, executionMode: "FLOW_BUILDER",
@@ -167,8 +175,8 @@ async function createBot(data, actor) {
       },
     });
     await audit.recordAudit({
-      actor, action: "BOT_CREATED", entityType: "BOT", entityId: bot.id,
-      summary: `Criou o Bot ${bot.name}`, details: { channels, flowId: flow.id },
+      actor, action: "BOT_CREATED", entityType: "BOT", entityId: bot.id, companyId,
+      summary: `Criou o Bot ${bot.name}`, details: { channels, flowId: flow.id, companyId },
     }, transaction);
     return { botId: bot.id, flowId: flow.id };
   });
@@ -178,6 +186,9 @@ async function createBot(data, actor) {
 async function updateBot(botId, data, actor) {
   assertBotManager(actor);
   const existing = await ensureBot(botId);
+  if (data.companyId !== undefined && data.companyId !== existing.companyId) {
+    throw fail("A empresa de um Bot não pode ser alterada (os fluxos referenciam setores dela).");
+  }
   const update = {};
   if (data.name !== undefined) update.name = requiredText(data.name, "Nome", 100);
   if (data.description !== undefined) update.description = optionalText(data.description, "Descrição", 500);

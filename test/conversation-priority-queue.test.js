@@ -26,6 +26,7 @@ test.before(async () => {
     where: { email: attendantEmail }, update: { role: "ATENDENTE", canSetConversationPriority: false, canViewUncategorized: true },
     create: { name: "Atendente Teste Prioridade", email: attendantEmail, role: "ATENDENTE", canViewUncategorized: true },
   });
+  for (const user of [supervisor, attendant]) await require("./support/company").grantCompany(prisma, user.id);
   attendantAllowed = await prisma.user.upsert({
     where: { email: attendantAllowedEmail }, update: { role: "ATENDENTE", canSetConversationPriority: true, canViewUncategorized: true },
     create: {
@@ -33,6 +34,7 @@ test.before(async () => {
       canSetConversationPriority: true, canViewUncategorized: true,
     },
   });
+  await require("./support/company").grantCompany(prisma, attendantAllowed.id);
 });
 
 test.after(async () => {
@@ -42,8 +44,8 @@ test.after(async () => {
 });
 
 async function createConversation(externalId, phone, data = {}) {
-  const contact = await prisma.contact.create({ data: { externalId, phone, name: `Cliente ${externalId}` } });
-  const conversation = await prisma.conversation.create({ data: { contactId: contact.id, ...data } });
+  const contact = await prisma.contact.create({ data: { companyId: "cmp_mibro", externalId, phone, name: `Cliente ${externalId}` } });
+  const conversation = await prisma.conversation.create({ data: { companyId: "cmp_mibro", contactId: contact.id, ...data } });
   return conversation;
 }
 

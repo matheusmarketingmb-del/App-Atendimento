@@ -111,27 +111,29 @@ test("cliente escolhe vendedor, informa que não resolveu, outro assunto ou fina
   assert.equal(finished.at(-1).finalizeConversation, true);
 });
 
-test("integração: Triagem é primeira; Assistente entra no mesmo chat/setor, sem duplicar", async () => {
+// Integração destrutiva: só roda no banco QA isolado (docs/BOTS_PERGUNTAS_RESPOSTAS_LOCAL.md);
+// fora dele aparece como "pulado", nunca como falha.
+test("integração: Triagem é primeira; Assistente entra no mesmo chat/setor, sem duplicar", { skip: process.env.DATABASE_URL !== "postgresql://bot_qa:isolated-local-qa@127.0.0.1:25432/bot_qa" && "requer o banco QA isolado (127.0.0.1:25432/bot_qa)" }, async () => {
   assert.equal(process.env.DATABASE_URL, "postgresql://bot_qa:isolated-local-qa@127.0.0.1:25432/bot_qa", "Somente banco local isolado.");
   const before = await prisma.bot.findMany({ select: { id: true, autoReplyEnabled: true } });
-  const category = await prisma.category.findUniqueOrThrow({ where: { code: "COMERCIAL" } });
-  const second = await prisma.category.findUniqueOrThrow({ where: { code: "SUPORTE" } });
+  const category = await prisma.category.findUniqueOrThrow({ where: { companyId_code: { companyId: "cmp_mibro", code: "COMERCIAL" } } });
+  const second = await prisma.category.findUniqueOrThrow({ where: { companyId_code: { companyId: "cmp_mibro", code: "SUPORTE" } } });
   let contact;
   const createdBots = [];
   try {
     await prisma.bot.updateMany({ data: { autoReplyEnabled: false } });
     await prisma.botGlobalSettings.upsert({ where: { id: "singleton" }, update: { automationEnabled: true }, create: { id: "singleton" } });
-    await prisma.botResponse.upsert({ where: { key: "ASSIST_MIBRO_EMPRESA" }, update: {}, create: { key: "ASSIST_MIBRO_EMPRESA", title: "Mibro", category: "GERAL", text: "Informação institucional cadastrada." } });
+    await prisma.botResponse.upsert({ where: { companyId_key: { companyId: "cmp_mibro", key: "ASSIST_MIBRO_EMPRESA" } }, update: {}, create: { companyId: "cmp_mibro", key: "ASSIST_MIBRO_EMPRESA", title: "Mibro", category: "GERAL", text: "Informação institucional cadastrada." } });
     const triageGraph = { nodes: [{ key: "start", type: "start", config: {} }, { key: "menu", type: "menu", config: { text: "Qual setor?", variable: "flow.selectedOption", options: [{ id: "com", label: "Comercial" }, { id: "sup", label: "Suporte" }] } }, { key: "com", type: "transfer_category", config: { categoryId: category.id, message: "Encaminhado ao Comercial" } }, { key: "sup", type: "transfer_category", config: { categoryId: second.id, message: "Encaminhado ao Suporte" } }], edges: [{ id: "s", source: "start", sourceHandle: "next", target: "menu" }, { id: "c", source: "menu", sourceHandle: "opt:com", target: "com" }, { id: "u", source: "menu", sourceHandle: "opt:sup", target: "sup" }] };
     for (const [name, type, botGraph, flags] of [["posttriageqa triagem", "SYSTEM_TRIAGE", triageGraph, {}], ["posttriageqa assistente", "STANDARD", graph, { assistantAfterTriage: true }]]) {
-      const bot = await prisma.bot.create({ data: { name, type, channel: "META", status: "ACTIVE", autoReplyEnabled: true, featureFlags: flags, initialMessage: "Olá", outsideHoursMessage: "Fechado", fallbackMessage: "Equipe" } });
+      const bot = await prisma.bot.create({ data: { companyId: "cmp_mibro", name, type, channel: "META", status: "ACTIVE", autoReplyEnabled: true, featureFlags: flags, initialMessage: "Olá", outsideHoursMessage: "Fechado", fallbackMessage: "Equipe" } });
       createdBots.push(bot.id);
       const flow = await prisma.botFlow.create({ data: { botId: bot.id, name, draftGraph: botGraph, isDefault: true } });
       const version = await prisma.botFlowVersion.create({ data: { flowId: flow.id, version: 1, graph: botGraph } });
       await prisma.botFlow.update({ where: { id: flow.id }, data: { status: "ACTIVE", activeVersionId: version.id } });
     }
-    contact = await prisma.contact.create({ data: { externalId: `posttriageqa-${Date.now()}`, phone: "5500000000000", name: "Cliente fictício pós-triagem" } });
-    const conversation = await prisma.conversation.create({ data: { contactId: contact.id, channel: "META", status: "NOVO" } });
+    contact = await prisma.contact.create({ data: { companyId: "cmp_mibro", externalId: `posttriageqa-${Date.now()}`, phone: "5500000000000", name: "Cliente fictício pós-triagem" } });
+    const conversation = await prisma.conversation.create({ data: { companyId: "cmp_mibro", contactId: contact.id, channel: "META", status: "NOVO" } });
     const output = []; let sequence = 0;
     const channel = { sendText: async (_phone, text) => { output.push(text); return { externalId: `posttriageqa-${Date.now()}-${sequence++}` }; } };
     const incoming = async (text) => { const message = await prisma.message.create({ data: { conversationId: conversation.id, channel: "META", direction: "RECEBIDA", status: "RECEBIDA", type: "text", text, occurredAt: new Date() } }); return { message, event: { type: "text", text } }; };

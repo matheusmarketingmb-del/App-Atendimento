@@ -84,7 +84,7 @@ test("frontend: tela de Bots não mostra Legacy/IA e o Novo Bot abre direto o Ed
 test("API: cria Bot só no Flow Builder, rotas antigas não existem mais e o simulador funciona sem IA", async () => {
   const { createApp } = require("../src/app");
   await prisma.user.deleteMany({ where: { email } });
-  await prisma.user.create({ data: { name: "Master FB Only", email, role: "ADMIN", passwordHash: await bcrypt.hash("senha-segura-123", 4) } });
+  await prisma.user.create({ data: { companyAccess: { create: { companyId: "cmp_mibro" } }, name: "Master FB Only", email, role: "ADMIN", passwordHash: await bcrypt.hash("senha-segura-123", 4) } });
   const channel = new Proxy({}, { get: () => () => { throw new Error("nunca deveria chamar o canal real"); } });
   const server = createApp({ channel }).listen(0);
   await new Promise((resolve) => server.once("listening", resolve));
@@ -95,7 +95,7 @@ test("API: cria Bot só no Flow Builder, rotas antigas não existem mais e o sim
     const cookie = login.headers.get("set-cookie").split(";")[0];
     const call = (url, options = {}) => fetch(`${base}${url}`, { ...options, headers: { "Content-Type": "application/json", Cookie: cookie } });
 
-    const created = await call("/api/bots", { method: "POST", body: JSON.stringify({ name: "fbonly Bot", channels: ["META"], executionMode: "LEGACY" }) });
+    const created = await call("/api/bots", { method: "POST", body: JSON.stringify({ companyId: "cmp_mibro", name: "fbonly Bot", channels: ["META"], executionMode: "LEGACY" }) });
     assert.equal(created.status, 201);
     const bot = await created.json();
     assert.ok(bot.createdFlowId);

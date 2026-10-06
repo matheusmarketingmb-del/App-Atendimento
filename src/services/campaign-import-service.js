@@ -17,9 +17,9 @@ function fail(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
 }
 
-async function assertCampaign(campaignId, client = prisma) {
-  const campaign = await client.campaign.findUnique({ where: { id: campaignId } });
-  if (!campaign) throw fail("Campanha não encontrada.", 404);
+async function assertCampaign(campaignId, client = prisma, actor = null) {
+  const { findCampaignOr404 } = require("./campaign-service");
+  const campaign = await findCampaignOr404(campaignId, client, actor);
   if (!["DRAFT", "SCHEDULED"].includes(campaign.status)) {
     throw fail("Só é possível importar contatos em campanhas em rascunho ou agendadas.");
   }
@@ -58,10 +58,11 @@ async function classifyRows({ campaignId, csvText, mapping }, client = prisma) {
 
   const existing = await client.campaignContact.findMany({ where: { campaignId }, select: { phone: true } });
   const existingPhones = new Set(existing.map((row) => row.phone));
+  const { companyId } = await client.campaign.findUnique({ where: { id: campaignId }, select: { companyId: true } });
 
   const records = dataRows.map((row, index) => ({ index: index + 2, ...applyMapping(row, header, mapping) }));
   const candidatePhones = records.map((record) => normalizeCampaignPhone(record.phone)).filter(Boolean);
-  const optedOutSet = await bulkOptedOutSet([...new Set(candidatePhones)], client);
+  const optedOutSet = await bulkOptedOutSet([...new Set(candidatePhones)], companyId, client);
 
   const seenInFile = new Set();
   const valid = [];
@@ -99,10 +100,9 @@ async function classifyRows({ campaignId, csvText, mapping }, client = prisma) {
 // Item 7: preview de validação — nunca grava nada, só mostra os números e a
 // lista de erros para download.
 async function validateImport({ campaignId, csvText, mapping }, viewer) {
-  authorization.assertCanManageCampaigns(viewer);
   const settings = await getCampaignSettings();
   if (!settings.allowImports) throw fail("Importação de contatos está desativada nas configurações globais.");
-  await assertCampaign(campaignId);
+  await assertCampaign(campaignId, prisma, viewer);
   const result = await classifyRows({ campaignId, csvText, mapping });
   return { ...result, valid: undefined }; // preview nunca expõe os dados completos, só os números + erros
 }
@@ -111,10 +111,9 @@ async function validateImport({ campaignId, csvText, mapping }, viewer) {
 // validação anterior do cliente) e grava só as linhas válidas, dentro do
 // limite de destinatários da campanha (item 31).
 async function commitImport({ campaignId, csvText, mapping, fileName }, actor) {
-  authorization.assertCanManageCampaigns(actor);
   const settings = await getCampaignSettings();
   if (!settings.allowImports) throw fail("Importação de contatos está desativada nas configurações globais.");
-  const campaign = await assertCampaign(campaignId);
+  const campaign = await assertCampaign(campaignId, prisma, actor);
 
   const result = await classifyRows({ campaignId, csvText, mapping });
   const currentCount = await prisma.campaignContact.count({ where: { campaignId: campaign.id } });

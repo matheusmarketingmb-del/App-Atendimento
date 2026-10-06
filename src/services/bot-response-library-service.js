@@ -57,10 +57,18 @@ async function findUsages(key) {
     .map((flow) => ({ flowId: flow.id, flowName: flow.name, botId: flow.botId }));
 }
 
-async function listResponses(viewer, { includeInactive = true } = {}) {
+// Multiempresa: companyId nulo = resposta GLOBAL (todas as empresas); com
+// companyId = só Bots daquela empresa. `company` filtra a listagem.
+async function listResponses(viewer, { includeInactive = true, company } = {}) {
   assertBotManager(viewer);
+  const where = includeInactive ? {} : { active: true };
+  if (company && company !== "ALL") {
+    const [companyId] = await require("./company-service").resolveCompanyFilter(viewer, company);
+    where.OR = [{ companyId: null }, { companyId }];
+  }
   return prisma.botResponse.findMany({
-    where: includeInactive ? {} : { active: true },
+    where,
+    include: { company: { select: { id: true, slug: true, displayName: true, primaryColor: true } } },
     orderBy: [{ category: "asc" }, { key: "asc" }],
   });
 }
@@ -68,10 +76,11 @@ async function listResponses(viewer, { includeInactive = true } = {}) {
 async function createResponse(data, actor) {
   assertBotManager(actor);
   const key = normalizeKey(data.key);
-  if (await prisma.botResponse.findUnique({ where: { key } })) throw fail("Já existe uma resposta com este código.", 409);
+  const companyId = data.companyId ? await require("./company-service").resolveCompanyForCreate(actor, data.companyId) : null;
+  if (await prisma.botResponse.findFirst({ where: { key, companyId } })) throw fail("Já existe uma resposta com este código.", 409);
   const created = await prisma.botResponse.create({
     data: {
-      key, ...validate(data),
+      companyId, key, ...validate(data),
       createdByUserId: actor.id, createdByName: actor.name || null, updatedByUserId: actor.id, updatedByName: actor.name || null,
     },
   });
@@ -106,8 +115,14 @@ async function deleteResponse(id, actor) {
 }
 
 // Mapa key -> texto das respostas ativas (lido a cada turno do fluxo).
-async function activeResponseMap(client = prisma) {
-  const rows = await client.botResponse.findMany({ where: { active: true }, select: { key: true, text: true } });
+// Respostas globais + as da empresa do Bot; a da empresa prevalece quando as
+// duas usam o mesmo código.
+async function activeResponseMap(client = prisma, companyId = null) {
+  const rows = await client.botResponse.findMany({
+    where: { active: true, OR: [{ companyId: null }, ...(companyId ? [{ companyId }] : [])] },
+    select: { key: true, text: true, companyId: true },
+  });
+  rows.sort((left, right) => Number(Boolean(left.companyId)) - Number(Boolean(right.companyId)));
   return new Map(rows.map((row) => [row.key, row.text]));
 }
 

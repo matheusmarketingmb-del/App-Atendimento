@@ -90,7 +90,7 @@ module.exports = {
       const scopes = getOAuthScopes(provider, channel);
       const result = await oauth.createAuthorizationRequest({
         channel, channelAccountId, provider, clientId, redirectUri, scopes,
-        actorUserId: req.user.id, context: { preferredName: name || null, scopes },
+        actorUserId: req.user.id, context: { preferredName: name || null, scopes, companyId: req.body?.companyId || null },
       });
       return res.json(result);
     } catch (error) { return next(error); }
@@ -115,6 +115,7 @@ module.exports = {
       const result = await accounts.saveOAuthConnection({
         accountId: record.channelAccountId, channel: record.channel, provider, token,
         scopes: record.metadata?.scopes || [], candidates, preferredName: record.metadata?.preferredName,
+        companyId: record.metadata?.companyId || null,
       }, req.user);
       return res.json({
         connected: !result.selectionRequired, selectionRequired: result.selectionRequired,

@@ -35,10 +35,10 @@ const NOW = new Date();
 const inPeriod = new Date(NOW.getTime() - 60 * 60 * 1000); // 1h atrás — dentro de "Hoje" e "Últimos 7 dias"
 
 test("classifica corretamente CUSTOMER/BOT/HUMAN e nunca conta o Bot como primeira resposta", async () => {
-  const agent = await prisma.user.create({ data: { name: "Vendedor Analytics", email: `${emailPrefix}-agent-a@mibro.local`, role: "ATENDENTE" } });
-  const contact = await prisma.contact.create({ data: { externalId: `${contactPrefix}-bot-first`, phone: "5511911110001", name: "Cliente Bot Primeiro" } });
+  const agent = await prisma.user.create({ data: { companyAccess: { create: { companyId: "cmp_mibro" } }, name: "Vendedor Analytics", email: `${emailPrefix}-agent-a@mibro.local`, role: "ATENDENTE" } });
+  const contact = await prisma.contact.create({ data: { companyId: "cmp_mibro", externalId: `${contactPrefix}-bot-first`, phone: "5511911110001", name: "Cliente Bot Primeiro" } });
   const conversation = await prisma.conversation.create({
-    data: { contactId: contact.id, assignedUserId: agent.id, createdAt: inPeriod, lastMessageAt: inPeriod },
+    data: { companyId: "cmp_mibro", contactId: contact.id, assignedUserId: agent.id, createdAt: inPeriod, lastMessageAt: inPeriod },
   });
   await prisma.message.create({ data: { conversationId: conversation.id, direction: "RECEBIDA", status: "RECEBIDA", type: "text", text: "Oi", occurredAt: inPeriod } });
   // Bot responde primeiro — NÃO pode contar como "primeira resposta".
@@ -62,8 +62,8 @@ test("classifica corretamente CUSTOMER/BOT/HUMAN e nunca conta o Bot como primei
 });
 
 test("detecta conversa nunca respondida (nem pelo Bot) e alimenta o alerta correspondente", async () => {
-  const contact = await prisma.contact.create({ data: { externalId: `${contactPrefix}-never`, phone: "5511911110002", name: "Cliente Nunca Respondido" } });
-  const conversation = await prisma.conversation.create({ data: { contactId: contact.id, createdAt: inPeriod, lastMessageAt: inPeriod } });
+  const contact = await prisma.contact.create({ data: { companyId: "cmp_mibro", externalId: `${contactPrefix}-never`, phone: "5511911110002", name: "Cliente Nunca Respondido" } });
+  const conversation = await prisma.conversation.create({ data: { companyId: "cmp_mibro", contactId: contact.id, createdAt: inPeriod, lastMessageAt: inPeriod } });
   await prisma.message.create({ data: { conversationId: conversation.id, direction: "RECEBIDA", status: "RECEBIDA", type: "text", text: "Alguém aí?", occurredAt: inPeriod } });
 
   const summary = await analytics.getSummary({ period: "today" });
@@ -81,13 +81,13 @@ test("detecta conversa nunca respondida (nem pelo Bot) e alimenta o alerta corre
 
 test("atribui a resposta a quem REALMENTE respondeu, não ao responsável atual da conversa", async () => {
   const [agentA, agentB] = await Promise.all([
-    prisma.user.create({ data: { name: "Vendedor Atribuicao A", email: `${emailPrefix}-attr-a@mibro.local`, role: "ATENDENTE" } }),
-    prisma.user.create({ data: { name: "Vendedor Atribuicao B", email: `${emailPrefix}-attr-b@mibro.local`, role: "ATENDENTE" } }),
+    prisma.user.create({ data: { companyAccess: { create: { companyId: "cmp_mibro" } }, name: "Vendedor Atribuicao A", email: `${emailPrefix}-attr-a@mibro.local`, role: "ATENDENTE" } }),
+    prisma.user.create({ data: { companyAccess: { create: { companyId: "cmp_mibro" } }, name: "Vendedor Atribuicao B", email: `${emailPrefix}-attr-b@mibro.local`, role: "ATENDENTE" } }),
   ]);
-  const contact = await prisma.contact.create({ data: { externalId: `${contactPrefix}-attr`, phone: "5511911110003", name: "Cliente Atribuicao" } });
+  const contact = await prisma.contact.create({ data: { companyId: "cmp_mibro", externalId: `${contactPrefix}-attr`, phone: "5511911110003", name: "Cliente Atribuicao" } });
   // Responsável ATUAL é o agente B, mas quem respondeu de fato foi o A.
   const conversation = await prisma.conversation.create({
-    data: { contactId: contact.id, assignedUserId: agentB.id, createdAt: inPeriod, lastMessageAt: inPeriod },
+    data: { companyId: "cmp_mibro", contactId: contact.id, assignedUserId: agentB.id, createdAt: inPeriod, lastMessageAt: inPeriod },
   });
   await prisma.message.create({ data: { conversationId: conversation.id, direction: "RECEBIDA", status: "RECEBIDA", type: "text", text: "Preciso de ajuda", occurredAt: inPeriod } });
   await prisma.message.create({ data: {
@@ -103,10 +103,10 @@ test("atribui a resposta a quem REALMENTE respondeu, não ao responsável atual 
 
 test("comparação com período anterior: 'ontem' nunca aparece nas métricas de 'hoje'", async () => {
   const yesterday = new Date(NOW.getTime() - 25 * 60 * 60 * 1000);
-  const contactToday = await prisma.contact.create({ data: { externalId: `${contactPrefix}-cmp-today`, phone: "5511911110004", name: "Cliente Hoje" } });
-  const contactYesterday = await prisma.contact.create({ data: { externalId: `${contactPrefix}-cmp-yday`, phone: "5511911110005", name: "Cliente Ontem" } });
-  await prisma.conversation.create({ data: { contactId: contactToday.id, createdAt: inPeriod, lastMessageAt: inPeriod } });
-  await prisma.conversation.create({ data: { contactId: contactYesterday.id, createdAt: yesterday, lastMessageAt: yesterday } });
+  const contactToday = await prisma.contact.create({ data: { companyId: "cmp_mibro", externalId: `${contactPrefix}-cmp-today`, phone: "5511911110004", name: "Cliente Hoje" } });
+  const contactYesterday = await prisma.contact.create({ data: { companyId: "cmp_mibro", externalId: `${contactPrefix}-cmp-yday`, phone: "5511911110005", name: "Cliente Ontem" } });
+  await prisma.conversation.create({ data: { companyId: "cmp_mibro", contactId: contactToday.id, createdAt: inPeriod, lastMessageAt: inPeriod } });
+  await prisma.conversation.create({ data: { companyId: "cmp_mibro", contactId: contactYesterday.id, createdAt: yesterday, lastMessageAt: yesterday } });
 
   const summary = await analytics.getSummary({ period: "today" });
   const ourTodayCount = summary.current.conversationsReceived;
@@ -117,8 +117,8 @@ test("comparação com período anterior: 'ontem' nunca aparece nas métricas de
 });
 
 test("listConversations: busca por nome de contato e paginação respeitam os filtros", async () => {
-  const contact = await prisma.contact.create({ data: { externalId: `${contactPrefix}-search`, phone: "5511911110006", name: "Zebedeu Buscavel Teste" } });
-  await prisma.conversation.create({ data: { contactId: contact.id, createdAt: inPeriod, lastMessageAt: inPeriod } });
+  const contact = await prisma.contact.create({ data: { companyId: "cmp_mibro", externalId: `${contactPrefix}-search`, phone: "5511911110006", name: "Zebedeu Buscavel Teste" } });
+  await prisma.conversation.create({ data: { companyId: "cmp_mibro", contactId: contact.id, createdAt: inPeriod, lastMessageAt: inPeriod } });
 
   const result = await analytics.listConversations({ period: "today", search: "Zebedeu", pageSize: 25, page: 1 });
   assert.equal(result.items.length, 1);

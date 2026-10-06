@@ -3,7 +3,7 @@ const authorization = require("./authorization-service");
 const audit = require("./audit-service");
 
 const contactSelect = {
-  id: true, channel: true, customName: true, name: true, email: true, phone: true, identityId: true,
+  id: true, companyId: true, channel: true, customName: true, name: true, email: true, phone: true, identityId: true,
   conversations: { select: { id: true, channel: true, channelAccountId: true, lastMessageAt: true }, orderBy: { lastMessageAt: "desc" } },
 };
 
@@ -12,12 +12,13 @@ function displayName(contact) {
 }
 
 async function listMergeCandidates(contactId, search, viewer) {
-  authorization.assertCanMergeContacts(viewer);
   await authorization.assertCanAccessContact(viewer, contactId);
   const scope = await authorization.conversationScope(viewer);
-  const current = await prisma.contact.findUnique({ where: { id: contactId }, select: { identityId: true } });
+  const current = await prisma.contact.findUnique({ where: { id: contactId }, select: { identityId: true, companyId: true } });
+  authorization.assertCanMergeContacts(await authorization.forCompany(viewer, current?.companyId));
   const term = String(search || "").trim().slice(0, 120);
-  const where = { id: { not: contactId }, conversations: { some: scope } };
+  // Candidatos só da mesma empresa do contato atual.
+  const where = { id: { not: contactId }, companyId: current?.companyId || "__none__", conversations: { some: scope } };
   if (current?.identityId) where.OR = [{ identityId: null }, { identityId: { not: current.identityId } }];
   if (term) where.AND = [{ OR: ["customName", "name", "email", "phone"].map((field) => ({ [field]: { contains: term, mode: "insensitive" } })) }];
   const contacts = await prisma.contact.findMany({
@@ -29,15 +30,21 @@ async function listMergeCandidates(contactId, search, viewer) {
 }
 
 async function mergeContacts(sourceContactId, targetContactId, viewer) {
-  authorization.assertCanMergeContacts(viewer);
   if (!targetContactId || sourceContactId === targetContactId) throw Object.assign(new Error("Selecione outro contato."), { statusCode: 400 });
   await Promise.all([authorization.assertCanAccessContact(viewer, sourceContactId), authorization.assertCanAccessContact(viewer, targetContactId)]);
+  const sourceCompany = await prisma.contact.findUnique({ where: { id: sourceContactId }, select: { companyId: true } });
+  authorization.assertCanMergeContacts(await authorization.forCompany(viewer, sourceCompany?.companyId));
   return prisma.$transaction(async (transaction) => {
     const [source, target] = await Promise.all([
       transaction.contact.findUnique({ where: { id: sourceContactId }, select: contactSelect }),
       transaction.contact.findUnique({ where: { id: targetContactId }, select: contactSelect }),
     ]);
     if (!source || !target) throw Object.assign(new Error("Contato não encontrado."), { statusCode: 404 });
+    // Multiempresa: históricos de empresas diferentes nunca se misturam —
+    // o mesmo telefone na Mibro e na Sincrofit são clientes distintos.
+    if (source.companyId !== target.companyId) {
+      throw Object.assign(new Error("Não é possível fundir contatos de empresas diferentes."), { statusCode: 400 });
+    }
     let identityId = source.identityId || target.identityId;
     if (!identityId) identityId = (await transaction.contactIdentity.create({ data: { displayName: displayName(source) }, select: { id: true } })).id;
     const secondaryIdentityId = source.identityId && target.identityId && source.identityId !== target.identityId
@@ -47,7 +54,7 @@ async function mergeContacts(sourceContactId, targetContactId, viewer) {
       await transaction.contactIdentity.delete({ where: { id: secondaryIdentityId } });
     }
     await transaction.contact.updateMany({ where: { id: { in: [sourceContactId, targetContactId] } }, data: { identityId } });
-    await audit.recordAudit({ actor: viewer, action: "CONTACTS_MERGED", entityType: "CONTACT", entityId: identityId,
+    await audit.recordAudit({ actor: viewer, action: "CONTACTS_MERGED", entityType: "CONTACT", entityId: identityId, companyId: source.companyId,
       summary: `Fundiu os contatos ${displayName(source)} e ${displayName(target)}`, details: { contactIds: [sourceContactId, targetContactId] } }, transaction);
     return { identityId };
   });

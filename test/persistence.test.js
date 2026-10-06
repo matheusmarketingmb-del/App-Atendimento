@@ -58,7 +58,7 @@ test("registra mensagem enviada e o atendente autor", async () => {
     create: { name: "Atendente Teste", email: "teste@mibro.local", role: "ADMIN" },
   });
   masterViewer.id = user.id;
-  const category = await prisma.category.findUnique({ where: { code: "SUPORTE" } });
+  const category = await prisma.category.findUnique({ where: { companyId_code: { companyId: "cmp_mibro", code: "SUPORTE" } } });
   let conversation = await prisma.conversation.findFirst();
   conversation = await inbox.updateConversation(conversation.id, { categoryId: category.id }, masterViewer);
   assert.equal(conversation.status, "NOVO");
@@ -91,8 +91,8 @@ test("bloqueia mensagem livre fora da janela de 24h e permite template aprovado"
   assert.equal(disabledWindow.configured, false);
   assert.equal(disabledWindow.requiresTemplate, false);
   const user = await prisma.user.findUnique({ where: { email: "teste@mibro.local" } });
-  const contact = await prisma.contact.create({ data: { externalId: "template-window-test", phone: "5511999990011", name: "Cliente Template" } });
-  const conversation = await prisma.conversation.create({ data: { contactId: contact.id } });
+  const contact = await prisma.contact.create({ data: { companyId: "cmp_mibro", externalId: "template-window-test", phone: "5511999990011", name: "Cliente Template" } });
+  const conversation = await prisma.conversation.create({ data: { companyId: "cmp_mibro", contactId: contact.id } });
   await prisma.message.create({ data: {
     conversationId: conversation.id, externalId: "wamid.window.old", channel: "META",
     direction: "RECEBIDA", status: "RECEBIDA", type: "text", text: "Mensagem antiga",
@@ -195,9 +195,9 @@ test("cria uma nova conversa pelo painel com nome, telefone e template inicial",
 test("permite apagar conversa somente para Master e remove seus dados relacionados", async () => {
   const master = await prisma.user.findUnique({ where: { email: "teste@mibro.local" } });
   const contact = await prisma.contact.create({
-    data: { externalId: "delete-conversation-test", phone: "5511999990000", name: "Contato para exclusão" },
+    data: { companyId: "cmp_mibro", externalId: "delete-conversation-test", phone: "5511999990000", name: "Contato para exclusão" },
   });
-  const conversation = await prisma.conversation.create({ data: { contactId: contact.id } });
+  const conversation = await prisma.conversation.create({ data: { companyId: "cmp_mibro", contactId: contact.id } });
   const message = await prisma.message.create({
     data: {
       conversationId: conversation.id,
@@ -236,7 +236,7 @@ test("permite apagar conversa somente para Master e remove seus dados relacionad
 });
 
 test("lista, pesquisa, classifica, lê, finaliza e reabre a conversa", async () => {
-  const category = await prisma.category.findUnique({ where: { code: "SUPORTE" } });
+  const category = await prisma.category.findUnique({ where: { companyId_code: { companyId: "cmp_mibro", code: "SUPORTE" } } });
   const user = await prisma.user.findUnique({ where: { email: "teste@mibro.local" } });
   let conversation = await prisma.conversation.findFirst();
   // Garante o estado inicial NOVO independente do que outro teste no mesmo
@@ -312,12 +312,12 @@ test("envia mensagem neutra antes de finalizar o atendimento", async () => {
 });
 
 test("cria e edita categorias com código único e cor validada", async () => {
-  const first = await inbox.createCategory({ name: "Financeiro Teste", color: "#EF5B2A" }, masterViewer);
-  const second = await inbox.createCategory({ name: "Financeiro Teste", color: "#112233" }, masterViewer);
+  const first = await inbox.createCategory({ companyId: "cmp_mibro", name: "Financeiro Teste", color: "#EF5B2A" }, masterViewer);
+  const second = await inbox.createCategory({ companyId: "cmp_mibro", name: "Financeiro Teste", color: "#112233" }, masterViewer);
   assert.equal(first.code, "FINANCEIRO_TESTE");
   assert.equal(second.code, "FINANCEIRO_TESTE_2");
   assert.equal(first.color, "#ef5b2a");
-  const emoji = await inbox.createCategory({ name: "🛠️ Suporte VIP Teste", color: "#2563eb", parentId: first.id }, masterViewer);
+  const emoji = await inbox.createCategory({ companyId: "cmp_mibro", name: "🛠️ Suporte VIP Teste", color: "#2563eb", parentId: first.id }, masterViewer);
   assert.equal(emoji.name, "🛠️ Suporte VIP Teste");
   assert.equal(emoji.code, "SUPORTE_VIP_TESTE");
   assert.equal(emoji.parentId, first.id);
@@ -326,18 +326,18 @@ test("cria e edita categorias com código único e cor validada", async () => {
   const conversation = await prisma.conversation.findFirst();
   await inbox.updateConversation(conversation.id, { categoryId: emoji.id }, masterViewer);
   assert.equal((await inbox.listConversations({ category: first.code }, masterViewer)).length, 1);
-  const support = await prisma.category.findUnique({ where: { code: "SUPORTE" } });
+  const support = await prisma.category.findUnique({ where: { companyId_code: { companyId: "cmp_mibro", code: "SUPORTE" } } });
   await inbox.updateConversation(conversation.id, { categoryId: support.id }, masterViewer);
   const updated = await inbox.updateCategory(first.id, { name: "Financeiro", active: false }, masterViewer);
   assert.equal(updated.name, "Financeiro");
   assert.equal(updated.active, false);
-  await assert.rejects(() => inbox.createCategory({ name: "Cor inválida", color: "laranja" }, masterViewer), /Cor da categoria inválida/);
+  await assert.rejects(() => inbox.createCategory({ companyId: "cmp_mibro", name: "Cor inválida", color: "laranja" }, masterViewer), /Cor da categoria inválida/);
 });
 
 test("categorias ocultas são preferências individuais e não alteram acesso nem alertas", async () => {
-  const support = await prisma.category.findUnique({ where: { code: "SUPORTE" } });
-  const commercial = await prisma.category.findUnique({ where: { code: "COMERCIAL" } });
-  const user = await prisma.user.create({ data: {
+  const support = await prisma.category.findUnique({ where: { companyId_code: { companyId: "cmp_mibro", code: "SUPORTE" } } });
+  const commercial = await prisma.category.findUnique({ where: { companyId_code: { companyId: "cmp_mibro", code: "COMERCIAL" } } });
+  const user = await prisma.user.create({ data: { companyAccess: { create: { companyId: "cmp_mibro" } },
     name: "Preferências visuais", email: "categorias-ocultas@mibro.local", role: "ATENDENTE",
     canViewUncategorized: true,
     categoryAccess: { create: [{ categoryId: support.id }] },
@@ -390,10 +390,10 @@ test("categorias ocultas são preferências individuais e não alteram acesso ne
 });
 
 test("ocultar categoria principal oculta automaticamente as subcategorias, sem forçar o inverso", async () => {
-  const parent = await inbox.createCategory({ name: "Cascata Teste Principal", color: "#101010" }, masterViewer);
-  const childA = await inbox.createCategory({ name: "Cascata Teste Filho A", color: "#202020", parentId: parent.id }, masterViewer);
-  const childB = await inbox.createCategory({ name: "Cascata Teste Filho B", color: "#303030", parentId: parent.id }, masterViewer);
-  const user = await prisma.user.create({ data: {
+  const parent = await inbox.createCategory({ companyId: "cmp_mibro", name: "Cascata Teste Principal", color: "#101010" }, masterViewer);
+  const childA = await inbox.createCategory({ companyId: "cmp_mibro", name: "Cascata Teste Filho A", color: "#202020", parentId: parent.id }, masterViewer);
+  const childB = await inbox.createCategory({ companyId: "cmp_mibro", name: "Cascata Teste Filho B", color: "#303030", parentId: parent.id }, masterViewer);
+  const user = await prisma.user.create({ data: { companyAccess: { create: { companyId: "cmp_mibro" } },
     name: "Cascata Visual", email: "cascata-oculta@mibro.local", role: "ATENDENTE",
     categoryAccess: { create: [{ categoryId: parent.id }, { categoryId: childA.id }, { categoryId: childB.id }] },
   } });
@@ -445,7 +445,7 @@ test("fixa conversas por conta, restringe exclusão de notas e registra o histó
   const conversation = await prisma.conversation.findFirst({ include: { contact: true } });
   const master = await prisma.user.findUnique({ where: { email: "teste@mibro.local" } });
   const otherMaster = await prisma.user.create({
-    data: { name: "Outro Master", email: "outro-master@mibro.local", role: "ADMIN" },
+    data: { companyAccess: { create: { companyId: "cmp_mibro" } }, name: "Outro Master", email: "outro-master@mibro.local", role: "ADMIN" },
   });
   const attendantViewer = { id: "atendente-sem-permissao", role: "ATENDENTE" };
 
@@ -526,9 +526,9 @@ test("fixa conversas por conta, restringe exclusão de notas e registra o histó
   assert.equal((await inbox.getConversationSummary({ id: master.id, role: "ADMIN" })).attentionWaiting, 1);
   assert.equal((await inbox.getConversationSummary({ id: otherMaster.id, role: "ADMIN" })).attentionWaiting, 1);
 
-  const support = await prisma.category.findUnique({ where: { code: "SUPORTE" } });
+  const support = await prisma.category.findUnique({ where: { companyId_code: { companyId: "cmp_mibro", code: "SUPORTE" } } });
   const handoffAgent = await prisma.user.create({
-    data: {
+    data: { companyAccess: { create: { companyId: "cmp_mibro" } },
       name: "Atendente Encaminhado", email: "encaminhado@mibro.local", role: "ATENDENTE",
       categoryAccess: { create: [{ categoryId: support.id }] },
     },
@@ -554,8 +554,8 @@ test("fixa conversas por conta, restringe exclusão de notas e registra o histó
   const activeAssignments = await inbox.listConversations({ assignedUser: handoffAgent.id, activeOnly: "true" }, { id: master.id, role: "ADMIN" });
   assert.equal(activeAssignments.some(({ id }) => id === conversation.id), false);
   await inbox.updateConversation(conversation.id, { status: "NOVO", assignedUserId: master.id }, { id: master.id, role: "ADMIN" });
-  const commercial = await prisma.category.findUnique({ where: { code: "COMERCIAL" } });
-  const supportChild = await inbox.createCategory({
+  const commercial = await prisma.category.findUnique({ where: { companyId_code: { companyId: "cmp_mibro", code: "COMERCIAL" } } });
+  const supportChild = await inbox.createCategory({ companyId: "cmp_mibro",
     name: "Suporte Filho Responsavel Teste", parentId: support.id,
   }, { id: master.id, role: "ADMIN" });
   const categoryActivitiesBefore = await prisma.conversationActivity.count({ where: { conversationId: conversation.id, action: "CATEGORY_CHANGED" } });
@@ -577,11 +577,11 @@ test("permite ao atendente autorizado transferir setores e oculta mensagens ante
   await prisma.message.updateMany({
     where: { conversationId: conversation.id }, data: { occurredAt: new Date(Date.now() - 1000) },
   });
-  const support = await prisma.category.findUnique({ where: { code: "SUPORTE" } });
-  const commercial = await prisma.category.findUnique({ where: { code: "COMERCIAL" } });
+  const support = await prisma.category.findUnique({ where: { companyId_code: { companyId: "cmp_mibro", code: "SUPORTE" } } });
+  const commercial = await prisma.category.findUnique({ where: { companyId_code: { companyId: "cmp_mibro", code: "COMERCIAL" } } });
   await inbox.updateConversation(conversation.id, { categoryId: support.id, assignedUserId: null }, masterViewer);
   const transferAgent = await prisma.user.create({
-    data: {
+    data: { companyAccess: { create: { companyId: "cmp_mibro" } },
       name: "Atendente Comercial", email: "transferencia-setor@mibro.local", role: "ATENDENTE",
       canTransferConversations: true, canViewPreviousMessages: false,
       categoryAccess: { create: [{ categoryId: commercial.id }] },
@@ -619,25 +619,25 @@ test("permite ao atendente autorizado transferir setores e oculta mensagens ante
 });
 
 test("a transferência sem limitação entrega o histórico completo ao novo atendente", async () => {
-  const support = await prisma.category.findUnique({ where: { code: "SUPORTE" } });
-  const commercial = await prisma.category.findUnique({ where: { code: "COMERCIAL" } });
+  const support = await prisma.category.findUnique({ where: { companyId_code: { companyId: "cmp_mibro", code: "SUPORTE" } } });
+  const commercial = await prisma.category.findUnique({ where: { companyId_code: { companyId: "cmp_mibro", code: "COMERCIAL" } } });
   const [returningAgent, differentAgent] = await Promise.all([
-    prisma.user.create({ data: {
+    prisma.user.create({ data: { companyAccess: { create: { companyId: "cmp_mibro" } },
       name: "Atendente que retorna", email: "historico-retorno@mibro.local", role: "ATENDENTE",
       canTransferConversations: true, canViewPreviousMessages: false,
       categoryAccess: { create: [{ categoryId: support.id }, { categoryId: commercial.id }] },
     } }),
-    prisma.user.create({ data: {
+    prisma.user.create({ data: { companyAccess: { create: { companyId: "cmp_mibro" } },
       name: "Outro atendente", email: "historico-outro@mibro.local", role: "ATENDENTE",
       canTransferConversations: true, canViewPreviousMessages: false,
       categoryAccess: { create: [{ categoryId: support.id }, { categoryId: commercial.id }] },
     } }),
   ]);
   const contact = await prisma.contact.create({
-    data: { externalId: "history-category-test", phone: "5511988887777", name: "Cliente histórico por categoria" },
+    data: { companyId: "cmp_mibro", externalId: "history-category-test", phone: "5511988887777", name: "Cliente histórico por categoria" },
   });
   const conversation = await prisma.conversation.create({
-    data: { contactId: contact.id, categoryId: support.id, assignedUserId: returningAgent.id, status: "EM_ATENDIMENTO" },
+    data: { companyId: "cmp_mibro", contactId: contact.id, categoryId: support.id, assignedUserId: returningAgent.id, status: "EM_ATENDIMENTO" },
   });
   const firstIncoming = await prisma.message.create({ data: {
     conversationId: conversation.id, direction: "RECEBIDA", status: "RECEBIDA", type: "text",

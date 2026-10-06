@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Prévia multiempresa</title>
+  <!-- Teste visual (item 67): MESMO CSS e MESMA marcação de card da caixa de
+       entrada (public/js/app.js#conversationCardMarkup). Abrir via servidor
+       estático na raiz do projeto: /docs/multiempresa-cards-preview.html
+       (?theme=light|dark; sem parâmetro mostra os dois temas lado a lado). -->
+  <link rel="stylesheet" href="../public/css/app.css">
+  <style>
+    body { overflow:auto; padding:18px; }
+    .preview-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,380px)); gap:18px; align-items:start; }
+    .preview-col h3 { margin:0 0 8px; color:var(--text-3); font:800 10px/1 Inter,sans-serif; letter-spacing:.12em; }
+    .preview-col .conversation-list { padding:0; }
+    .preview-panel { margin-top:18px; border:1px solid var(--border-subtle); border-radius:14px; overflow:hidden; background:var(--surface-1); }
+    .themes { display:grid; grid-template-columns:1fr 1fr; gap:0; }
+    .themes iframe { width:100%; height:1080px; border:0; }
+    .force-hover { }
+  </style>
+</head>
+<body>
+<script>
+  const params = new URLSearchParams(location.search);
+  const theme = params.get("theme");
+  if (!theme) {
+    document.body.style.padding = "0";
+    document.body.innerHTML = `<div class="themes"><iframe src="?theme=dark" title="Tema escuro"></iframe><iframe src="?theme=light" title="Tema claro"></iframe></div>`;
+  } else {
+    document.documentElement.dataset.theme = theme;
+    const companies = {
+      mibro: { slug: "mibro", name: "Mibro Brasil", displayName: "MIBRO", primaryColor: "#FF6633" },
+      sincrofit: { slug: "sincrofit", name: "Sincrofit", displayName: "SINCROFIT", primaryColor: "#24A8B4" },
+    };
+    const esc = (v) => String(v).replace(/[&<>"]/g, (c) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" })[c]);
+    const style = (co) => ` style="--company-color:${co.primaryColor}"`;
+    const badge = (co, cls = "") => `<span class="company-badge ${cls}"${style(co)} title="${esc(co.name)}">${esc(co.displayName)}</span>`;
+    const card = ({ co, name, phone, preview, category, color, status, assignee, unread, active, missing, note }) => `
+      <button class="conversation-card has-company ${active ? "active" : ""}" data-company="${co.slug}"${style(co)}>
+        <span class="card-grip" aria-hidden="true"></span><span class="avatar">${esc(name.split(" ").map((p) => p[0]).join("").slice(0, 2))}</span><span class="card-main">
+        <span class="card-title"><strong>${esc(name)}</strong>${badge(co, "card-company-badge")}<small>${esc(phone)}</small></span>
+        <span class="preview">${esc(preview)}</span>
+        <span class="card-labels">${missing ? `<span class="category-label category-missing-label">⚠ Sem categoria</span>` : `<span class="category-label" style="color:${color};border-color:${color}">${esc(category)}</span>`}<span class="status-label">${esc(status)}</span>${assignee ? `<span class="assignee-label">${esc(assignee)}</span>` : ""}</span></span>
+        <span class="card-side"><span>10:42</span><span class="card-elapsed">5 min</span>${unread ? `<span class="unread">${unread}</span>` : ""}</span>
+        <span class="note-preview"><b>NOTA</b> ${esc(note || "Sem notas para este contato")}</span></button>`;
+    const column = (title, co, overrides) => `<div class="preview-col"><h3>${title}</h3><div class="conversation-list">${overrides.map((o) => card({ co, ...o })).join("")}</div></div>`;
+    document.body.innerHTML = `
+      <div class="workspace" style="display:block;height:auto">
+        <div class="company-filter" role="radiogroup" style="max-width:380px;margin:0 0 14px">
+          <button class="company-filter-option active" type="button">Todas</button>
+          <button class="company-filter-option" type="button"${style(companies.mibro)}><i class="company-dot"></i>MIBRO</button>
+          <button class="company-filter-option" type="button"${style(companies.sincrofit)}><i class="company-dot"></i>SINCROFIT</button>
+        </div>
+        <div class="preview-grid">
+          ${column("MIBRO — normal / selecionado / sem categoria", companies.mibro, [
+            { name: "João Silva", phone: "5511999999999", preview: "Meu relógio não carrega", category: "Comercial", color: "#059669", status: "Aberto", assignee: "Rafaela", unread: 2 },
+            { name: "Carla Mendes", phone: "5511988887777", preview: "Quero saber do Renova", category: "Suporte", color: "#2563eb", status: "Aguardando equipe", assignee: "Matheus", active: true },
+            { name: "Pedro Alves", phone: "5521977776666", preview: "Oi, tudo bem?", status: "Novo", missing: true, unread: 1 },
+          ])}
+          ${column("SINCROFIT — normal / selecionado / sem categoria", companies.sincrofit, [
+            { name: "Ana Souza", phone: "5511999999999", preview: "Preciso validar a garantia", category: "Suporte", color: "#2563eb", status: "Aguardando cliente", assignee: "Matheus" },
+            { name: "Lucas Prado", phone: "5531966665555", preview: "Pedido #8812 atrasado", category: "Pedidos", color: "#d97706", status: "Em atendimento", assignee: "Ana", active: true, note: "Cliente prefere contato à tarde" },
+            { name: "Beatriz Lima", phone: "5541955554444", preview: "Bom dia", status: "Novo", missing: true },
+          ])}
+        </div>
+        <div class="preview-panel">
+          <div class="chat-content" data-company="sincrofit"${style(companies.sincrofit)}>
+            <header class="chat-header"><div class="contact-avatar">AS</div><div class="contact-info-wrap"><button class="contact-info" type="button"><h2>Ana Souza</h2><p>+5511999999999</p></button>${badge(companies.sincrofit, "company-badge-header")}</div></header>
+            <div class="composer-sender"${style(companies.sincrofit)}><i class="company-dot"></i><span>Enviando por <b>Sincrofit</b> · Sincrofit Atendimento · +55 11 4000-0000</span>${badge(companies.sincrofit, "composer-company-badge")}</div>
+            <form class="composer"><div class="composer-input-wrap"><textarea rows="1" placeholder="Digite uma mensagem..."></textarea></div><button type="button" id="send-button">Enviar</button></form>
+          </div>
+        </div>
+        <div class="preview-panel">
+          <div class="chat-content" data-company="mibro"${style(companies.mibro)}>
+            <header class="chat-header"><div class="contact-avatar">JS</div><div class="contact-info-wrap"><button class="contact-info" type="button"><h2>João Silva</h2><p>+5511999999999</p></button>${badge(companies.mibro, "company-badge-header")}</div></header>
+            <div class="composer-sender"${style(companies.mibro)}><i class="company-dot"></i><span>Enviando por <b>Mibro Brasil</b> · Mibro Brasil WhatsApp</span>${badge(companies.mibro, "composer-company-badge")}</div>
+          </div>
+        </div>
+      </div>`;
+  }
+</script>
+</body>
+</html>

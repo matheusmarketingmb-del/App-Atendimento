@@ -42,18 +42,21 @@ async function handleCampaignStatusEvent(event) {
 
 // Item 9/13: roda para toda mensagem RECEBIDA real (nunca no simulador/
 // Observação) — detecta opt-out e vincula a resposta à campanha de origem.
-async function handleInboundMessage({ phone, text, conversationId, contactId }) {
+// Multiempresa: `companyId` = empresa do número que recebeu a resposta. Opt-out
+// e vínculo com campanha nunca atravessam empresas.
+async function handleInboundMessage({ phone, text, conversationId, contactId, companyId }) {
   try {
+    if (!companyId) return;
     if (phone && text && detectOptOutKeyword(text)) {
-      await registerOptOut({ phone, contactId, reason: text.slice(0, 300), source: "REPLY_KEYWORD" });
+      await registerOptOut({ phone, contactId, reason: text.slice(0, 300), source: "REPLY_KEYWORD", companyId });
       await prisma.campaignContact.updateMany({
-        where: { phone, status: { notIn: ["OPTED_OUT"] } }, data: { status: "OPTED_OUT" },
+        where: { phone, campaign: { is: { companyId } }, status: { notIn: ["OPTED_OUT"] } }, data: { status: "OPTED_OUT" },
       });
     }
 
     if (!phone) return;
     const lastContact = await prisma.campaignContact.findFirst({
-      where: { phone, status: { in: ["SENT", "DELIVERED", "READ"] } },
+      where: { phone, campaign: { is: { companyId } }, status: { in: ["SENT", "DELIVERED", "READ"] } },
       orderBy: { sentAt: "desc" },
     });
     if (!lastContact) return;

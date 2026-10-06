@@ -43,7 +43,7 @@ test("rotas de Respostas Rápidas: Master gerencia, atendente só usa/busca/favo
 
     const agentCreate = await fetch(`${base}/api/admin/users`, {
       method: "POST", headers: { "Content-Type": "application/json", Cookie: masterCookie },
-      body: JSON.stringify({ name: "Atendente QR HTTP", email: "qr-http-agent@teste.local", password: "senha-segura-123", role: "ATENDENTE" }),
+      body: JSON.stringify({ companyAccess: [{ companyId: "cmp_mibro" }], name: "Atendente QR HTTP", email: "qr-http-agent@teste.local", password: "senha-segura-123", role: "ATENDENTE" }),
     });
     assert.equal(agentCreate.status, 201);
     const agentLogin = await fetch(`${base}/api/auth/login`, {
@@ -58,13 +58,13 @@ test("rotas de Respostas Rápidas: Master gerencia, atendente só usa/busca/favo
 
     const agentTriesCreate = await fetch(`${base}/api/quick-replies`, {
       method: "POST", headers: { "Content-Type": "application/json", Cookie: agentCookie },
-      body: JSON.stringify({ name: "QR HTTP Bloqueado", shortcut: "/qrhttpbloqueado", text: "x" }),
+      body: JSON.stringify({ companyId: "cmp_mibro", name: "QR HTTP Bloqueado", shortcut: "/qrhttpbloqueado", text: "x" }),
     });
     assert.equal(agentTriesCreate.status, 403);
 
     const created = await fetch(`${base}/api/quick-replies`, {
       method: "POST", headers: { "Content-Type": "application/json", Cookie: masterCookie },
-      body: JSON.stringify({ name: "QR HTTP Pedido", shortcut: "/qrhttppedido", text: "Pode me informar o número do pedido?" }),
+      body: JSON.stringify({ companyId: "cmp_mibro", name: "QR HTTP Pedido", shortcut: "/qrhttppedido", text: "Pode me informar o número do pedido?" }),
     });
     assert.equal(created.status, 201);
     const quickReply = await created.json();
@@ -72,8 +72,8 @@ test("rotas de Respostas Rápidas: Master gerencia, atendente só usa/busca/favo
     const withoutConversation = await fetch(`${base}/api/quick-replies/composer`, { headers: { Cookie: agentCookie } });
     assert.equal(withoutConversation.status, 400);
     const agent = await prisma.user.findUniqueOrThrow({ where: { email: "qr-http-agent@teste.local" } });
-    const contact = await prisma.contact.create({ data: { externalId: "qr-http-contact", phone: "5511900000099", channel: "META" } });
-    const conversation = await prisma.conversation.create({ data: { contactId: contact.id, channel: "META", assignedUserId: agent.id } });
+    const contact = await prisma.contact.create({ data: { companyId: "cmp_mibro", externalId: "qr-http-contact", phone: "5511900000099", channel: "META" } });
+    const conversation = await prisma.conversation.create({ data: { companyId: "cmp_mibro", contactId: contact.id, channel: "META", assignedUserId: agent.id } });
     const composerAsAgent = await fetch(`${base}/api/quick-replies/composer?conversationId=${conversation.id}`, { headers: { Cookie: agentCookie } });
     assert.equal(composerAsAgent.status, 200);
     const composerList = await composerAsAgent.json();

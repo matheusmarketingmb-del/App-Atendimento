@@ -74,11 +74,35 @@ function setReadOnly(readOnly) {
   });
 }
 
+// Multiempresa (item 39): "Global" (padrão de todas) ou uma empresa. Salvar
+// numa empresa cria a configuração própria dela (cópia da global + ajustes).
+let settingsCompany = "GLOBAL";
+function syncCompanyNote(settings) {
+  const company = window.CompanyContext.companies.find((item) => item.slug === settingsCompany);
+  $("#settings-company-note").textContent = !company ? "Padrão para todas as empresas sem configuração própria."
+    : settings.isCompanyOverride ? `${company.name} usa configuração própria.` : `${company.name} usa a configuração global — salvar cria uma configuração própria.`;
+  $("#settings-company-reset").hidden = !company || !settings.isCompanyOverride;
+}
+async function loadSettings() {
+  const settings = await api(`/api/conversation-settings${settingsCompany !== "GLOBAL" ? `?company=${encodeURIComponent(settingsCompany)}` : ""}`);
+  fillForm(settings);
+  syncCompanyNote(settings);
+}
+$("#settings-company-reset").addEventListener("click", async () => {
+  try {
+    const settings = await api(`/api/conversation-settings/company/${encodeURIComponent(settingsCompany)}`, { method: "DELETE" });
+    fillForm(settings); syncCompanyNote(settings);
+    toast("A empresa voltou a usar a configuração global.");
+  } catch (error) { toast(error.message, true); }
+});
+
 $("#settings-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   try {
-    const settings = await api("/api/conversation-settings", { method: "PATCH", body: JSON.stringify(collectPayload()) });
+    const payload = { ...collectPayload(), ...(settingsCompany !== "GLOBAL" ? { company: settingsCompany } : {}) };
+    const settings = await api("/api/conversation-settings", { method: "PATCH", body: JSON.stringify(payload) });
     fillForm(settings);
+    syncCompanyNote(settings);
     toast("Configurações salvas.");
   } catch (error) { toast(error.message, true); }
 });
@@ -104,8 +128,16 @@ $("#logout").addEventListener("click", async () => {
 
     const status = await api("/api/auth/status");
     $("#current-user").textContent = status.user.name;
-    const settings = await api("/api/conversation-settings");
-    fillForm(settings);
+    await window.CompanyContext.load();
+    if (window.CompanyContext.multi()) {
+      $("#settings-company-bar").hidden = false;
+      const filter = $("#settings-company-filter");
+      window.CompanyContext.mountFilter(filter, (slug) => {
+        settingsCompany = slug === "ALL" ? "GLOBAL" : slug;
+        loadSettings().catch((error) => toast(error.message, true));
+      }, "ALL", { allLabel: "Global" });
+    }
+    await loadSettings();
     setReadOnly(!status.user.isMaster);
 
     // Relatório de Conversas: link visível só para Master (o dashboard

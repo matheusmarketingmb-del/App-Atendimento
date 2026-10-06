@@ -1,5 +1,6 @@
 const prisma = require("../database/prisma");
 const authorization = require("./authorization-service");
+const companyService = require("./company-service");
 const { removeImage } = require("./media-storage-service");
 const audit = require("./audit-service");
 const internalChat = require("./internal-chat-service");
@@ -93,9 +94,29 @@ function contactDisplayName(contact) {
   return contact?.customName || contact?.name || contact?.email || contact?.phone || "Contato";
 }
 
+// Empresa e conta de origem — identificação visual (badge/borda/composer).
+// Só campos públicos: nunca config/segredos da ChannelAccount.
+const COMPANY_SELECT = Object.freeze({ id: true, name: true, slug: true, displayName: true, primaryColor: true });
+const CHANNEL_ACCOUNT_SELECT = Object.freeze({ id: true, name: true, channel: true, config: true });
+
+function channelAccountSummary(account) {
+  if (!account) return null;
+  const config = account.config && typeof account.config === "object" ? account.config : {};
+  const displayNumber = config.displayNumber || (config.legacyEnv ? process.env.WHATSAPP_DISPLAY_NUMBER || null : null);
+  return { id: account.id, name: account.name, channel: account.channel, displayNumber: displayNumber || null };
+}
+
 async function listConversations({
-  search, category, status, assignedUser, activeOnly, priority, slaBreached, unassigned, channel,
+  search, category, status, assignedUser, activeOnly, priority, slaBreached, unassigned, channel, company,
 }, viewer) {  const where = {};
+
+  // Filtro de empresa (item 14/56): combina com todos os demais. "Todas" =
+  // todas as empresas a que o usuário tem acesso; empresa sem acesso = 403.
+  // O escopo de segurança (conversationScope) continua sendo aplicado abaixo
+  // de qualquer forma — este filtro só restringe, nunca amplia.
+  if (company && company !== companyService.ALL_COMPANIES) {
+    where.companyId = { in: await companyService.resolveCompanyFilter(viewer, company) };
+  }
 
   // Filtros combináveis (item 11): status aceita lista separada por vírgula
   // (ex.: "AGUARDANDO_EQUIPE,HANDOFF_BOT") sem deixar de aceitar um único
@@ -192,6 +213,9 @@ async function listConversations({
           parent: true,
         },
       },
+
+      company: { select: COMPANY_SELECT },
+      channelAccount: { select: CHANNEL_ACCOUNT_SELECT },
 
       assignedUser: {
         select: {
@@ -323,7 +347,11 @@ async function listConversations({
   }
 
   const now = new Date();
-  const slaSettings = await getConversationSettings();
+  // SLA da empresa de cada conversa (configuração própria ou a global).
+  const slaSettingsByCompany = new Map();
+  for (const companyId of new Set(conversations.map((conversation) => conversation.companyId))) {
+    slaSettingsByCompany.set(companyId, await getConversationSettings(prisma, companyId));
+  }
 
   return conversations
     .map((conversation) => {
@@ -335,6 +363,7 @@ async function listConversations({
 
       return {
         ...rest,
+        channelAccount: channelAccountSummary(rest.channelAccount),
         ...(hiddenPreviewIds.has(conversation.id) ? { messages: [] } : {}),
 
         unreadCount: master
@@ -343,7 +372,7 @@ async function listConversations({
 
         isPinned: pins.length > 0,
         ...(conversation.channel === "EMAIL" ? { emailMailbox: emailMailboxByConversation.get(conversation.id) || "GENERAL" } : {}),
-        slaMinutesRemaining: computeSlaMinutesRemaining(conversation, slaSettings, now),
+        slaMinutesRemaining: computeSlaMinutesRemaining(conversation, slaSettingsByCompany.get(conversation.companyId), now),
       };
     })
     // Fixadas manualmente continuam no topo por escolha explicita do usuario;
@@ -586,6 +615,8 @@ async function getConversation(id, viewer) {
     where: { AND: [{ id }, scope] },
     include: {
       category: { include: { parent: true } },
+      company: { select: COMPANY_SELECT },
+      channelAccount: { select: CHANNEL_ACCOUNT_SELECT },
       assignedUser: { select: { id: true, name: true, email: true } },
       messages: {
         where: messageVisibility.where,
@@ -615,15 +646,19 @@ async function getConversation(id, viewer) {
     if (!conversation) return null;
     const { pins, botState, ...result } = conversation;
     return {
-      ...result, isPinned: pins.length > 0, canViewHistory, messageHistoryLimited: messageVisibility.limited,
+      ...result, channelAccount: channelAccountSummary(result.channelAccount), isPinned: pins.length > 0, canViewHistory, messageHistoryLimited: messageVisibility.limited,
       historyVisibleFrom: visibility.start, currentHandoff,
       botPausedAt: botState?.humanPausedAt || null,
     };
   });
 }
 
-async function getConversationSummary(viewer) {
-  const scope = await authorization.conversationScope(viewer);
+async function getConversationSummary(viewer, { company } = {}) {
+  const securityScope = await authorization.conversationScope(viewer);
+  // Filtro de empresa da tela (contadores acompanham a lista).
+  const scope = company && company !== companyService.ALL_COMPANIES
+    ? { AND: [securityScope, { companyId: { in: await companyService.resolveCompanyFilter(viewer, company) } }] }
+    : securityScope;
   const master = authorization.isMaster(viewer);
   const attentionScope = { AND: [scope, { status: "AGUARDANDO_EQUIPE" }, {
     OR: [{ assignedUserId: null }, { assignedUserId: viewer.id }],
@@ -635,7 +670,7 @@ async function getConversationSummary(viewer) {
     { OR: [{ firstResponseSlaBreached: true }, { responseSlaBreached: true }] }] };
   const urgentScope = { AND: [scope, { status: { in: activeManagedStatuses } }, { priority: "URGENTE" }] };
   const unassignedScope = { AND: [scope, { status: { in: activeManagedStatuses } }, { assignedUserId: null }] };
-  const [total, statuses, categories, waitingConversations, overdue, urgent, unassignedCount] = await Promise.all([
+  const [total, statuses, categories, waitingConversations, overdue, urgent, unassignedCount, byCompany] = await Promise.all([
     prisma.conversation.count({ where: scope }),
     prisma.conversation.groupBy({ by: ["status"], where: scope, _count: { _all: true } }),
     prisma.conversation.groupBy({
@@ -656,6 +691,11 @@ async function getConversationSummary(viewer) {
     prisma.conversation.count({ where: overdueScope }),
     prisma.conversation.count({ where: urgentScope }),
     prisma.conversation.count({ where: unassignedScope }),
+    // Quebra por empresa (item 41): conversas ativas (não finalizadas) de
+    // cada empresa visível — "Abertas: 42 · Mibro 25 · Sincrofit 17".
+    prisma.conversation.groupBy({
+      by: ["companyId"], where: { AND: [scope, { status: { not: "FINALIZADO" } }] }, _count: { _all: true },
+    }),
   ]);
   const unreadWaiting = master
     ? await Promise.all(waitingConversations.map(async (conversation) => {
@@ -677,6 +717,7 @@ async function getConversationSummary(viewer) {
     unassigned: unassignedCount,
     statuses: Object.fromEntries(statuses.map((item) => [item.status, item._count._all])),
     categories: Object.fromEntries(categories.map((item) => [item.categoryId, item._count._all])),
+    openByCompany: Object.fromEntries(byCompany.map((item) => [item.companyId, item._count._all])),
   };
 }
 
@@ -833,6 +874,10 @@ async function updateConversation(id, {
     },
   });
   if (!currentSnapshot) throw Object.assign(new Error("Conversa não encontrada."), { statusCode: 404 });
+  // Multiempresa: permissões avaliadas com o cargo do usuário NA EMPRESA da
+  // conversa (Supervisor na Mibro pode ser Atendente na Sincrofit).
+  const companyId = currentSnapshot.companyId;
+  const actor = (await companyService.userForCompany(viewer, companyId)) || viewer;
   if (status && !conversationStatuses.has(status)) {
     throw Object.assign(new Error("Status inválido."), { statusCode: 400 });
   }
@@ -840,32 +885,36 @@ async function updateConversation(id, {
     if (!conversationPriorities.has(priority)) {
       throw Object.assign(new Error("Prioridade inválida."), { statusCode: 400 });
     }
-    authorization.assertCanSetPriority(viewer);
+    authorization.assertCanSetPriority(actor);
   }
   let targetCategory = currentSnapshot.category;
   if (categoryId) {
+    // Categoria precisa ser da MESMA empresa da conversa — nunca "Renova
+    // Mibro" numa conversa Sincrofit.
     targetCategory = await prisma.category.findFirst({
-      where: { id: categoryId, active: true }, include: { parent: true },
+      where: { id: categoryId, active: true, companyId }, include: { parent: true },
     });
-    if (!targetCategory) throw Object.assign(new Error("Categoria não encontrada ou inativa."), { statusCode: 400 });
-    if (!authorization.canTransfer(viewer) && !(await authorization.canAccessCategory(viewer, categoryId))) {
+    if (!targetCategory) throw Object.assign(new Error("Categoria não encontrada, inativa ou de outra empresa."), { statusCode: 400 });
+    if (!authorization.canTransfer(actor) && !(await authorization.canAccessCategory(actor, categoryId))) {
       throw authorization.forbidden("Você não possui acesso à categoria selecionada.");
     }
   }
   if (categoryId === null) targetCategory = null;
-  if (categoryId === null && !authorization.canTransfer(viewer)
-    && !(await authorization.canAccessCategory(viewer, null))) {
+  if (categoryId === null && !authorization.canTransfer(actor)
+    && !(await authorization.canAccessCategory(actor, null))) {
     throw authorization.forbidden("Você não pode remover a categoria desta conversa.");
   }
   if (assignedUserId) {
     const user = await prisma.user.findFirst({ where: { id: assignedUserId, active: true } });
     if (!user) throw Object.assign(new Error("Atendente não encontrado ou inativo."), { statusCode: 400 });
+    const target = await companyService.userForCompany(user, companyId);
+    if (!target) throw Object.assign(new Error("O atendente não tem acesso à empresa desta conversa."), { statusCode: 400 });
     const targetCategoryId = categoryId !== undefined ? categoryId : currentAccess.categoryId;
-    if (!(await authorization.canAccessCategory(user, targetCategoryId))) {
+    if (!(await authorization.canAccessCategory(target, targetCategoryId))) {
       throw Object.assign(new Error("O atendente não possui acesso à categoria desta conversa."), { statusCode: 400 });
     }
   }
-  if (assignedUserId !== undefined && !authorization.canTransfer(viewer) && assignedUserId !== viewer.id) {
+  if (assignedUserId !== undefined && !authorization.canTransfer(actor) && assignedUserId !== viewer.id) {
     throw authorization.forbidden("Você não pode transferir esta conversa.");
   }
   const data = {};
@@ -986,6 +1035,7 @@ async function updateConversation(id, {
           actor: viewer,
           entityType: "CONVERSATION",
           entityId: id,
+          companyId,
           ...entry,
         }, transaction);
       }
@@ -1068,7 +1118,10 @@ async function markAsRead(id, { channel, viewer } = {}) {
     typeof channel?.markAsRead === "function"
   ) {
     try {
-      await channel.markAsRead(latestUnread.externalId);
+      // Confirmação de leitura sai pelo número da própria conversa.
+      const accounts = require("./whatsapp-account-service");
+      const conversationAccount = await prisma.conversation.findUnique({ where: { id }, select: { channelAccount: true } });
+      await accounts.senderFor(channel, conversationAccount?.channelAccount || null).markAsRead(latestUnread.externalId);
       readReceiptSent = true;
     } catch (error) {
       console.error(
@@ -1163,20 +1216,27 @@ async function markAsRead(id, { channel, viewer } = {}) {
   }
 }
 
-async function listCategories(viewer) {
-  let where;
+// Multiempresa: só categorias das empresas acessíveis (cada item traz
+// companyId/company para o front oferecer, numa conversa, apenas as
+// categorias da empresa dela). `company` = filtro opcional da tela.
+async function listCategories(viewer, { company } = {}) {
+  const filters = [await authorization.companyScope(viewer)];
+  if (company && company !== companyService.ALL_COMPANIES) {
+    filters.push({ companyId: { in: await companyService.resolveCompanyFilter(viewer, company) } });
+  }
   let selectableIds = null;
   if (!authorization.isMaster(viewer) && !viewer.canManageCategories && !authorization.canTransfer(viewer)) {
     const categoryIds = await authorization.allowedCategoryIds(viewer);
     selectableIds = new Set(categoryIds);
-    where = { OR: [
+    filters.push({ OR: [
       { id: { in: categoryIds } },
       { children: { some: { id: { in: categoryIds } } } },
-    ] };
+    ] });
   }
+  const where = { AND: filters };
   const [categories, preferences] = await Promise.all([prisma.category.findMany({
     where,
-    include: { parent: { select: { id: true, name: true, code: true, active: true } } },
+    include: { parent: { select: { id: true, name: true, code: true, active: true } }, company: { select: COMPANY_SELECT } },
     orderBy: [{ displayOrder: "asc" }, { name: "asc" }],
   }), prisma.user.findUnique({
     where: { id: viewer.id },
@@ -1220,28 +1280,38 @@ async function setCategoryVisibility({ categoryId, hidden }, viewer) {
 }
 
 async function createCategory(data, viewer) {
-  authorization.assertCanManageCategories(viewer);
   const name = validateCategoryName(data.name);
   const color = validateCategoryColor(data.color) || "#6b7280";
   const parentId = data.parentId || null;
+  let companyId;
   if (parentId) {
+    // Subcategoria herda a empresa da categoria principal.
     const parent = await prisma.category.findFirst({ where: { id: parentId, active: true, parentId: null } });
     if (!parent) throw Object.assign(new Error("A categoria principal não existe, está inativa ou já é uma subcategoria."), { statusCode: 400 });
+    await companyService.assertCompanyAccess(viewer, parent.companyId, "A categoria principal não existe, está inativa ou já é uma subcategoria.");
+    if (data.companyId && data.companyId !== parent.companyId) {
+      throw Object.assign(new Error("A subcategoria deve ser da mesma empresa da categoria principal."), { statusCode: 400 });
+    }
+    companyId = parent.companyId;
+  } else {
+    companyId = await companyService.resolveCompanyForCreate(viewer, data.companyId);
   }
+  authorization.assertCanManageCategories(await authorization.forCompany(viewer, companyId));
   const baseCode = categoryCode(name);
-  const order = await prisma.category.aggregate({ _max: { displayOrder: true } });
+  const order = await prisma.category.aggregate({ where: { companyId }, _max: { displayOrder: true } });
   for (let suffix = 1; suffix <= 100; suffix += 1) {
     const code = suffix === 1 ? baseCode : `${baseCode}_${suffix}`;
     try {
       return await prisma.$transaction(async (transaction) => {
         const category = await transaction.category.create({
-          data: { code, name, color, parentId, displayOrder: (order._max.displayOrder || 0) + 10 },
+          data: { companyId, code, name, color, parentId, displayOrder: (order._max.displayOrder || 0) + 10 },
         });
         await audit.recordAudit({
           actor: viewer,
           action: "CATEGORY_CREATED",
           entityType: "CATEGORY",
           entityId: category.id,
+          companyId,
           summary: `Criou a categoria ${category.name}`,
           details: { category },
         }, transaction);
@@ -1255,9 +1325,13 @@ async function createCategory(data, viewer) {
 }
 
 async function updateCategory(id, data, viewer) {
-  authorization.assertCanManageCategories(viewer);
   const existing = await prisma.category.findUnique({ where: { id } });
   if (!existing) throw Object.assign(new Error("Categoria não encontrada."), { statusCode: 404 });
+  await companyService.assertCompanyAccess(viewer, existing.companyId, "Categoria não encontrada.");
+  authorization.assertCanManageCategories(await authorization.forCompany(viewer, existing.companyId));
+  if (data.companyId !== undefined && data.companyId !== existing.companyId) {
+    throw Object.assign(new Error("A empresa de uma categoria não pode ser alterada."), { statusCode: 400 });
+  }
   const allowed = {};
   if (data.name !== undefined) allowed.name = validateCategoryName(data.name);
   if (data.color !== undefined) allowed.color = validateCategoryColor(data.color);
@@ -1268,7 +1342,7 @@ async function updateCategory(id, data, viewer) {
     if (parentId === id) throw Object.assign(new Error("Uma categoria não pode ser sua própria categoria principal."), { statusCode: 400 });
     if (parentId) {
       const [parent, children] = await Promise.all([
-        prisma.category.findFirst({ where: { id: parentId, active: true, parentId: null } }),
+        prisma.category.findFirst({ where: { id: parentId, active: true, parentId: null, companyId: existing.companyId } }),
         prisma.category.count({ where: { parentId: id } }),
       ]);
       if (!parent) throw Object.assign(new Error("A categoria principal não existe, está inativa ou já é uma subcategoria."), { statusCode: 400 });
@@ -1284,6 +1358,7 @@ async function updateCategory(id, data, viewer) {
         action: "CATEGORY_UPDATED",
         entityType: "CATEGORY",
         entityId: category.id,
+        companyId: category.companyId,
         summary: `Alterou a categoria ${category.name}`,
         details: { before: existing, after: category },
       }, transaction);
@@ -1317,14 +1392,32 @@ async function updateContactCustomName(contactId, customName, viewer) {
   return contact;
 }
 
+// Lista para atribuir/transferir. `companyIds` diz em quais empresas cada
+// pessoa pode receber conversa (o backend revalida em updateConversation).
+// Quem não é Master só enxerga colegas de empresas que ele mesmo acessa.
 async function listUsers(viewer) {
   const where = authorization.isMaster(viewer) || viewer.canTransferConversations
     ? { active: true } : { id: viewer.id, active: true };
-  return prisma.user.findMany({
-    where,
-    select: { id: true, name: true, email: true, role: true },
-    orderBy: { name: "asc" },
-  });
+  const [users, companies, viewerCompanyIds] = await Promise.all([
+    prisma.user.findMany({
+      where,
+      select: {
+        id: true, name: true, email: true, role: true,
+        companyAccess: { where: { active: true }, select: { companyId: true, role: true } },
+      },
+      orderBy: { name: "asc" },
+    }),
+    companyService.listCompanies(),
+    companyService.accessibleCompanyIds(viewer),
+  ]);
+  const activeIds = new Set(companies.map(({ id }) => id));
+  const visible = new Set(viewerCompanyIds);
+  return users.map(({ companyAccess, ...user }) => {
+    const companyIds = user.role === "ADMIN"
+      ? [...activeIds]
+      : companyAccess.map(({ companyId }) => companyId).filter((id) => activeIds.has(id));
+    return { ...user, companyIds: companyIds.filter((id) => visible.has(id)) };
+  }).filter((user) => user.id === viewer.id || user.companyIds.length);
 }
 
 module.exports = {

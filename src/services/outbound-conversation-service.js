@@ -4,6 +4,7 @@ const { whatsappIdVariants } = require("./conversation-service");
 const channelMessageService = require("./channels/channel-message-service");
 const { ALL_MANAGED_CHANNELS, CHANNEL_LABELS } = require("./channels/channel-constants");
 const { updateConversationAfterSending } = require("./message-service");
+const whatsappAccounts = require("./whatsapp-account-service");
 const {
   listApprovedTemplates,
   sendApprovedTemplate,
@@ -26,14 +27,14 @@ function cleanCustomName(value) {
   return name;
 }
 
-async function validateTemplateSelection(channel, selection) {
+async function validateTemplateSelection(channel, selection, account = null) {
   const name = String(selection?.name || "").trim();
   const language = String(selection?.language || "").trim();
   const values = selection?.values && typeof selection.values === "object" ? selection.values : {};
   if (!name || !language) {
     throw Object.assign(new Error("Selecione um template aprovado para iniciar a conversa."), { statusCode: 400 });
   }
-  const template = (await listApprovedTemplates(channel))
+  const template = (await listApprovedTemplates(channel, account))
     .find((item) => item.name === name && item.language === language);
   if (!template) throw Object.assign(new Error("Template aprovado não encontrado na Meta."), { statusCode: 404 });
   if (!template.supported) throw Object.assign(new Error(template.unsupportedReason), { statusCode: 400 });
@@ -45,12 +46,18 @@ async function validateTemplateSelection(channel, selection) {
   return { name, language, values };
 }
 
-async function findExistingConversation(phone) {
+// Multiempresa: procura só na empresa/número escolhidos — o mesmo telefone
+// na outra empresa é outro cliente, com outra conversa.
+async function findExistingConversation(phone, account) {
   // Primeiro o número exato; se não houver, a outra grafia (com/sem o 9º
   // dígito) — evita abrir uma segunda conversa para o mesmo cliente.
+  const channelScope = whatsappAccounts.conversationScopeFor(account);
   for (const externalId of whatsappIdVariants(phone)) {
     const conversation = await prisma.conversation.findFirst({
-      where: { channel: "META", contact: { is: { channel: "META", externalId } } },
+      where: {
+        companyId: account.companyId, channel: "META", channelScope,
+        contact: { is: { companyId: account.companyId, channel: "META", externalId } },
+      },
       select: { id: true, contactId: true },
     });
     if (conversation) return conversation;
@@ -58,8 +65,13 @@ async function findExistingConversation(phone) {
   return null;
 }
 
-async function createOutboundConversation({ phone, customName, template, user, channel }) {
-  if (!templatesConfigured()) {
+// `channelAccountId` = número (e portanto empresa) escolhido na tela "Nova
+// conversa". Validado contra o acesso do usuário; nunca cai num número
+// padrão quando o usuário tem mais de um.
+async function createOutboundConversation({ phone, customName, template, user, channel, channelAccountId, company }) {
+  const account = await whatsappAccounts.resolveAccountForUser(user, { channelAccountId, company });
+  authorization.assertCanStartConversations(await authorization.forCompany(user, account.companyId));
+  if (!templatesConfigured(account)) {
     throw Object.assign(new Error("A criação de conversas ficará disponível após configurar os templates da Meta."), {
       statusCode: 503,
       code: "META_TEMPLATES_NOT_CONFIGURED",
@@ -67,9 +79,9 @@ async function createOutboundConversation({ phone, customName, template, user, c
   }
   const normalizedPhone = normalizeOutboundPhone(phone);
   const normalizedName = cleanCustomName(customName);
-  const selectedTemplate = await validateTemplateSelection(channel, template);
+  const selectedTemplate = await validateTemplateSelection(channel, template, account);
 
-  let conversation = await findExistingConversation(normalizedPhone);
+  let conversation = await findExistingConversation(normalizedPhone, account);
   let created = false;
   if (conversation) {
     await authorization.assertCanViewConversation(user, conversation.id);
@@ -79,25 +91,28 @@ async function createOutboundConversation({ phone, customName, template, user, c
     });
   } else {
     const result = await prisma.$transaction(async (transaction) => {
+      const companyId = account.companyId;
+      const channelScope = whatsappAccounts.conversationScopeFor(account);
       const contact = await transaction.contact.upsert({
-        where: { channel_externalId: { channel: "META", externalId: normalizedPhone } },
+        where: { companyId_channel_externalId: { companyId, channel: "META", externalId: normalizedPhone } },
         update: { phone: normalizedPhone, customName: normalizedName },
         create: {
-          channel: "META", externalId: normalizedPhone, phone: normalizedPhone,
+          companyId, channel: "META", externalId: normalizedPhone, phone: normalizedPhone,
           name: normalizedName, customName: normalizedName,
         },
       });
       const current = await transaction.conversation.findUnique({
-        where: { contactId_channel_channelScope: { contactId: contact.id, channel: "META", channelScope: "LEGACY" } },
+        where: { contactId_channel_channelScope: { contactId: contact.id, channel: "META", channelScope } },
         select: { id: true, contactId: true },
       });
       if (current) return { conversation: current, created: false };
       const inserted = await transaction.conversation.create({ data: {
-        contactId: contact.id, channel: "META", channelScope: "LEGACY", status: "EM_ATENDIMENTO", assignedUserId: user.id,
+        companyId, contactId: contact.id, channel: "META", channelScope, channelAccountId: account.id,
+        status: "EM_ATENDIMENTO", assignedUserId: user.id,
       }, select: { id: true, contactId: true } });
       await transaction.conversationActivity.create({ data: {
         conversationId: inserted.id, actorUserId: user.id, action: "CONVERSATION_CREATED",
-        details: { source: "panel", phone: normalizedPhone, assignedUserId: user.id },
+        details: { source: "panel", phone: normalizedPhone, assignedUserId: user.id, companyId, channelAccountId: account.id },
       } });
       return { conversation: inserted, created: true };
     });
@@ -143,7 +158,14 @@ async function availableEmailAccounts(user) {
 }
 
 async function listOutboundChannels(user) {
-  if (!authorization.canStartConversations(user)) return [];
+  // Multiempresa: lista se puder iniciar conversa em ALGUMA empresa; o envio
+  // revalida a empresa da conta escolhida.
+  const companyService = require("./company-service");
+  let allowed = false;
+  for (const { companyId } of await companyService.companyAccess(user)) {
+    if (authorization.canStartConversations(await companyService.userForCompany(user, companyId))) { allowed = true; break; }
+  }
+  if (!allowed) return [];
   const accounts = await availableEmailAccounts(user);
   return ALL_MANAGED_CHANNELS.map((channelName) => {
     if (channelName === "EMAIL") return {
@@ -164,16 +186,19 @@ async function listOutboundChannels(user) {
 }
 
 async function createOutboundEmail({ accountId, to, customName, subject, text, user }) {
-  authorization.assertCanStartConversations(user);
   const email = normalizeEmail(to);
   const name = cleanCustomName(customName || email);
   const cleanSubject = cleanRequiredText(subject, "Assunto", 240);
   const cleanBody = cleanRequiredText(text, "Mensagem", 20000);
   const account = await prisma.channelAccount.findFirst({
-    where: { id: String(accountId || ""), channel: "EMAIL", enabled: true, status: "CONNECTED", ...emailAccountScope(user) },
-    select: { id: true },
+    where: {
+      id: String(accountId || ""), channel: "EMAIL", enabled: true, status: "CONNECTED", ...emailAccountScope(user),
+      ...(await authorization.companyScope(user)),
+    },
+    select: { id: true, companyId: true },
   });
   if (!account) throw authorization.forbidden("Esta conta de e-mail não está conectada ou não foi liberada para você.");
+  authorization.assertCanStartConversations(await authorization.forCompany(user, account.companyId));
 
   const externalContactId = `${account.id}:${email}`;
   const existing = await prisma.conversation.findFirst({
@@ -189,15 +214,15 @@ async function createOutboundEmail({ accountId, to, customName, subject, text, u
   const occurredAt = new Date();
   const stored = await prisma.$transaction(async (transaction) => {
     const contact = await transaction.contact.upsert({
-      where: { channel_externalId: { channel: "EMAIL", externalId: externalContactId } },
+      where: { companyId_channel_externalId: { companyId: account.companyId, channel: "EMAIL", externalId: externalContactId } },
       update: { email, customName: name },
-      create: { channel: "EMAIL", externalId: externalContactId, email, name, customName: name },
+      create: { companyId: account.companyId, channel: "EMAIL", externalId: externalContactId, email, name, customName: name },
     });
     const conversation = await transaction.conversation.upsert({
       where: { contactId_channel_channelScope: { contactId: contact.id, channel: "EMAIL", channelScope: account.id } },
       update: { channelAccountId: account.id, externalConversationId: providerResult.data?.threadId || undefined },
       create: {
-        contactId: contact.id, channel: "EMAIL", channelScope: account.id, channelAccountId: account.id,
+        companyId: account.companyId, contactId: contact.id, channel: "EMAIL", channelScope: account.id, channelAccountId: account.id,
         externalConversationId: providerResult.data?.threadId || null, kind: "EMAIL_THREAD",
         status: "EM_ATENDIMENTO", assignedUserId: user.id,
       },

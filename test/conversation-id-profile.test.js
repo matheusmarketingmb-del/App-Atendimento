@@ -26,10 +26,10 @@ test.after(async () => {
 });
 
 async function seedConversation({ status = "NOVO", phoneSuffix = "0" } = {}) {
-  const contact = await prisma.contact.create({ data: {
+  const contact = await prisma.contact.create({ data: { companyId: "cmp_mibro",
     externalId: `${externalId}-${phoneSuffix}`, phone: `551188880${phoneSuffix.padStart(3, "0")}`, name: "Cliente Perfil",
   } });
-  const conversation = await prisma.conversation.create({ data: { contactId: contact.id, status } });
+  const conversation = await prisma.conversation.create({ data: { companyId: "cmp_mibro", contactId: contact.id, status } });
   return { contact, conversation };
 }
 

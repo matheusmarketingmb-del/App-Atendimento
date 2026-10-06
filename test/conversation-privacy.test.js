@@ -32,7 +32,7 @@ let seq = 0;
 async function createUser(name, { role = "ATENDENTE", categories = [], ...flags } = {}) {
   seq += 1;
   return prisma.user.create({
-    data: {
+    data: { companyAccess: { create: { companyId: "cmp_mibro" } },
       name, email: `u${seq}-${Date.now()}${emailDomain}`, role, canViewPreviousMessages: false, ...flags,
       categoryAccess: { create: categories.map((category) => ({ categoryId: category.id })) },
     },
@@ -41,9 +41,9 @@ async function createUser(name, { role = "ATENDENTE", categories = [], ...flags 
 
 async function createConversation(label, categoryId) {
   const contact = await prisma.contact.create({
-    data: { externalId: `${contactPrefix}${label}-${Date.now()}`, phone: `55119${String(Date.now()).slice(-8)}`, name: `Cliente Privacidade ${label}` },
+    data: { companyId: "cmp_mibro", externalId: `${contactPrefix}${label}-${Date.now()}`, phone: `55119${String(Date.now()).slice(-8)}`, name: `Cliente Privacidade ${label}` },
   });
-  return prisma.conversation.create({ data: { contactId: contact.id, categoryId, status: "NOVO", lastMessageAt: new Date() } });
+  return prisma.conversation.create({ data: { companyId: "cmp_mibro", contactId: contact.id, categoryId, status: "NOVO", lastMessageAt: new Date() } });
 }
 
 async function customerMessage(conversationId, text, occurredAt = new Date()) {
@@ -69,8 +69,8 @@ const ids = (messages) => messages.map(({ id }) => id);
 
 test.before(async () => {
   await cleanup();
-  support = await prisma.category.findUnique({ where: { code: "SUPORTE" } });
-  commercial = await prisma.category.findUnique({ where: { code: "COMERCIAL" } });
+  support = await prisma.category.findUnique({ where: { companyId_code: { companyId: "cmp_mibro", code: "SUPORTE" } } });
+  commercial = await prisma.category.findUnique({ where: { companyId_code: { companyId: "cmp_mibro", code: "COMERCIAL" } } });
 });
 test.after(async () => {
   await cleanup();

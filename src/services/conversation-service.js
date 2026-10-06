@@ -1,4 +1,5 @@
 const prisma = require("../database/prisma");
+const whatsappAccounts = require("./whatsapp-account-service");
 
 function normalizePhone(value = "") {
   return String(value).replace(/\D/g, "");
@@ -39,25 +40,37 @@ function whatsappIdVariants(value) {
 
 // Contato já salvo com a OUTRA grafia do número. Só entra em jogo quando não
 // existe contato com o ID exato — nunca troca um contato existente por outro.
-async function findMetaContactByOtherVariant(externalId, db = prisma) {
+// Sempre dentro da mesma empresa: o mesmo telefone na Sincrofit é outro
+// contato, com outro histórico.
+async function findMetaContactByOtherVariant(externalId, db = prisma, companyId) {
+  if (!companyId) throw new Error("findMetaContactByOtherVariant exige companyId.");
   const others = whatsappIdVariants(externalId).filter((value) => value !== externalId);
   if (!others.length) return null;
   const exact = await db.contact.findUnique({
-    where: { channel_externalId: { channel: "META", externalId } }, select: { id: true },
+    where: { companyId_channel_externalId: { companyId, channel: "META", externalId } }, select: { id: true },
   });
   if (exact) return null;
   return db.contact.findFirst({
-    where: { channel: "META", externalId: { in: others } }, orderBy: { createdAt: "asc" },
+    where: { companyId, channel: "META", externalId: { in: others } }, orderBy: { createdAt: "asc" },
   });
 }
 
-async function findOrCreateMetaConversation(event, db = prisma) {
+// Multiempresa: `account` é a ChannelAccount (número) que recebeu/vai enviar.
+// Ela define a empresa do contato e da conversa. Sem conta explícita (envio
+// iniciado por fluxos antigos), usa o número original da instalação.
+async function findOrCreateMetaConversation(event, db = prisma, account = null) {
+  const channelAccount = account || await whatsappAccounts.getLegacyAccount(db);
+  if (!channelAccount) {
+    throw Object.assign(new Error("Nenhum número de WhatsApp cadastrado para esta conversa."), { statusCode: 503 });
+  }
+  const companyId = channelAccount.companyId;
+  const channelScope = whatsappAccounts.conversationScopeFor(channelAccount);
   const contactName = validContactName(
     event.contactName,
     event.phone
   );
 
-  const variantContact = await findMetaContactByOtherVariant(event.contactExternalId, db);
+  const variantContact = await findMetaContactByOtherVariant(event.contactExternalId, db, companyId);
   const contact = variantContact
     ? await db.contact.update({
       where: { id: variantContact.id },
@@ -65,7 +78,8 @@ async function findOrCreateMetaConversation(event, db = prisma) {
     })
     : await db.contact.upsert({
     where: {
-      channel_externalId: {
+      companyId_channel_externalId: {
+        companyId,
         channel: "META",
         externalId: event.contactExternalId
       }
@@ -77,6 +91,7 @@ async function findOrCreateMetaConversation(event, db = prisma) {
     },
 
     create: {
+      companyId,
       channel: "META",
       externalId: event.contactExternalId,
       phone: event.phone,
@@ -89,16 +104,18 @@ async function findOrCreateMetaConversation(event, db = prisma) {
       contactId_channel_channelScope: {
         contactId: contact.id,
         channel: "META",
-        channelScope: "LEGACY"
+        channelScope
       }
     },
 
     update: {},
 
     create: {
+      companyId,
       contactId: contact.id,
       channel: "META",
-      channelScope: "LEGACY",
+      channelScope,
+      channelAccountId: channelAccount.id,
       status: "NOVO"
     }
   });

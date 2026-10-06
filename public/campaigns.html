@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="theme-color" content="#ef5b2a">
+  <meta name="theme-color" content="#16171a">
   <link rel="icon" type="image/png" sizes="192x192" href="/assets/app-icon-192.png">
   <title>Campanhas &bull; Central de Atendimento</title>
   <script>try{const saved=localStorage.getItem("mibro-theme");document.documentElement.dataset.theme=saved||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light")}catch{}</script>
@@ -13,7 +13,7 @@
 </head>
 <body>
   <header class="topbar">
-    <a class="brand" href="/"><img src="/assets/mibro-logo.png" alt="Mibro"><span></span><small>Campanhas</small></a>
+    <a class="brand" href="/"><img src="/assets/central-mark.svg" alt="Central de Atendimento"><span></span><small>Campanhas</small></a>
     <div class="phase-badge">ENVIO EM MASSA &bull; WHATSAPP</div>
     <a class="back-link" href="/">&larr; Central</a>
     <button id="theme-toggle" class="round-button" type="button" title="Alternar tema">&#9790;</button>
@@ -39,6 +39,7 @@
           <option value="FAILED">Falharam</option>
         </select>
       </div>
+      <div id="campaign-company-filter" class="company-filter" role="radiogroup" aria-label="Filtrar campanhas por empresa" hidden></div>
       <div id="campaign-list" class="bot-list"><div class="skeleton-list"><div class="skeleton skeleton-card"></div><div class="skeleton skeleton-card"></div></div></div>
       <div class="safety-note"><b>Envio real desativado por padrão</b><p>Nenhuma campanha envia mensagens de verdade enquanto o master switch (aba Configurações) estiver desligado.</p></div>
       <div id="campaign-api-notice" class="campaign-api-notice" role="status" hidden><b>Modo limitado</b><span></span></div>
@@ -65,6 +66,8 @@
           <form id="campaign-form" class="card basic-card">
             <div class="card-heading"><div><span>CONFIGURAÇÃO</span><h3>Identidade e template</h3></div><button id="campaign-save-button" type="submit" disabled>Salvar</button></div>
             <div class="fields two-columns">
+              <label><span>Empresa *</span><select id="campaign-company" required></select></label>
+              <label><span>Número de envio (WhatsApp) *</span><select id="campaign-account" required></select></label>
               <label><span>Nome *</span><input id="campaign-name" maxlength="150" required></label>
               <label><span>Categoria da campanha</span><input id="campaign-category" maxlength="120" placeholder="Ex.: Prospecção revendedores"></label>
               <label class="full"><span>Descrição</span><textarea id="campaign-description" maxlength="2000"></textarea></label>
@@ -187,6 +190,7 @@
   </div>
 
   <div id="toast" class="toast"></div>
+  <script src="/js/company-context.js"></script>
   <script src="/js/campaigns.js"></script>
 </body>
 </html>

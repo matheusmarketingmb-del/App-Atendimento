@@ -1,12 +1,26 @@
 const prisma = require("../database/prisma");
 const auth = require("../services/auth-service");
+const { accessPayload } = require("./company-controller");
 
 const controller = {
   async status(req, res, next) {
     try {
       const setupRequired = (await prisma.user.count()) === 0;
       const user = await auth.userFromToken(req.cookies[auth.COOKIE_NAME]);
-      return res.json({ setupRequired, authenticated: Boolean(user), user: user ? auth.publicUser(user) : null });
+      const publicUser = user ? auth.publicUser(user) : null;
+      // Multiempresa: empresas acessíveis + cargo em cada uma + filtro salvo.
+      const companyAccess = publicUser ? await accessPayload(publicUser) : null;
+      if (publicUser) {
+        // Menus: mostra Campanhas/prioridade se valer em ALGUMA empresa.
+        const companyService = require("../services/company-service");
+        for (const { companyId } of await companyService.companyAccess(publicUser)) {
+          const scoped = await companyService.userForCompany(publicUser, companyId);
+          for (const key of ["canManageCampaigns", "canSetConversationPriority", "canTransferConversations", "canStartConversations", "canMergeContacts", "canManageCategories"]) {
+            if (scoped?.[key]) publicUser[key] = true;
+          }
+        }
+      }
+      return res.json({ setupRequired, authenticated: Boolean(user), user: publicUser, companyAccess });
     } catch (error) { return next(error); }
   },
   async setup(req, res, next) {

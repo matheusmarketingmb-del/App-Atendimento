@@ -9,6 +9,8 @@ const MetaCloudChannel = require("./channels/meta-cloud-channel");
 const { saveIncoming, updateStatus, sendTextToPhone } = require("./services/message-service");
 const { createInboxController } = require("./controllers/inbox-controller");
 const authController = require("./controllers/auth-controller");
+const companyController = require("./controllers/company-controller");
+const whatsappAccounts = require("./services/whatsapp-account-service");
 const {
   authenticate, requireCampaignsPage, requireConversationSettingsPage, requireMasterPage, requirePageAuth,
 } = require("./middleware/auth");
@@ -160,6 +162,7 @@ function createApp({ channel = new MetaCloudChannel() } = {}) {
     try {
       const events = channel.parseWebhook(req.body);
       let changed = false;
+      const changedCompanyIds = new Set();
       for (const event of events) {
         // Item de segurança (resiliência do lote): uma falha ao processar UM
         // evento (ex.: mídia deliberadamente malformada — ver
@@ -170,10 +173,19 @@ function createApp({ channel = new MetaCloudChannel() } = {}) {
         // negação de serviço amplificado por um único evento malicioso.
         try {
           if (event.kind === "message") {
+            // Multiempresa: o número que recebeu define a empresa. Número sem
+            // ChannelAccount cadastrada nunca é atribuído a uma empresa "por
+            // padrão" — o evento é ignorado (sem 500, para a Meta não reenviar).
+            const account = await whatsappAccounts.resolveInboundAccount(event.phoneNumberId);
+            if (!account) {
+              console.warn(`[WEBHOOK] phone_number_id sem ChannelAccount cadastrada — mensagem ignorada. phoneNumberId=${event.phoneNumberId}`);
+              continue;
+            }
+            const accountChannel = whatsappAccounts.senderFor(channel, account);
             if (["image", "audio", "video", "sticker", "document"].includes(event.type) && event.mediaId) {
               const existing = await prisma.message.findUnique({ where: { externalId: event.externalId }, select: { id: true } });
               if (existing) continue;
-              const media = await channel.downloadMedia(event.mediaId, {
+              const media = await accountChannel.downloadMedia(event.mediaId, {
                 maxSize: event.type === "sticker" ? 500 * 1024
                   : (event.type === "image" ? 5 * 1024 * 1024
                     : (event.type === "document" ? 100 * 1024 * 1024 : 16 * 1024 * 1024)),
@@ -182,8 +194,9 @@ function createApp({ channel = new MetaCloudChannel() } = {}) {
               event.mediaMimeType = media.mimeType;
               event.mediaFileName ||= media.fileName;
             }
-            const result = await saveIncoming(event);
+            const result = await saveIncoming(event, account);
             if (!result.duplicate) {
+              changedCompanyIds.add(account.companyId);
               if (event.type !== "reaction") {
                 // Item de segurança (flood por contato): processamento caro
                 // (Bot/IA/Tools) é pulado além do limite por remetente — a
@@ -200,7 +213,7 @@ function createApp({ channel = new MetaCloudChannel() } = {}) {
                   // ligada. Sem fluxo aplicável, a mensagem (já salva) segue
                   // para a equipe. Falha no fluxo nunca derruba o webhook.
                   try {
-                    await handleIncomingVisualFlow(event, result.message, channel);
+                    await handleIncomingVisualFlow(event, result.message, accountChannel);
                   } catch (flowError) {
                     console.error("[BOT_FLOW] falha no Flow Builder (mensagem segue para a equipe):", flowError.message);
                   }
@@ -211,7 +224,7 @@ function createApp({ channel = new MetaCloudChannel() } = {}) {
                   if (event.type === "text" && event.text) {
                     campaignReplyService.handleInboundMessage({
                       phone: event.phone || event.contactExternalId, text: event.text,
-                      conversationId: result.message.conversationId,
+                      conversationId: result.message.conversationId, companyId: account.companyId,
                     }).catch(() => {});
                   }
                 }
@@ -220,6 +233,8 @@ function createApp({ channel = new MetaCloudChannel() } = {}) {
             }
           }
           if (event.kind === "status") {
+            const statusAccount = await whatsappAccounts.resolveInboundAccount(event.phoneNumberId);
+            if (statusAccount) changedCompanyIds.add(statusAccount.companyId);
             const result = await updateStatus(event);
             if (result?.count) changed = true;
             campaignReplyService.handleCampaignStatusEvent(event).catch(() => {});
@@ -228,7 +243,7 @@ function createApp({ channel = new MetaCloudChannel() } = {}) {
           console.error("[WEBHOOK] falha ao processar um evento do lote (ignorado, lote continua):", eventError.message);
         }
       }
-      if (changed) inboxEvents.publish();
+      if (changed) inboxEvents.publish(changedCompanyIds);
       return res.status(200).json({ received: true, processed: events.length });
     } catch (error) {
       console.error("Erro ao processar webhook:", error);
@@ -442,11 +457,19 @@ app.post(
     return res.status(409).json({ error: "O início de conversas pela Meta está temporariamente desativado." });
   });
 
+  // Multiempresa: empresas do usuário, preferência do filtro e cadastro de
+  // empresas (Master Global).
+  app.get("/api/companies", companyController.mine);
+  app.put("/api/companies/preference", companyController.setPreference);
+  app.get("/api/admin/companies", companyController.adminList);
+  app.post("/api/admin/companies", companyController.create);
+  app.patch("/api/admin/companies/:companyId", companyController.update);
   app.get("/api/conversations", inbox.list);
   app.get("/api/conversations/summary", inbox.summary);
   app.get("/api/alerts", inbox.alerts);
   app.get("/api/meta/status", inbox.metaStatus);
   app.get("/api/meta/templates", inbox.templates);
+  app.get("/api/whatsapp-accounts", inbox.whatsappAccounts);
   app.get("/api/outbound/channels", inbox.outboundChannels);
   app.post("/api/conversations/outbound/email", inbox.createOutboundEmail);
   app.post("/api/conversations/outbound", inbox.createOutbound);
@@ -545,12 +568,14 @@ app.post(
 
   // Campanhas / envio em massa (WhatsApp).
   app.get("/api/campaign-templates", campaignController.listTemplates);
+  app.get("/api/campaign-accounts", campaignController.listAccounts);
   app.post("/api/campaign-templates/preview", campaignController.previewTemplate);
   app.get("/api/campaign-settings", campaignController.getSettings);
   app.patch("/api/campaign-settings", campaignController.updateSettings);
 
   app.get("/api/conversation-settings", conversationSettingsController.getSettings);
   app.patch("/api/conversation-settings", conversationSettingsController.updateSettings);
+  app.delete("/api/conversation-settings/company/:company", conversationSettingsController.resetCompany);
 
   // Relatório de Conversas (dashboard completo, só Master) — substitui o
   // antigo relatório semanal embutido em Configurações → Conversas.
@@ -559,6 +584,7 @@ app.post(
   app.get("/api/reports/conversations/status-breakdown", conversationReportController.statusBreakdown);
   app.get("/api/reports/conversations/channel-breakdown", conversationReportController.channelBreakdown);
   app.get("/api/reports/conversations/category-breakdown", conversationReportController.categoryBreakdown);
+  app.get("/api/reports/conversations/company-breakdown", conversationReportController.companyBreakdown);
   app.get("/api/reports/conversations/agents", conversationReportController.agentRanking);
   app.get("/api/reports/conversations/agents/compare", conversationReportController.compareAgents);
   app.get("/api/reports/conversations/agents/export", conversationReportController.exportAgentsCsv);
@@ -612,6 +638,7 @@ app.post(
   app.get("/api/quick-replies/composer", quickReplyController.listForComposer);
   // Biblioteca pessoal de áudios (cada atendente só vê/edita os próprios).
   app.post("/api/quick-replies/personal-audio", audioUpload, quickReplyController.createPersonalAudio);
+  app.post("/api/quick-replies/managed-audio", audioUpload, quickReplyController.createManagedAudio);
   app.patch("/api/quick-replies/personal-audio/:id", audioUpload, quickReplyController.updatePersonalAudio);
   app.delete("/api/quick-replies/personal-audio/:id", quickReplyController.deletePersonalAudio);
   app.get("/api/quick-replies/:id/audio", quickReplyController.audio);

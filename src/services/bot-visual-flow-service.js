@@ -117,15 +117,18 @@ async function getFlowVersion(botId, flowId, version, viewer) {
 async function getEditorOptions(botId, viewer) {
   assertBotManager(viewer);
   const bot = await ensureBot(botId);
+  // Multiempresa: o editor só oferece setores, pessoas e respostas da
+  // empresa do Bot (+ respostas globais).
   const [categories, users, flows, responses, webhooks] = await Promise.all([
-    prisma.category.findMany({ where: { active: true }, select: { id: true, name: true, parentId: true }, orderBy: [{ displayOrder: "asc" }, { name: "asc" }] }),
-    prisma.user.findMany({ where: { active: true, role: { not: "BOT" } }, select: { id: true, name: true, role: true }, orderBy: { name: "asc" } }),
+    prisma.category.findMany({ where: { active: true, companyId: bot.companyId }, select: { id: true, name: true, parentId: true }, orderBy: [{ displayOrder: "asc" }, { name: "asc" }] }),
+    prisma.user.findMany({ where: { active: true, role: { not: "BOT" }, ...companyUserWhere(bot.companyId) }, select: { id: true, name: true, role: true }, orderBy: { name: "asc" } }),
     prisma.botFlow.findMany({ where: { botId, archivedAt: null }, select: { id: true, name: true, status: true, isDefault: true, activeVersionId: true }, orderBy: { createdAt: "asc" } }),
-    prisma.botResponse.findMany({ where: { active: true }, select: { key: true, title: true, category: true, text: true }, orderBy: [{ category: "asc" }, { key: "asc" }] }),
+    prisma.botResponse.findMany({ where: { active: true, OR: [{ companyId: null }, { companyId: bot.companyId }] }, select: { key: true, title: true, category: true, text: true }, orderBy: [{ category: "asc" }, { key: "asc" }] }),
     prisma.botWebhookEndpoint.findMany({ where: { active: true }, select: { key: true, name: true, method: true }, orderBy: { key: "asc" } }),
   ]);
+  const company = await require("./company-service").getCompany(bot.companyId);
   return {
-    bot: { id: bot.id, name: bot.name, channels: bot.channels?.length ? bot.channels : [bot.channel] },
+    bot: { id: bot.id, name: bot.name, channels: bot.channels?.length ? bot.channels : [bot.channel], companyId: bot.companyId, company: require("./company-service").publicCompany(company) },
     nodeTypes: nodeTypeCatalog(), categories, users, responses, webhooks,
     flows: flows.map((flow) => ({ id: flow.id, name: flow.name, status: flow.status, isDefault: flow.isDefault, published: Boolean(flow.activeVersionId) })),
     mediaKinds: MEDIA_KINDS,
@@ -181,12 +184,20 @@ async function existingMediaKeys(graph) {
   return found;
 }
 
+// Multiempresa: publicar/validar um fluxo só aceita setores, pessoas e
+// respostas da empresa do Bot — um setor da Mibro num fluxo Sincrofit vira
+// erro de validação (CATEGORY_NOT_FOUND), nunca chega a ser publicado.
+function companyUserWhere(companyId) {
+  return { OR: [{ role: "ADMIN" }, { companyAccess: { some: { companyId, active: true } } }] };
+}
+
 async function loadValidationRefs(botId, flowId, graph) {
+  const { companyId } = await prisma.bot.findUnique({ where: { id: botId }, select: { companyId: true } });
   const [categories, users, flows, responses, webhooks, mediaKeys] = await Promise.all([
-    prisma.category.findMany({ where: { active: true }, select: { id: true } }),
-    prisma.user.findMany({ where: { active: true, role: { not: "BOT" } }, select: { id: true } }),
+    prisma.category.findMany({ where: { active: true, companyId }, select: { id: true } }),
+    prisma.user.findMany({ where: { active: true, role: { not: "BOT" }, ...companyUserWhere(companyId) }, select: { id: true } }),
     prisma.botFlow.findMany({ where: { botId, archivedAt: null }, select: { id: true } }),
-    prisma.botResponse.findMany({ where: { active: true }, select: { key: true } }),
+    prisma.botResponse.findMany({ where: { active: true, OR: [{ companyId: null }, { companyId }] }, select: { key: true } }),
     prisma.botWebhookEndpoint.findMany({ where: { active: true }, select: { key: true } }),
     existingMediaKeys(normalizeGraph(graph)),
   ]);
@@ -467,7 +478,7 @@ async function simulateFlow(botId, flowId, {
     current = { flowId: other.id, name: other.name, versionId: source === "ACTIVE" ? other.activeVersion?.id : null, version: source === "ACTIVE" ? other.activeVersion?.version : null };
   }
   const [categories, users] = await Promise.all([
-    prisma.category.findMany({ where: { active: true }, select: { id: true, name: true, code: true, masterOnly: true } }),
+    prisma.category.findMany({ where: { active: true, companyId: bot.companyId }, select: { id: true, name: true, code: true, masterOnly: true } }),
     prisma.user.findMany({ where: { active: true, role: { not: "BOT" } }, select: { id: true, name: true } }),
   ]);
   const outputs = [];
@@ -486,13 +497,13 @@ async function simulateFlow(botId, flowId, {
   });
   const result = await runTurn({
     graph: require("./bot-question-answer-observation").withQuality(graph, bot), flow: current, state: state ? refreshSystemContext(JSON.parse(JSON.stringify(state)), seed) : null,
-    input, adapter, seed, responses: await activeResponseMap(), now,
+    input, adapter, seed, responses: await activeResponseMap(prisma, bot.companyId), now,
   });
   if (chainAfterTriage === true && bot.type === "SYSTEM_TRIAGE" && result.state.status === STATUS.HANDED_OFF) {
     const destination = [...result.trace].reverse().find((entry) => entry.output?.categoryId)?.output?.categoryId;
     const category = categories.find((item) => item.id === destination && !item.masterOnly);
     if (category) {
-      const nextBot = await prisma.bot.findFirst({ where: { archivedAt: null, status: { not: "ARCHIVED_LEGACY" }, featureFlags: { path: ["assistantAfterTriage"], equals: true }, OR: [{ channel: bot.channel }, { channels: { has: bot.channel } }] }, include: botScheduleInclude, orderBy: { updatedAt: "desc" } });
+      const nextBot = await prisma.bot.findFirst({ where: { companyId: bot.companyId, archivedAt: null, status: { not: "ARCHIVED_LEGACY" }, featureFlags: { path: ["assistantAfterTriage"], equals: true }, OR: [{ channel: bot.channel }, { channels: { has: bot.channel } }] }, include: botScheduleInclude, orderBy: { updatedAt: "desc" } });
       const nextFlow = nextBot && await prisma.botFlow.findFirst({ where: { botId: nextBot.id, isDefault: true, archivedAt: null, activeVersionId: { not: null } }, include: { activeVersion: true } });
       if (nextFlow && nextFlow.activeVersion?.graph?.nodes?.some((node) => node.type === "start" && node.config?.trigger === "AFTER_TRIAGE")) {
         const assistant = await simulateFlow(nextBot.id, nextFlow.id, { source, contactName, categoryId: category.id, initialNeed: result.state.context.flow.atendimentoNeed || "", callWebhooks: false, simulatedAt: now.toISOString() }, viewer, deps);
@@ -521,6 +532,13 @@ function botEligible(bot, globalSettings) {
   return Boolean(bot && !bot.archivedAt && bot.status === "ACTIVE" && bot.autoReplyEnabled && globalSettings.automationEnabled);
 }
 
+// O Bot responde sempre pelo número da própria conversa (inclusive quando
+// retomado pelo worker de timers, que não sabe qual número recebeu).
+async function metaSenderFor(channel, conversation) {
+  const accounts = require("./whatsapp-account-service");
+  return accounts.senderFor(channel, await accounts.accountForConversation(conversation));
+}
+
 function liveAdapter({ conversation, bot, channel, execution, deps }) {
   const conversationId = conversation.id;
   const callWebhook = deps.callWebhook || webhookEndpoints.callEndpoint;
@@ -538,14 +556,16 @@ function liveAdapter({ conversation, bot, channel, execution, deps }) {
   // inatividade nunca finaliza uma conversa que está esperando a equipe.
   const send = async (text, { flowHandoff = false } = {}) => {
     if (!String(text || "").trim()) return;
-    const result = await channel.sendText(conversation.contact.phone, text);
+    const result = await (await metaSenderFor(channel, conversation)).sendText(conversation.contact.phone, text);
     await saveSent({ externalId: result?.externalId || null, type: "text", text, rawPayload: { message: result?.data || null, ...(flowHandoff ? { flowHandoff: true } : {}) } });
   };
   const activity = (action, details) => prisma.conversationActivity.create({ data: { conversationId, action, details } });
   const contactLabel = conversation.contact.customName || conversation.contact.name || conversation.contact.phone;
 
   const moveToCategory = async ({ categoryId, reason, action }) => {
-    const category = await prisma.category.findFirst({ where: { id: categoryId, active: true } });
+    // Setor sempre da empresa da conversa (fluxo publicado já é validado; isto
+    // protege contra setor movido/editado depois da publicação).
+    const category = await prisma.category.findFirst({ where: { id: categoryId, active: true, companyId: conversation.companyId } });
     if (!category) throw new Error("Setor de destino não existe ou está inativo.");
     const allowed = conversation.channelAccount?.config?.allowedCategoryIds || [];
     if (category.masterOnly || (allowed.length && !allowed.includes(category.id) && !allowed.includes(category.parentId))) throw new Error("Setor indisponível para este número.");
@@ -575,11 +595,12 @@ function liveAdapter({ conversation, bot, channel, execution, deps }) {
     // Lista interativa só no WhatsApp e até 10 opções (limite da Meta); fora
     // disso cai para o texto numerado — o cliente pode responder igual.
     async sendMenu({ text, fallbackText, buttonLabel, options }) {
-      if (conversation.channel !== "META" || options.length > WHATSAPP_LIST_MAX_ROWS || typeof channel.sendList !== "function") {
+      const sender = await metaSenderFor(channel, conversation);
+      if (conversation.channel !== "META" || options.length > WHATSAPP_LIST_MAX_ROWS || typeof sender.sendList !== "function") {
         return send(fallbackText);
       }
       const rows = options.map((option) => ({ id: option.replyId, title: option.label.slice(0, 24) }));
-      const result = await channel.sendList(conversation.contact.phone, { body: text || fallbackText, button: buttonLabel.slice(0, 20), rows });
+      const result = await sender.sendList(conversation.contact.phone, { body: text || fallbackText, button: buttonLabel.slice(0, 20), rows });
       await saveSent({ externalId: result?.externalId || null, type: "interactive", text: fallbackText, rawPayload: { message: result?.data || null } });
     },
     async sendMedia({ kind, storageKey, mimeType, fileName, caption }) {
@@ -587,7 +608,8 @@ function liveAdapter({ conversation, bot, channel, execution, deps }) {
       // Cópia própria por mensagem: excluir a conversa nunca apaga o arquivo
       // do nó (que outras conversas continuam usando).
       const stored = await MEDIA_STORE[kind]({ buffer, mimeType, fileName });
-      const result = await channel[CHANNEL_MEDIA_SENDER[kind]](conversation.contact.phone, {
+      const sender = await metaSenderFor(channel, conversation);
+      const result = await sender[CHANNEL_MEDIA_SENDER[kind]](conversation.contact.phone, {
         buffer, mimeType: stored.mimeType, fileName: stored.fileName, caption: caption || undefined,
       });
       await saveSent({
@@ -709,9 +731,13 @@ const conversationInclude = {
   botState: { select: { humanPausedAt: true, activeBotId: true } },
 };
 
+// Multiempresa: só Bots da empresa da conversa — nunca um fluxo Sincrofit
+// respondendo num número Mibro.
 async function findStartBot(conversation, { afterTriage = false } = {}) {
+  if (!conversation.companyId) return null;
   const bots = await prisma.bot.findMany({
     where: {
+      companyId: conversation.companyId,
       archivedAt: null, status: "ACTIVE", autoReplyEnabled: true,
       OR: [{ channel: conversation.channel }, { channels: { has: conversation.channel } }],
     },
@@ -763,7 +789,7 @@ async function runLiveTurn({ execution, claimedStep, conversation, bot, channel,
   try {
     turn = await runTurn({
       graph: require("./bot-question-answer-observation").withQuality(version.graph, bot), flow: { flowId: execution.flowId, versionId: version.id, version: version.version, name: flowName },
-      state, input, adapter, seed, responses: await activeResponseMap(), now,
+      state, input, adapter, seed, responses: await activeResponseMap(prisma, bot.companyId), now,
     });
   } catch (error) {
     // Nunca derruba o processamento geral: registra e entrega para humano.

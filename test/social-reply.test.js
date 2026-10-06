@@ -19,7 +19,7 @@ const conversations = {};
 
 async function makeAccount(channel, name, config, secrets) {
   const account = await prisma.channelAccount.create({
-    data: { channel, name, status: "CONNECTED", enabled: true, config, ...encryptSecrets(secrets) },
+    data: { companyId: "cmp_mibro", channel, name, status: "CONNECTED", enabled: true, config, ...encryptSecrets(secrets) },
   });
   accounts[name] = account;
   return account;
@@ -99,9 +99,9 @@ test("Facebook Comentários responde publicamente ao comentário original", asyn
 
 test("responder sem conta de canal associada falha com erro claro (nunca envia às cegas)", async () => {
   const orphan = await prisma.conversation.create({
-    data: {
+    data: { company: { connect: { id: "cmp_mibro" } },
       kind: "PRIVATE_CONVERSATION", channel: "INSTAGRAM_DIRECT", channelScope: "orphan-test", status: "NOVO",
-      contact: { create: { channel: "INSTAGRAM_DIRECT", externalId: `orphan-test:igsid-orphan`, name: "Órfão" } },
+      contact: { create: { company: { connect: { id: "cmp_mibro" } }, channel: "INSTAGRAM_DIRECT", externalId: `orphan-test:igsid-orphan`, name: "Órfão" } },
     },
   });
   await assert.rejects(() => sendText({ conversationId: orphan.id, text: "oi", channel: noopChannel }), (error) => {

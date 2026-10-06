@@ -23,3 +23,7 @@ html[data-theme=dark] .readonly-note{border-color:#4a3226;color:#f0a37e;backgrou
 .report-link h3{margin:3px 0 4px}
 .report-link .card-help{margin:0}
 .report-link-arrow{font-size:20px;color:var(--orange)}
+/* Multiempresa: configuração global ou por empresa. */
+.settings-company-bar{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin:0 0 14px}
+.settings-company-bar span{color:var(--muted);font-size:12px}
+.settings-company-bar button#settings-company-reset{min-height:30px;padding:0 10px;border:1px solid var(--line);border-radius:8px;color:var(--ink);background:var(--surface);font-size:11px;font-weight:700;cursor:pointer}

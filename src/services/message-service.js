@@ -1,5 +1,6 @@
 const prisma = require("../database/prisma");
 const { findOrCreateMetaConversation } = require("./conversation-service");
+const whatsappAccounts = require("./whatsapp-account-service");
 const { removeImage, storeAudio, storeDocument, storeImage, storeSticker, storeVideo } = require("./media-storage-service");
 const { formatTeamMessage } = require("./team-message-formatter");
 const { normalizeOutgoingAudio } = require("./audio-normalization-service");
@@ -9,15 +10,18 @@ const { buildPublicMediaUrl } = require("./channels/social-media-link-service");
 const statuses = { sent: "ENVIADA", delivered: "ENTREGUE", read: "LIDA", failed: "FALHOU" };
 const closingMessage = "Agradecemos pelo seu contato. Se precisar de qualquer ajuda, estamos à disposição. Você pode voltar a falar conosco quando quiser.";
 
-async function saveIncoming(event) {
+// `account` = ChannelAccount (número) que recebeu — define a empresa.
+async function saveIncoming(event, account = null) {
   try {
     // Fora da transação: leitura de config só (cacheada), não precisa do
     // isolamento da transação abaixo.
-    const settings = await getConversationSettings();
+    // Reabertura segue a configuração da empresa do número que recebeu.
+    const companyId = account?.companyId || (await require("./whatsapp-account-service").getLegacyAccount())?.companyId || null;
+    const settings = await getConversationSettings(prisma, companyId);
     return await prisma.$transaction(async (tx) => {
       const existing = await tx.message.findUnique({ where: { externalId: event.externalId } });
       if (existing) return { message: existing, duplicate: true };
-      const { conversation } = await findOrCreateMetaConversation(event, tx);
+      const { conversation } = await findOrCreateMetaConversation(event, tx, account);
       const mediaStore = ({ audio: storeAudio, video: storeVideo, sticker: storeSticker, document: storeDocument })[event.type] || storeImage;
       const media = event.mediaBuffer ? await mediaStore({
         buffer: event.mediaBuffer, mimeType: event.mediaMimeType,
@@ -25,6 +29,7 @@ async function saveIncoming(event) {
       }) : null;
       const message = await tx.message.create({ data: {
         conversationId: conversation.id, externalId: event.externalId, channel: "META",
+        channelAccountId: conversation.channelAccountId || null,
         direction: "RECEBIDA", status: "RECEBIDA", type: event.type, text: event.text,
         mediaStorageKey: media?.storageKey, mediaMimeType: media?.mimeType,
         mediaFileName: media?.fileName, mediaSize: media?.size,
@@ -239,8 +244,14 @@ async function sendSocialMedia({ conversation, buffer, mimeType, fileName, capti
   return { message, providerData: result.data };
 }
 
+// Multiempresa: o WhatsApp sempre responde pelo número da própria conversa
+// (nunca pelo número "padrão" do .env quando a conversa é de outro número).
+async function metaSender(channel, conversation) {
+  return whatsappAccounts.senderFor(channel, await whatsappAccounts.accountForConversation(conversation));
+}
+
 async function sendText({ conversationId, text, sentByUserId, channel }) {
-  const conversation = await prisma.conversation.findUnique({ where: { id: conversationId }, include: { contact: true, category: { include: { parent: true } } } });
+  const conversation = await prisma.conversation.findUnique({ where: { id: conversationId }, include: { contact: true, channelAccount: true, category: { include: { parent: true } } } });
   if (!conversation) throw Object.assign(new Error("Conversa não encontrada."), { statusCode: 404 });
   let result;
   let providerText = text;
@@ -257,7 +268,7 @@ async function sendText({ conversationId, text, sentByUserId, channel }) {
     if (providerText.length > 4096) {
       throw Object.assign(new Error("A mensagem ficou acima do limite após adicionar o nome da equipe."), { statusCode: 400 });
     }
-    result = await channel.sendText(conversation.contact.phone, providerText);
+    result = await (await metaSender(channel, conversation)).sendText(conversation.contact.phone, providerText);
   } else if (SOCIAL_CHANNELS.includes(conversation.channel)) {
     const socialContext = await socialReplyContext(conversation);
     result = await channelMessageService.send({
@@ -268,8 +279,10 @@ async function sendText({ conversationId, text, sentByUserId, channel }) {
     throw Object.assign(new Error("Este canal ainda não está liberado para respostas pela Central."), { statusCode: 409 });
   }
   const occurredAt = new Date();
+  // WhatsApp grava o wamid cru (os status do webhook procuram por ele); só os
+  // demais canais prefixam com a conta.
   const providerExternalId = result.externalId
-    ? (conversation.channelAccountId ? `${conversation.channelAccountId}:${result.externalId}` : result.externalId)
+    ? (conversation.channelAccountId && conversation.channel !== "META" ? `${conversation.channelAccountId}:${result.externalId}` : result.externalId)
     : null;
   const message = await prisma.message.create({ data: {
     conversationId, externalId: providerExternalId, channel: conversation.channel,
@@ -315,7 +328,7 @@ async function sendEmailMedia({ conversation, buffer, mimeType, fileName, captio
   return { message, providerData: result.data };
 }
 async function sendImage({ conversationId, buffer, mimeType, fileName, caption, sentByUserId, channel }) {
-  const conversation = await prisma.conversation.findUnique({ where: { id: conversationId }, include: { contact: true, category: { include: { parent: true } } } });
+  const conversation = await prisma.conversation.findUnique({ where: { id: conversationId }, include: { contact: true, channelAccount: true, category: { include: { parent: true } } } });
   if (!conversation) throw Object.assign(new Error("Conversa não encontrada."), { statusCode: 404 });
   if (conversation.channel === "EMAIL") {
     return sendEmailMedia({ conversation, buffer, mimeType, fileName, caption, sentByUserId, type: "image", store: storeImage });
@@ -333,7 +346,7 @@ async function sendImage({ conversationId, buffer, mimeType, fileName, caption, 
   const media = await storeImage({ buffer, mimeType, fileName });
   let result;
   try {
-    result = await channel.sendImage(conversation.contact.phone, {
+    result = await (await metaSender(channel, conversation)).sendImage(conversation.contact.phone, {
       buffer, mimeType, fileName: media.fileName, caption: providerCaption || null,
     });
   } catch (error) {
@@ -342,7 +355,7 @@ async function sendImage({ conversationId, buffer, mimeType, fileName, caption, 
   }
   const occurredAt = new Date();
   const message = await prisma.message.create({ data: {
-    conversationId, externalId: result.externalId, channel: conversation.channel, direction: "ENVIADA",
+    conversationId, externalId: result.externalId, channel: conversation.channel, channelAccountId: conversation.channelAccountId || null, direction: "ENVIADA",
     status: "ENVIADA", type: "image", text: cleanCaption,
     mediaStorageKey: media.storageKey, mediaMimeType: media.mimeType,
     mediaFileName: media.fileName, mediaSize: media.size,
@@ -354,7 +367,7 @@ async function sendImage({ conversationId, buffer, mimeType, fileName, caption, 
 }
 
 async function sendVideo({ conversationId, buffer, mimeType, fileName, caption, sentByUserId, channel }) {
-  const conversation = await prisma.conversation.findUnique({ where: { id: conversationId }, include: { contact: true, category: { include: { parent: true } } } });
+  const conversation = await prisma.conversation.findUnique({ where: { id: conversationId }, include: { contact: true, channelAccount: true, category: { include: { parent: true } } } });
   if (!conversation) throw Object.assign(new Error("Conversa não encontrada."), { statusCode: 404 });
   if (conversation.channel === "EMAIL") {
     return sendEmailMedia({ conversation, buffer, mimeType, fileName, caption, sentByUserId, type: "video", store: storeVideo });
@@ -372,7 +385,7 @@ async function sendVideo({ conversationId, buffer, mimeType, fileName, caption, 
   const media = await storeVideo({ buffer, mimeType, fileName });
   let result;
   try {
-    result = await channel.sendVideo(conversation.contact.phone, {
+    result = await (await metaSender(channel, conversation)).sendVideo(conversation.contact.phone, {
       buffer, mimeType: media.mimeType, fileName: media.fileName, caption: providerCaption || null,
     });
   } catch (error) {
@@ -381,7 +394,7 @@ async function sendVideo({ conversationId, buffer, mimeType, fileName, caption, 
   }
   const occurredAt = new Date();
   const message = await prisma.message.create({ data: {
-    conversationId, externalId: result.externalId, channel: conversation.channel, direction: "ENVIADA",
+    conversationId, externalId: result.externalId, channel: conversation.channel, channelAccountId: conversation.channelAccountId || null, direction: "ENVIADA",
     status: "ENVIADA", type: "video", text: cleanCaption,
     mediaStorageKey: media.storageKey, mediaMimeType: media.mimeType,
     mediaFileName: media.fileName, mediaSize: media.size,
@@ -393,7 +406,7 @@ async function sendVideo({ conversationId, buffer, mimeType, fileName, caption, 
 }
 
 async function sendDocument({ conversationId, buffer, mimeType, fileName, caption, sentByUserId, channel }) {
-  const conversation = await prisma.conversation.findUnique({ where: { id: conversationId }, include: { contact: true, category: { include: { parent: true } } } });
+  const conversation = await prisma.conversation.findUnique({ where: { id: conversationId }, include: { contact: true, channelAccount: true, category: { include: { parent: true } } } });
   if (!conversation) throw Object.assign(new Error("Conversa não encontrada."), { statusCode: 404 });
   if (conversation.channel === "EMAIL") {
     return sendEmailMedia({ conversation, buffer, mimeType, fileName, caption, sentByUserId, type: "document", store: storeDocument });
@@ -411,7 +424,7 @@ async function sendDocument({ conversationId, buffer, mimeType, fileName, captio
   const media = await storeDocument({ buffer, mimeType, fileName });
   let result;
   try {
-    result = await channel.sendDocument(conversation.contact.phone, {
+    result = await (await metaSender(channel, conversation)).sendDocument(conversation.contact.phone, {
       buffer, mimeType: media.mimeType, fileName: media.fileName, caption: providerCaption || null,
     });
   } catch (error) {
@@ -420,7 +433,7 @@ async function sendDocument({ conversationId, buffer, mimeType, fileName, captio
   }
   const occurredAt = new Date();
   const message = await prisma.message.create({ data: {
-    conversationId, externalId: result.externalId, channel: conversation.channel, direction: "ENVIADA",
+    conversationId, externalId: result.externalId, channel: conversation.channel, channelAccountId: conversation.channelAccountId || null, direction: "ENVIADA",
     status: "ENVIADA", type: "document", text: cleanCaption,
     mediaStorageKey: media.storageKey, mediaMimeType: media.mimeType,
     mediaFileName: media.fileName, mediaSize: media.size,
@@ -435,7 +448,7 @@ async function sendDocument({ conversationId, buffer, mimeType, fileName, captio
 // (WebM do Chrome vira Ogg/Opus; tipo real decidido pela assinatura binária)
 // e salvo no storage de mídia existente — no banco só referência/metadados.
 async function sendAudio({ conversationId, buffer, fileName, durationMs, sentByUserId, channel }) {
-  const conversation = await prisma.conversation.findUnique({ where: { id: conversationId }, include: { contact: true } });
+  const conversation = await prisma.conversation.findUnique({ where: { id: conversationId }, include: { contact: true, channelAccount: true } });
   if (!conversation) throw Object.assign(new Error("Conversa não encontrada."), { statusCode: 404 });
   if (conversation.channel !== "META") {
     throw Object.assign(new Error("Este canal ainda não suporta envio de áudio pela Central."), { statusCode: 409 });
@@ -445,7 +458,7 @@ async function sendAudio({ conversationId, buffer, fileName, durationMs, sentByU
   const media = await storeAudio({ buffer: audio.buffer, mimeType: audio.mimeType, fileName: audio.fileName });
   let result;
   try {
-    result = await channel.sendAudio(conversation.contact.phone, {
+    result = await (await metaSender(channel, conversation)).sendAudio(conversation.contact.phone, {
       buffer: audio.buffer, mimeType: media.mimeType, fileName: media.fileName,
     });
   } catch (error) {
@@ -454,7 +467,7 @@ async function sendAudio({ conversationId, buffer, fileName, durationMs, sentByU
   }
   const occurredAt = new Date();
   const message = await prisma.message.create({ data: {
-    conversationId, externalId: result.externalId, channel: conversation.channel, direction: "ENVIADA",
+    conversationId, externalId: result.externalId, channel: conversation.channel, channelAccountId: conversation.channelAccountId || null, direction: "ENVIADA",
     status: "ENVIADA", type: "audio", text: null,
     mediaStorageKey: media.storageKey, mediaMimeType: media.mimeType,
     mediaFileName: media.fileName, mediaSize: media.size, mediaDurationMs: audio.durationMs,
@@ -481,8 +494,8 @@ async function finalizeConversation({ conversationId, sentByUserId, channel }) {
   return { conversation, message: result.message, providerData: result.providerData, alreadyFinalized: false, previousStatus: current.status };
 }
 
-async function sendTextToPhone({ phone, text, channel }) {
-  const { conversation } = await findOrCreateMetaConversation({ contactExternalId: phone, phone, contactName: phone });
+async function sendTextToPhone({ phone, text, channel, account = null }) {
+  const { conversation } = await findOrCreateMetaConversation({ contactExternalId: phone, phone, contactName: phone }, undefined, account);
   return sendText({ conversationId: conversation.id, text, channel });
 }
 

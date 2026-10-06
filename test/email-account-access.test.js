@@ -13,10 +13,10 @@ const emails = ["email-access-admin@test.local", "email-access-allowed@test.loca
 
 test.before(async () => {
   await prisma.integrationGlobalSettings.upsert({ where: { id: "singleton" }, update: { newChannelsEnabled: true }, create: { id: "singleton", newChannelsEnabled: true } });
-  admin = await prisma.user.create({ data: { name: "Admin Acesso", email: emails[0], role: "ADMIN" } });
-  allowed = await prisma.user.create({ data: { name: "Permitido", email: emails[1], role: "ATENDENTE", canViewUncategorized: true } });
-  denied = await prisma.user.create({ data: { name: "Bloqueado", email: emails[2], role: "ATENDENTE", canViewUncategorized: true } });
-  account = await prisma.channelAccount.create({ data: { channel: "EMAIL", name: "Email Access Test", status: "CONNECTED", enabled: true } });
+  admin = await prisma.user.create({ data: { companyAccess: { create: { companyId: "cmp_mibro" } }, name: "Admin Acesso", email: emails[0], role: "ADMIN" } });
+  allowed = await prisma.user.create({ data: { companyAccess: { create: { companyId: "cmp_mibro" } }, name: "Permitido", email: emails[1], role: "ATENDENTE", canViewUncategorized: true } });
+  denied = await prisma.user.create({ data: { companyAccess: { create: { companyId: "cmp_mibro" } }, name: "Bloqueado", email: emails[2], role: "ATENDENTE", canViewUncategorized: true } });
+  account = await prisma.channelAccount.create({ data: { companyId: "cmp_mibro", channel: "EMAIL", name: "Email Access Test", status: "CONNECTED", enabled: true } });
   await accounts.setAccountAccess(account.id, [allowed.id], admin);
   const result = await persistInboundMessage(normalizeInboundMessage({
     channel: "EMAIL", channelAccountId: account.id, senderExternalId: "private@example.com",

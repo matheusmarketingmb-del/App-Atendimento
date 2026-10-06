@@ -69,7 +69,9 @@
         return {
           id: `conversation-${conversation.id}`,
           label: name,
-          meta: conversation.contact.phone,
+          // Multiempresa (item 38): o mesmo cliente pode existir nas duas
+          // empresas — a empresa aparece no resultado para diferenciar.
+          meta: [conversation.company?.displayName, conversation.contact.phone].filter(Boolean).join(" · "),
           icon: "💬",
           run: () => { if (typeof openConversation === "function") openConversation(conversation.id).catch(() => {}); },
         };

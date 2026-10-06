@@ -73,7 +73,7 @@ function renderBotList() {
   $("#bot-count").textContent = `${state.bots.length} Bot(s)`;
   $("#bot-list").innerHTML = state.bots.length ? state.bots.map((bot) => `
     <button type="button" class="bot-card ${state.selected?.id === bot.id ? "active" : ""}" data-bot="${escapeHtml(bot.id)}">
-      <header><b>${escapeHtml(bot.name)}</b><span class="mini-status ${bot.status}">${STATUS_LABELS[bot.status] || bot.status}</span></header>
+      <header><b>${escapeHtml(bot.name)}</b>${window.CompanyContext.badge(bot.company)}<span class="mini-status ${bot.status}">${STATUS_LABELS[bot.status] || bot.status}</span></header>
       <small>${escapeHtml(bot.channels.map((channel) => CHANNEL_LABELS[channel] || channel).join(", "))}</small>
       <div class="bot-meta">${bot.flows.length} fluxo(s) • ${bot.assistantAfterTriage ? "após a Triagem • " : ""}${bot.autoReplyEnabled ? "respondendo clientes" : "resposta automática desligada"}${bot.isSystem ? " • sistema" : ""}</div>
     </button>`).join("") : '<div class="intent-empty">Nenhum Bot ainda.</div>';
@@ -83,8 +83,16 @@ $("#bot-list").addEventListener("click", (event) => {
   if (card) selectBot(card.dataset.bot);
 });
 
+// Multiempresa (item 33/34): filtro Todas | Mibro | Sincrofit e empresa
+// sempre visível no card; o Bot só roda em conversas da própria empresa.
+state.companyFilter = "ALL";
 async function loadBots(selectId) {
-  state.bots = await api("/api/bots");
+  await window.CompanyContext.load();
+  if (!state.companyFilterMounted) {
+    state.companyFilterMounted = true;
+    window.CompanyContext.mountFilter($("#bot-company-filter"), (slug) => { state.companyFilter = slug; loadBots().catch((error) => toast(error.message, true)); }, "ALL");
+  }
+  state.bots = await api(`/api/bots${state.companyFilter !== "ALL" ? `?company=${encodeURIComponent(state.companyFilter)}` : ""}`);
   renderBotList();
   const target = selectId || state.selected?.id || state.bots[0]?.id;
   if (target && state.bots.some((bot) => bot.id === target)) await selectBot(target);
@@ -306,6 +314,9 @@ $("#new-flow").addEventListener("click", async () => {
 // ---------- Novo Bot -> Editor Visual ----------------------------------------------
 function openNewBot() {
   $("#new-bot-form").reset();
+  // Empresa primeiro: obrigatória e imutável depois de criado.
+  const preferred = window.CompanyContext.companies.find((company) => company.slug === state.companyFilter);
+  $("#new-bot-company").innerHTML = window.CompanyContext.selectHtml("new-bot-company-select", { value: preferred?.id || (window.CompanyContext.multi() ? "" : window.CompanyContext.companies[0]?.id) });
   channelChecklist($("#new-bot-channels"), ["META"]);
   $("#new-bot-dialog").showModal();
   $("#new-bot-name").focus();
@@ -318,7 +329,7 @@ $("#new-bot-form").addEventListener("submit", async (event) => {
   try {
     const bot = await api("/api/bots", {
       method: "POST",
-      body: JSON.stringify({ name: $("#new-bot-name").value, description: $("#new-bot-description").value, channels: checkedValues($("#new-bot-channels")) }),
+      body: JSON.stringify({ companyId: $("#new-bot-company-select")?.value || undefined, name: $("#new-bot-name").value, description: $("#new-bot-description").value, channels: checkedValues($("#new-bot-channels")) }),
     });
     location.href = editorUrl(bot.id, bot.createdFlowId);
   } catch (error) { toast(error.message, true); }

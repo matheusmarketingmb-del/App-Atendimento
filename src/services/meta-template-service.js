@@ -4,7 +4,9 @@ const { updateConversationAfterSending } = require("./message-service");
 const CUSTOMER_SERVICE_WINDOW_MS = 24 * 60 * 60 * 1000;
 const PLACEHOLDER = /{{\s*([^{}]+?)\s*}}/g;
 
-function templatesConfigured() {
+// Com `account`: o número tem WABA configurada? Sem conta: .env (original).
+function templatesConfigured(account = null) {
+  if (account) return Boolean(require("./whatsapp-account-service").wabaIdOf(account));
   return Boolean(process.env.WHATSAPP_BUSINESS_ACCOUNT_ID?.trim());
 }
 
@@ -33,7 +35,8 @@ async function getCustomerServiceWindow(conversationId, now = new Date()) {
     orderBy: { occurredAt: "desc" },
     select: { occurredAt: true },
   });
-  return customerServiceWindowFrom(latest?.occurredAt, now);
+  const conversation = await prisma.conversation.findUnique({ where: { id: conversationId }, select: { channelAccount: true } });
+  return customerServiceWindowFrom(latest?.occurredAt, now, templatesConfigured(conversation?.channelAccount || null));
 }
 
 async function assertFreeFormAllowed(conversationId) {
@@ -137,8 +140,10 @@ function normalizeTemplate(template) {
   };
 }
 
-async function listApprovedTemplates(channel) {
-  const templates = await channel.listMessageTemplates();
+// Multiempresa: templates pertencem à WABA do número (`account`) — nunca
+// mistura templates Mibro e Sincrofit. Sem conta: número original (.env).
+async function listApprovedTemplates(channel, account = null) {
+  const templates = await require("./whatsapp-account-service").senderFor(channel, account).listMessageTemplates();
   const rows = Array.isArray(templates) ? templates : [];
   return rows
     .map(normalizeTemplate)
@@ -170,9 +175,12 @@ function templateComponents(template, values) {
 }
 
 async function sendApprovedTemplate({ conversationId, name, language, values = {}, sentByUserId, channel }) {
-  const conversation = await prisma.conversation.findUnique({ where: { id: conversationId }, include: { contact: true } });
+  const conversation = await prisma.conversation.findUnique({ where: { id: conversationId }, include: { contact: true, channelAccount: true } });
   if (!conversation) throw Object.assign(new Error("Conversa não encontrada."), { statusCode: 404 });
-  const templates = await channel.listMessageTemplates();
+  // Sempre pelo número (e WABA) da própria conversa.
+  const accounts = require("./whatsapp-account-service");
+  const sender = accounts.senderFor(channel, await accounts.accountForConversation(conversation));
+  const templates = await sender.listMessageTemplates();
   const template = templates.find((item) => item.name === name && item.language === language && item.status === "APPROVED");
   if (!template) throw Object.assign(new Error("Template aprovado não encontrado na Meta."), { statusCode: 404 });
   const normalized = normalizeTemplate(template);
@@ -183,7 +191,7 @@ async function sendApprovedTemplate({ conversationId, name, language, values = {
     }
   }
   const components = templateComponents(template, values);
-  const result = await channel.sendTemplate(conversation.contact.phone, { name, language, components });
+  const result = await sender.sendTemplate(conversation.contact.phone, { name, language, components });
   const occurredAt = new Date();
   const preview = [
     ...(template.components || []).filter((item) => ["HEADER", "BODY"].includes(item.type)).map((item) => renderText(item.text, normalized.variables, values)),
@@ -191,6 +199,7 @@ async function sendApprovedTemplate({ conversationId, name, language, values = {
   ].filter(Boolean).join("\n\n");
   const message = await prisma.message.create({ data: {
     conversationId, externalId: result.externalId, channel: conversation.channel,
+    channelAccountId: conversation.channelAccountId || null,
     direction: "ENVIADA", status: "ENVIADA", type: "template", text: preview,
     occurredAt, sentByUserId: sentByUserId || null,
     rawPayload: { message: result.data, template: { name, language, category: template.category, values } },

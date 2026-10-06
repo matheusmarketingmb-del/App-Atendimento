@@ -61,7 +61,7 @@ let account;
 test.before(async () => {
   await prisma.channelOAuthState.deleteMany({});
   await prisma.channelAccount.deleteMany({ where: { name: "Teste OAuth seguro" } });
-  account = await prisma.channelAccount.create({ data: { channel: "MERCADO_LIVRE", name: "Teste OAuth seguro" } });
+  account = await prisma.channelAccount.create({ data: { companyId: "cmp_mibro", channel: "MERCADO_LIVRE", name: "Teste OAuth seguro" } });
 });
 
 test.after(async () => {

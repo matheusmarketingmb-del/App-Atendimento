@@ -17,6 +17,7 @@ const { whatsappIdVariants } = require("./conversation-service");
 const { getCampaignSettings } = require("./campaign-settings-service");
 const { sendApprovedTemplate } = require("./meta-template-service");
 const { isOptedOut } = require("./campaign-optout-service");
+const whatsappAccounts = require("./whatsapp-account-service");
 const { DEFAULT_BATCH_SIZE, DEFAULT_DELAY_BETWEEN_BATCHES_SECONDS, DEFAULT_MAX_RETRIES, STUCK_SENDING_MINUTES } = require("./campaign-constants");
 
 // Mesma primitiva de "achar ou criar Contact+Conversation por telefone" que
@@ -24,10 +25,15 @@ const { DEFAULT_BATCH_SIZE, DEFAULT_DELAY_BETWEEN_BATCHES_SECONDS, DEFAULT_MAX_R
 // painel — aqui sem `user` (é o sistema enviando, não um atendente
 // interativo): a conversa nasce sem responsável, pronta para um atendente
 // assumir quando o cliente responder (item 15/16).
-async function findOrCreateCampaignConversation({ phone, name }, client = prisma) {
+// Multiempresa: `account` = número da campanha. Contato e conversa sempre
+// da empresa desse número (o mesmo telefone na outra empresa é outro cliente).
+async function findOrCreateCampaignConversation({ phone, name, account }, client = prisma) {
+  if (!account?.companyId) throw new Error("Campanha sem número de WhatsApp definido.");
+  const companyId = account.companyId;
+  const channelScope = whatsappAccounts.conversationScopeFor(account);
   for (const externalId of whatsappIdVariants(phone)) {
     const conversation = await client.conversation.findFirst({
-      where: { channel: "META", contact: { is: { channel: "META", externalId } } },
+      where: { companyId, channel: "META", channelScope, contact: { is: { companyId, channel: "META", externalId } } },
       select: { id: true, contactId: true },
     });
     if (conversation) return conversation;
@@ -35,17 +41,17 @@ async function findOrCreateCampaignConversation({ phone, name }, client = prisma
 
   return client.$transaction(async (transaction) => {
     const contact = await transaction.contact.upsert({
-      where: { channel_externalId: { channel: "META", externalId: phone } },
+      where: { companyId_channel_externalId: { companyId, channel: "META", externalId: phone } },
       update: {},
-      create: { channel: "META", externalId: phone, phone, name: name || phone },
+      create: { companyId, channel: "META", externalId: phone, phone, name: name || phone },
     });
     const existing = await transaction.conversation.findUnique({
-      where: { contactId_channel_channelScope: { contactId: contact.id, channel: "META", channelScope: "LEGACY" } },
+      where: { contactId_channel_channelScope: { contactId: contact.id, channel: "META", channelScope } },
       select: { id: true, contactId: true },
     });
     if (existing) return existing;
     return transaction.conversation.create({
-      data: { contactId: contact.id, channel: "META", channelScope: "LEGACY", status: "NOVO" },
+      data: { companyId, contactId: contact.id, channel: "META", channelScope, channelAccountId: account.id, status: "NOVO" },
       select: { id: true, contactId: true },
     });
   });
@@ -130,10 +136,19 @@ async function processCampaign(campaign, channel, now) {
   const candidates = available.filter((contact) => retryIsReady(contact, now, delaySeconds)).slice(0, batchSize);
   if (!candidates.length) { await maybeCompleteCampaign(campaign.id, now); return; }
 
+  // Multiempresa: sempre o número (e a WABA) da própria campanha.
+  const account = campaign.channelAccountId
+    ? await prisma.channelAccount.findFirst({ where: { id: campaign.channelAccountId, companyId: campaign.companyId, channel: "META" } })
+    : null;
+  if (!account) {
+    console.error(`[CAMPAIGN_WORKER] campanha ${campaign.id} sem número de WhatsApp válido da empresa — nenhum contato reivindicado.`);
+    return;
+  }
+
   let template = null;
   try {
     const { listApprovedTemplates } = require("./meta-template-service");
-    const templates = await listApprovedTemplates(channel);
+    const templates = await listApprovedTemplates(channel, account);
     template = templates.find((item) => item.name === campaign.templateName && item.language === campaign.templateLanguage);
   } catch (error) {
     console.error("[CAMPAIGN_WORKER] falha ao consultar templates da Meta (nenhum contato reivindicado)", error.message);
@@ -163,7 +178,7 @@ async function processCampaign(campaign, channel, now) {
     claimedAny = true;
 
     try {
-      if (contact.optOut || await isOptedOut(contact.phone)) {
+      if (contact.optOut || await isOptedOut(contact.phone, campaign.companyId)) {
         await prisma.campaignContact.updateMany({ where: { id: contact.id, status: "SENDING" }, data: { status: "OPTED_OUT" } });
         continue;
       }
@@ -174,7 +189,7 @@ async function processCampaign(campaign, channel, now) {
         break;
       }
 
-      const conversation = await findOrCreateCampaignConversation({ phone: contact.phone, name: contact.fullName || contact.firstName });
+      const conversation = await findOrCreateCampaignConversation({ phone: contact.phone, name: contact.fullName || contact.firstName, account });
       const values = resolveTemplateValues(campaign, contact, template);
       const result = await sendApprovedTemplate({
         conversationId: conversation.id, name: campaign.templateName, language: campaign.templateLanguage,

@@ -50,14 +50,14 @@ test.after(async () => {
 test("chat interno atualiza não lidas e não expõe dados do contato na sinalização", async () => {
   const [sender, recipient] = await Promise.all([
     prisma.user.create({
-      data: {
+      data: { companyAccess: { create: { companyId: "cmp_mibro" } },
         name: "Chat Interno A",
         email: testEmails[0],
         role: "ADMIN",
       },
     }),
     prisma.user.create({
-      data: {
+      data: { companyAccess: { create: { companyId: "cmp_mibro" } },
         name: "Chat Interno B",
         email: testEmails[1],
         role: "ADMIN",
@@ -89,7 +89,7 @@ test("chat interno atualiza não lidas e não expõe dados do contato na sinaliz
 
   await internalChat.listChats(sender);
   const contact = await prisma.contact.create({
-    data: {
+    data: { companyId: "cmp_mibro",
       externalId: testContactExternalId,
       phone: "5511999990000",
       name: "Nome Meta",
@@ -97,7 +97,7 @@ test("chat interno atualiza não lidas e não expõe dados do contato na sinaliz
     },
   });
   const conversation = await prisma.conversation.create({
-    data: {
+    data: { companyId: "cmp_mibro",
       contactId: contact.id,
       categoryId: category.id,
       status: "EM_ATENDIMENTO",
@@ -120,14 +120,14 @@ test("chat interno atualiza não lidas e não expõe dados do contato na sinaliz
 
 test("busca de conversas encontra o nome personalizado do contato", async () => {
   const viewer = await prisma.user.create({
-    data: {
+    data: { companyAccess: { create: { companyId: "cmp_mibro" } },
       name: "Busca Customizada",
       email: testEmails[0],
       role: "ADMIN",
     },
   });
   const contact = await prisma.contact.create({
-    data: {
+    data: { companyId: "cmp_mibro",
       externalId: testContactExternalId,
       phone: "5511999990001",
       name: "Nome recebido pela Meta",
@@ -135,7 +135,7 @@ test("busca de conversas encontra o nome personalizado do contato", async () => 
     },
   });
   const conversation = await prisma.conversation.create({
-    data: { contactId: contact.id, status: "NOVO" },
+    data: { companyId: "cmp_mibro", contactId: contact.id, status: "NOVO" },
   });
 
   const results = await inbox.listConversations(
@@ -155,9 +155,9 @@ test("arquivos internos aceitam formatos diversos com prévia e download restrit
 
   try {
     const [sender, recipient, outsider] = await Promise.all([
-      prisma.user.create({ data: { name: "Remetente", email: testEmails[0], role: "ADMIN" } }),
-      prisma.user.create({ data: { name: "Destinatário", email: testEmails[1], role: "ADMIN" } }),
-      prisma.user.create({ data: { name: "Sem acesso", email: testEmails[2], role: "ADMIN" } }),
+      prisma.user.create({ data: { companyAccess: { create: { companyId: "cmp_mibro" } }, name: "Remetente", email: testEmails[0], role: "ADMIN" } }),
+      prisma.user.create({ data: { companyAccess: { create: { companyId: "cmp_mibro" } }, name: "Destinatário", email: testEmails[1], role: "ADMIN" } }),
+      prisma.user.create({ data: { companyAccess: { create: { companyId: "cmp_mibro" } }, name: "Sem acesso", email: testEmails[2], role: "ADMIN" } }),
     ]);
     const direct = await internalChat.openDirectChat(recipient.id, sender);
     const png = Buffer.concat([

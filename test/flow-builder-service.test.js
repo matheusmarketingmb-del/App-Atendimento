@@ -42,10 +42,10 @@ async function cleanupData() {
 test.before(async () => {
   await cleanupData();
   await prisma.user.deleteMany({ where: { email: { in: [masterEmail, agentEmail] } } });
-  master = await prisma.user.create({ data: { name: "Master FB", email: masterEmail, role: "ADMIN" } });
-  agent = await prisma.user.create({ data: { name: "Ana Suporte", email: agentEmail, role: "ATENDENTE" } });
-  support = await prisma.category.findUnique({ where: { code: "SUPORTE" } });
-  commercial = await prisma.category.findUnique({ where: { code: "COMERCIAL" } });
+  master = await prisma.user.create({ data: { companyAccess: { create: { companyId: "cmp_mibro" } }, name: "Master FB", email: masterEmail, role: "ADMIN" } });
+  agent = await prisma.user.create({ data: { companyAccess: { create: { companyId: "cmp_mibro" } }, name: "Ana Suporte", email: agentEmail, role: "ATENDENTE" } });
+  support = await prisma.category.findUnique({ where: { companyId_code: { companyId: "cmp_mibro", code: "SUPORTE" } } });
+  commercial = await prisma.category.findUnique({ where: { companyId_code: { companyId: "cmp_mibro", code: "COMERCIAL" } } });
   await prisma.userCategoryAccess.create({ data: { userId: agent.id, categoryId: support.id } });
   await governance.reactivateAutomation(master);
 });
@@ -95,7 +95,7 @@ async function onlyThisBotResponds(botId) {
 }
 
 async function createReadyBot(name, graph = supportGraph()) {
-  const bot = await bots.createBot({ name: `${PREFIX} ${name}`, description: "teste", channels: ["META"] }, master);
+  const bot = await bots.createBot({ companyId: "cmp_mibro", name: `${PREFIX} ${name}`, description: "teste", channels: ["META"] }, master);
   await flows.saveDraft(bot.id, bot.createdFlowId, { graph }, master);
   await flows.publishFlow(bot.id, bot.createdFlowId, {}, master);
   await onlyThisBotResponds(bot.id);
@@ -114,7 +114,7 @@ async function incoming(phone, text, extra = {}) {
 }
 
 test("criar Bot já cria o fluxo principal, nasce FLOW_BUILDER e com auto-resposta DESLIGADA", async () => {
-  const bot = await bots.createBot({ name: `${PREFIX} Novo`, description: "Atendimento", channels: ["META"], executionMode: "LEGACY", type: "SYSTEM_TRIAGE" }, master);
+  const bot = await bots.createBot({ companyId: "cmp_mibro", name: `${PREFIX} Novo`, description: "Atendimento", channels: ["META"], executionMode: "LEGACY", type: "SYSTEM_TRIAGE" }, master);
   assert.ok(bot.createdFlowId);
   assert.equal(bot.autoReplyEnabled, false);
   assert.equal(bot.flows.length, 1);
@@ -123,7 +123,7 @@ test("criar Bot já cria o fluxo principal, nasce FLOW_BUILDER e com auto-respos
   assert.equal(row.executionMode, "FLOW_BUILDER");
   assert.equal(row.type, "STANDARD");
   await assert.rejects(() => bots.setAutoReply(bot.id, true, master), /Publique e ative o fluxo padrão/);
-  await assert.rejects(() => bots.createBot({ name: `${PREFIX} x`, channels: [] }, master), /pelo menos um canal/);
+  await assert.rejects(() => bots.createBot({ companyId: "cmp_mibro", name: `${PREFIX} x`, channels: [] }, master), /pelo menos um canal/);
   await assert.rejects(() => bots.listBots(agent), /Master/);
 });
 
@@ -290,7 +290,7 @@ test("Intervalo + Transferir para atendente: worker retoma o timer e atribui res
 });
 
 test("Ir para fluxo em produção: subfluxo publicado e ativo continua no mesmo turno", async () => {
-  const main = await bots.createBot({ name: `${PREFIX} Subfluxo`, channels: ["META"] }, master);
+  const main = await bots.createBot({ companyId: "cmp_mibro", name: `${PREFIX} Subfluxo`, channels: ["META"] }, master);
   const sub = await flows.createFlow(main.id, { name: "Suporte" }, master);
   await flows.saveDraft(main.id, sub.id, { graph: {
     nodes: [node("start", "start"), node("hi", "message", { text: "Você está no Suporte." }), node("end", "end", { finalizeConversation: false })],

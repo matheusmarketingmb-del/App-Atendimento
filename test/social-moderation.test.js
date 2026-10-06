@@ -22,11 +22,11 @@ let fbMessage;
 test.before(async () => {
   process.env.INTEGRATION_ENCRYPTION_KEY = process.env.INTEGRATION_ENCRYPTION_KEY || "66".repeat(32);
   await prisma.integrationGlobalSettings.upsert({ where: { id: "singleton" }, update: { newChannelsEnabled: true }, create: { id: "singleton", newChannelsEnabled: true } });
-  master = await prisma.user.create({ data: { name: "Master Moderação", email: `${prefix}-master@example.com`, role: "ADMIN" } });
-  attendant = await prisma.user.create({ data: { name: "Atendente Moderação", email: `${prefix}-atendente@example.com`, role: "ATENDENTE", canViewUncategorized: true } });
+  master = await prisma.user.create({ data: { companyAccess: { create: { companyId: "cmp_mibro" } }, name: "Master Moderação", email: `${prefix}-master@example.com`, role: "ADMIN" } });
+  attendant = await prisma.user.create({ data: { companyAccess: { create: { companyId: "cmp_mibro" } }, name: "Atendente Moderação", email: `${prefix}-atendente@example.com`, role: "ATENDENTE", canViewUncategorized: true } });
 
-  igAccount = await prisma.channelAccount.create({ data: { channel: "INSTAGRAM_COMMENTS", name: `${prefix}-ig`, status: "CONNECTED", enabled: true, config: { igUserId: "ig-user-mod" }, ...encryptSecrets({ igAccessToken: "ig-token" }) } });
-  fbAccount = await prisma.channelAccount.create({ data: { channel: "FACEBOOK_COMMENTS", name: `${prefix}-fb`, status: "CONNECTED", enabled: true, config: { pageId: "page-mod" }, ...encryptSecrets({ pageAccessToken: "page-token" }) } });
+  igAccount = await prisma.channelAccount.create({ data: { companyId: "cmp_mibro", channel: "INSTAGRAM_COMMENTS", name: `${prefix}-ig`, status: "CONNECTED", enabled: true, config: { igUserId: "ig-user-mod" }, ...encryptSecrets({ igAccessToken: "ig-token" }) } });
+  fbAccount = await prisma.channelAccount.create({ data: { companyId: "cmp_mibro", channel: "FACEBOOK_COMMENTS", name: `${prefix}-fb`, status: "CONNECTED", enabled: true, config: { pageId: "page-mod" }, ...encryptSecrets({ pageAccessToken: "page-token" }) } });
 
   const igPersisted = await persistInboundMessage({
     channel: "INSTAGRAM_COMMENTS", channelAccountId: igAccount.id, senderExternalId: "ig-user-mod-1", senderName: "Cliente IG",
@@ -68,7 +68,7 @@ test("ação inválida é rejeitada antes de qualquer chamada à Meta", async ()
 });
 
 test("moderação só é permitida em mensagens de canal de comentário público", async () => {
-  const account = await prisma.channelAccount.create({ data: { channel: "INSTAGRAM_DIRECT", name: `${prefix}-ig-direct`, status: "CONNECTED", enabled: true, config: { igUserId: "ig-dm" }, ...encryptSecrets({ igAccessToken: "t" }) } });
+  const account = await prisma.channelAccount.create({ data: { companyId: "cmp_mibro", channel: "INSTAGRAM_DIRECT", name: `${prefix}-ig-direct`, status: "CONNECTED", enabled: true, config: { igUserId: "ig-dm" }, ...encryptSecrets({ igAccessToken: "t" }) } });
   const persisted = await persistInboundMessage({
     channel: "INSTAGRAM_DIRECT", channelAccountId: account.id, senderExternalId: "igsid-mod-1", externalMessageId: "ig-dm-mod-1",
     direction: "RECEBIDA", type: "text", text: "oi", occurredAt: new Date(), metadata: { senderExternalId: "igsid-mod-1", externalMessageId: "ig-dm-mod-1" },

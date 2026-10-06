@@ -32,6 +32,11 @@ module.exports = {
     catch (error) { return next(error); }
   },
 
+  async createManagedAudio(req, res, next) {
+    try { return res.status(201).json(await quickReplies.createManagedAudio(req.body, req.file, req.user)); }
+    catch (error) { return next(error); }
+  },
+
   async createPersonalAudio(req, res, next) {
     try { return res.status(201).json(await quickReplies.createPersonalAudio(req.body, req.file, req.user)); }
     catch (error) { return next(error); }

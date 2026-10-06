@@ -27,7 +27,7 @@ test.after(async () => {
 });
 
 test("OAuth salva tokens cifrados, identidade automática e sobrevive a nova leitura", async () => {
-  const result = await accounts.saveOAuthConnection({
+  const result = await accounts.saveOAuthConnection({ companyId: "cmp_mibro",
     channel: "EMAIL", provider: "GOOGLE", preferredName: "OAuth Lifecycle Gmail",
     token: { access_token: "access-original", refresh_token: "refresh-original", expires_in: 3600, scope: "gmail.readonly gmail.send" },
     scopes: ["gmail.readonly", "gmail.send"],
@@ -41,7 +41,7 @@ test("OAuth salva tokens cifrados, identidade automática e sobrevive a nova lei
   assert.equal(stored.oauthProvider, "GOOGLE");
   assert.deepEqual(stored.oauthScopes, ["gmail.readonly", "gmail.send"]);
 
-  await accounts.saveOAuthConnection({
+  await accounts.saveOAuthConnection({ companyId: "cmp_mibro",
     accountId: stored.id, channel: "EMAIL", provider: "GOOGLE",
     token: { access_token: "access-reconnected", expires_in: 3600 },
     scopes: stored.oauthScopes,
@@ -54,7 +54,7 @@ test("OAuth salva tokens cifrados, identidade automática e sobrevive a nova lei
 });
 
 test("Meta mantém tokens fora do frontend e exige seleção quando há múltiplas páginas", async () => {
-  const result = await accounts.saveOAuthConnection({
+  const result = await accounts.saveOAuthConnection({ companyId: "cmp_mibro",
     channel: "FACEBOOK_MESSENGER", provider: "META", preferredName: "OAuth Lifecycle Meta",
     token: { access_token: "meta-user-token", expires_in: 3600 },
     scopes: ["pages_show_list", "pages_messaging"],
@@ -96,7 +96,7 @@ test("refresh automático atualiza token e falha muda status para RECONNECT_REQU
 
 test("provider inexistente e usuário sem RBAC são rejeitados", async () => {
   assert.throws(() => getOAuthProvider("INEXISTENTE"), /não está preparado/);
-  await assert.rejects(() => accounts.saveOAuthConnection({
+  await assert.rejects(() => accounts.saveOAuthConnection({ companyId: "cmp_mibro",
     channel: "EMAIL", provider: "GOOGLE", token: { access_token: "x" },
     candidates: [{ id: "x", name: "x", config: { provider: "GMAIL" } }],
   }, { id: "attendant", role: "ATENDENTE" }), (error) => error.statusCode === 403);

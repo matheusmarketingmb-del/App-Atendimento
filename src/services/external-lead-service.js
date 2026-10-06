@@ -64,7 +64,11 @@ async function registerExternalLead(payload) {
   const conversation = await prisma.conversation.findUnique({
     where: { id: result.message.conversationId },
   });
-  const commercial = await prisma.category.findUnique({ where: { code: "COMERCIAL" } });
+  // Lead da LP da Mibro entra pelo número original (Mibro) — o setor
+  // Comercial procurado é o da MESMA empresa da conversa.
+  const commercial = conversation
+    ? await prisma.category.findFirst({ where: { code: "COMERCIAL", companyId: conversation.companyId } })
+    : null;
   if (conversation && commercial && !conversation.categoryId) {
     await prisma.conversation.update({
       where: { id: conversation.id },

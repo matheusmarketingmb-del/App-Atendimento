@@ -17,7 +17,7 @@ function handle(fn, status = 200) {
 
 module.exports = {
   observation: handle((req) => require("../services/bot-question-answer-observation").observation(req.params.botId, req.user)),
-  list: handle((req) => bots.listBots(req.user)),
+  list: handle((req) => bots.listBots(req.user, { company: req.query.company })),
   create: handle((req) => bots.createBot(req.body || {}, req.user), 201),
   detail: handle((req) => bots.getBot(req.params.botId, req.user)),
   update: handle((req) => bots.updateBot(req.params.botId, req.body || {}, req.user)),
@@ -37,7 +37,7 @@ module.exports = {
   pauseBot: handle((req) => pause.pauseBot(req.params.conversationId, req.user)),
   resumeBot: handle((req) => pause.resumeBot(req.params.conversationId, req.user)),
 
-  listResponses: handle((req) => responses.listResponses(req.user)),
+  listResponses: handle((req) => responses.listResponses(req.user, { company: req.query.company })),
   createResponse: handle((req) => responses.createResponse(req.body || {}, req.user), 201),
   updateResponse: handle((req) => responses.updateResponse(req.params.responseId, req.body || {}, req.user)),
   deleteResponse: handle((req) => responses.deleteResponse(req.params.responseId, req.user)),

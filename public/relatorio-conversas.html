@@ -11,7 +11,7 @@
 </head>
 <body class="rp-body">
   <header class="rp-topbar">
-    <a class="rp-brand" href="/"><img src="/assets/mibro-logo.png" alt="Mibro"><small>Relatório de Conversas</small></a>
+    <a class="rp-brand" href="/"><img src="/assets/central-mark.svg" alt="Central de Atendimento"><small>Relatório de Conversas</small></a>
     <a class="rp-back" href="/configuracoes.html">&larr; Configurações</a>
     <div class="rp-topbar-right">
       <button id="theme-toggle" class="rp-icon-btn" type="button" title="Alternar tema">&#9790;</button>
@@ -34,6 +34,7 @@
       </select>
       <input id="f-start" type="date" hidden>
       <input id="f-end" type="date" hidden>
+      <select id="f-company"><option value="">Empresa: todas</option></select>
       <select id="f-agent"><option value="">Vendedor: todos</option></select>
       <select id="f-channel"><option value="">Canal: todos</option></select>
       <select id="f-category"><option value="">Categoria: todas</option></select>
@@ -74,6 +75,10 @@
           <svg id="status-donut" width="180" height="180" viewBox="0 0 180 180"></svg>
           <div class="rp-donut-list" id="status-list"></div>
         </div>
+      </section>
+      <section class="rp-card">
+        <div class="rp-card-head"><div><h3>Conversas por empresa</h3><p>"Todas" soma as empresas; aqui a quebra por empresa (abertas · resolvidas · 1ª resposta média).</p></div></div>
+        <div class="rp-rank" id="company-rank"></div>
       </section>
       <section class="rp-card">
         <div class="rp-card-head"><div><h3>Conversas por canal</h3><p>Quantidade, resolvidas e 1ª resposta média.</p></div></div>

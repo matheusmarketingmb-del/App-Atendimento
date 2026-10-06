@@ -14,9 +14,9 @@ let attendant;
 test.before(async () => {
   originalSettings = await settingsService.getConversationSettings();
   [admin, supervisor, attendant] = await Promise.all([
-    prisma.user.create({ data: { name: "Admin Teste", email: testEmails[0], role: "ADMIN" } }),
-    prisma.user.create({ data: { name: "Supervisor Teste", email: testEmails[1], role: "SUPERVISOR" } }),
-    prisma.user.create({ data: { name: "Atendente Teste", email: testEmails[2], role: "ATENDENTE" } }),
+    prisma.user.create({ data: { companyAccess: { create: { companyId: "cmp_mibro" } }, name: "Admin Teste", email: testEmails[0], role: "ADMIN" } }),
+    prisma.user.create({ data: { companyAccess: { create: { companyId: "cmp_mibro" } }, name: "Supervisor Teste", email: testEmails[1], role: "SUPERVISOR" } }),
+    prisma.user.create({ data: { companyAccess: { create: { companyId: "cmp_mibro" } }, name: "Atendente Teste", email: testEmails[2], role: "ATENDENTE" } }),
   ]);
 });
 

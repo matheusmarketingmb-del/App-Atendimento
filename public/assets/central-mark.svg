@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 40" role="img" aria-label="Central de Atendimento">
+  <!-- Marca neutra da central multiempresa (cinza médio: legível no tema claro e no escuro). -->
+  <g fill="none" stroke="#8a8e97" stroke-width="2.6" stroke-linejoin="round">
+    <path d="M6 9.5a5 5 0 0 1 5-5h15a5 5 0 0 1 5 5v9a5 5 0 0 1-5 5h-9l-6 5v-5a5 5 0 0 1-5-5z"/>
+    <path d="M35 15.5h2a5 5 0 0 1 5 5v8a5 5 0 0 1-5 5v4.5l-5.5-4.5H24a5 5 0 0 1-5-5v-1" opacity=".55"/>
+  </g>
+  <text x="52" y="27.5" fill="#8a8e97" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="21" font-weight="700" letter-spacing=".5">Central</text>
+</svg>

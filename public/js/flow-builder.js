@@ -1046,6 +1046,16 @@
   function renderHeader() {
     const flow = state.flow;
     $("#fb-bot-name").textContent = state.bot ? `Bot • ${state.bot.name}` : "";
+    // Empresa do Bot sempre clara no editor (só setores/respostas dela são válidos).
+    const company = state.options?.bot?.company;
+    if (company && state.bot) {
+      const badge = document.createElement("span");
+      badge.className = "company-badge fb-company-badge";
+      badge.textContent = company.displayName;
+      badge.title = `Bot da empresa ${company.name} — só roda em conversas dela`;
+      if (/^#[0-9a-f]{6}$/i.test(company.primaryColor || "")) badge.style.setProperty("--company-color", company.primaryColor);
+      $("#fb-bot-name").append(" ", badge);
+    }
     $("#back-to-bot").href = `/bots?botId=${encodeURIComponent(botId)}`;
     $("#fb-bot-settings").href = `/bots?botId=${encodeURIComponent(botId)}`;
     $("#fb-flow-select").innerHTML = state.flows.map((item) => `<option value="${item.id}" ${item.id === flow?.id ? "selected" : ""}>${escapeHtml(item.name)}${item.isDefault ? " (padrão)" : ""}</option>`).join("");

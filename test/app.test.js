@@ -121,28 +121,28 @@ test("entrega o painel e as APIs básicas da caixa de entrada", async () => {
     const users = await fetch(`${base}/api/users`, { headers: { Cookie: cookie } });
     assert.equal(users.status, 200);
     assert.equal((await users.json())[0].email, "admin@teste.local");
-    const createdCategory = await fetch(`${base}/api/categories`, { method: "POST", headers: { Cookie: cookie, "Content-Type": "application/json" }, body: JSON.stringify({ name: "Categoria API Teste", color: "#ef5b2a" }) });
+    const createdCategory = await fetch(`${base}/api/categories`, { method: "POST", headers: { Cookie: cookie, "Content-Type": "application/json" }, body: JSON.stringify({ companyId: "cmp_mibro", name: "Categoria API Teste", color: "#ef5b2a" }) });
     assert.equal(createdCategory.status, 201);
     assert.equal((await createdCategory.json()).name, "Categoria API Teste");
-    const support = await prisma.category.findUnique({ where: { code: "SUPORTE" } });
-    const commercial = await prisma.category.findUnique({ where: { code: "COMERCIAL" } });
-    const supportChild = await prisma.category.create({ data: {
+    const support = await prisma.category.findUnique({ where: { companyId_code: { companyId: "cmp_mibro", code: "SUPORTE" } } });
+    const commercial = await prisma.category.findUnique({ where: { companyId_code: { companyId: "cmp_mibro", code: "COMERCIAL" } } });
+    const supportChild = await prisma.category.create({ data: { companyId: "cmp_mibro",
       code: "SUPORTE_PERMISSAO_TESTE", name: "Suporte permissão teste", color: "#ef5b2a",
       displayOrder: 999, parentId: support.id,
     } });
-    const createAgent = await fetch(`${base}/api/admin/users`, { method: "POST", headers: { Cookie: cookie, "Content-Type": "application/json" }, body: JSON.stringify({
+    const createAgent = await fetch(`${base}/api/admin/users`, { method: "POST", headers: { Cookie: cookie, "Content-Type": "application/json" }, body: JSON.stringify({ companyAccess: [{ companyId: "cmp_mibro" }],
       name: "Agente Restrito", email: "agente@teste.local", password: "senha-agente-123", role: "ATENDENTE",
       categoryIds: [support.id], canViewUncategorized: false,
     }) });
     assert.equal(createAgent.status, 201);
     const createdAgent = await createAgent.json();
     assert.equal(createdAgent.passwordHash, undefined);
-    const supportContact = await prisma.contact.create({ data: { externalId: "app-support", phone: "551100000001", name: "Cliente Suporte" } });
-    const commercialContact = await prisma.contact.create({ data: { externalId: "app-commercial", phone: "551100000002", name: "Cliente Comercial" } });
-    const supportChildContact = await prisma.contact.create({ data: { externalId: "app-support-child", phone: "551100000003", name: "Cliente Subcategoria" } });
-    const supportConversation = await prisma.conversation.create({ data: { contactId: supportContact.id, categoryId: support.id, assignedUserId: createdAgent.id } });
-    const commercialConversation = await prisma.conversation.create({ data: { contactId: commercialContact.id, categoryId: commercial.id } });
-    const supportChildConversation = await prisma.conversation.create({ data: { contactId: supportChildContact.id, categoryId: supportChild.id } });
+    const supportContact = await prisma.contact.create({ data: { companyId: "cmp_mibro", externalId: "app-support", phone: "551100000001", name: "Cliente Suporte" } });
+    const commercialContact = await prisma.contact.create({ data: { companyId: "cmp_mibro", externalId: "app-commercial", phone: "551100000002", name: "Cliente Comercial" } });
+    const supportChildContact = await prisma.contact.create({ data: { companyId: "cmp_mibro", externalId: "app-support-child", phone: "551100000003", name: "Cliente Subcategoria" } });
+    const supportConversation = await prisma.conversation.create({ data: { companyId: "cmp_mibro", contactId: supportContact.id, categoryId: support.id, assignedUserId: createdAgent.id } });
+    const commercialConversation = await prisma.conversation.create({ data: { companyId: "cmp_mibro", contactId: commercialContact.id, categoryId: commercial.id } });
+    const supportChildConversation = await prisma.conversation.create({ data: { companyId: "cmp_mibro", contactId: supportChildContact.id, categoryId: supportChild.id } });
     const agentLogin = await fetch(`${base}/api/auth/login`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: "agente@teste.local", password: "senha-agente-123" }) });
     assert.equal(agentLogin.status, 200);
     const agentCookie = agentLogin.headers.get("set-cookie").split(";")[0];
@@ -171,7 +171,7 @@ test("entrega o painel e as APIs básicas da caixa de entrada", async () => {
     const authorizedConversation = await authorizedHistory.json();
     assert.equal(authorizedConversation.canViewHistory, true);
     assert.ok(Array.isArray(authorizedConversation.activities));
-    assert.equal((await fetch(`${base}/api/categories`, { method: "POST", headers: { Cookie: agentCookie, "Content-Type": "application/json" }, body: JSON.stringify({ name: "Sem permissão" }) })).status, 403);
+    assert.equal((await fetch(`${base}/api/categories`, { method: "POST", headers: { Cookie: agentCookie, "Content-Type": "application/json" }, body: JSON.stringify({ companyId: "cmp_mibro", name: "Sem permissão" }) })).status, 403);
     const imageForm = new FormData();
     imageForm.append("image", new Blob([Buffer.from([0xff, 0xd8, 0xff, 0x00])], { type: "image/jpeg" }), "teste.jpg");
     const missingConversationImage = await fetch(`${base}/api/conversations/inexistente/images`, { method: "POST", headers: { Cookie: cookie }, body: imageForm });

@@ -115,12 +115,18 @@ async function notifyIncomingMessage(message) {
   try {
     const conversation = await prisma.conversation.findUnique({
       where: { id: message.conversationId },
-      select: { assignedUserId: true, contact: { select: { customName: true, name: true, phone: true } } },
+      select: {
+        assignedUserId: true, contact: { select: { customName: true, name: true, phone: true } },
+        company: { select: { displayName: true, slug: true } },
+      },
     });
     if (!conversation?.assignedUserId) return;
     const contactName = conversation.contact?.customName || conversation.contact?.name || conversation.contact?.phone || "Cliente";
+    // Multiempresa (item 43): toda notificação de cliente diz a empresa.
+    const companyLabel = conversation.company?.displayName ? `${conversation.company.displayName} · ` : "";
     await notifyUser(conversation.assignedUserId, {
-      title: contactName,
+      title: `${companyLabel}${contactName}`,
+      company: conversation.company?.slug || null,
       body: message.type === "text" ? (message.text || "Nova mensagem").slice(0, 140) : "Enviou uma nova mensagem",
       tag: `conversation-${message.conversationId}`,
       url: `/?conversation=${encodeURIComponent(message.conversationId)}`,

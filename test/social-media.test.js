@@ -24,7 +24,7 @@ test.before(async () => {
   process.env.PUBLIC_APP_URL = "https://central.example.com";
   await prisma.integrationGlobalSettings.upsert({ where: { id: "singleton" }, update: { newChannelsEnabled: true }, create: { id: "singleton", newChannelsEnabled: true } });
   account = await prisma.channelAccount.create({
-    data: { channel: "INSTAGRAM_DIRECT", name: `${prefix}-ig-direct`, status: "CONNECTED", enabled: true, config: { igUserId: "ig-user-media" }, ...encryptSecrets({ igAccessToken: "ig-token" }) },
+    data: { companyId: "cmp_mibro", channel: "INSTAGRAM_DIRECT", name: `${prefix}-ig-direct`, status: "CONNECTED", enabled: true, config: { igUserId: "ig-user-media" }, ...encryptSecrets({ igAccessToken: "ig-token" }) },
   });
   const persisted = await persistInboundMessage({
     channel: "INSTAGRAM_DIRECT", channelAccountId: account.id, senderExternalId: "igsid-media-1", senderName: "Cliente Mídia",

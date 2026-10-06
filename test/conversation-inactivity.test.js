@@ -18,32 +18,32 @@ test.after(async () => {
 test("finaliza após 24 horas somente quando a equipe aguarda o cliente", async () => {
   const now = new Date("2026-08-13T15:30:00.000Z");
   const old = new Date("2026-08-12T15:29:00.000Z");
-  const support = await prisma.category.findUnique({ where: { code: "SUPORTE" } });
+  const support = await prisma.category.findUnique({ where: { companyId_code: { companyId: "cmp_mibro", code: "SUPORTE" } } });
   const outgoingContact = await prisma.contact.create({
-    data: { externalId: testContacts[0], phone: "5511977770001", name: "Cliente sem retorno" },
+    data: { companyId: "cmp_mibro", externalId: testContacts[0], phone: "5511977770001", name: "Cliente sem retorno" },
   });
   const incomingContact = await prisma.contact.create({
-    data: { externalId: testContacts[1], phone: "5511977770002", name: "Cliente aguardando equipe" },
+    data: { companyId: "cmp_mibro", externalId: testContacts[1], phone: "5511977770002", name: "Cliente aguardando equipe" },
   });
   const routingContact = await prisma.contact.create({
-    data: { externalId: testContacts[2], phone: "5511977770003", name: "Cliente recém-encaminhado" },
+    data: { companyId: "cmp_mibro", externalId: testContacts[2], phone: "5511977770003", name: "Cliente recém-encaminhado" },
   });
   const flowContact = await prisma.contact.create({
-    data: { externalId: testContacts[3], phone: "5511977770004", name: "Cliente transferido pelo fluxo" },
+    data: { companyId: "cmp_mibro", externalId: testContacts[3], phone: "5511977770004", name: "Cliente transferido pelo fluxo" },
   });
   await prisma.user.deleteMany({ where: { email: lastAgentEmail } });
-  const lastAgent = await prisma.user.create({ data: { name: "Último atendente", email: lastAgentEmail, role: "ATENDENTE" } });
+  const lastAgent = await prisma.user.create({ data: { companyAccess: { create: { companyId: "cmp_mibro" } }, name: "Último atendente", email: lastAgentEmail, role: "ATENDENTE" } });
   const outgoingConversation = await prisma.conversation.create({
-    data: { contactId: outgoingContact.id, categoryId: support.id, assignedUserId: lastAgent.id, status: "EM_ATENDIMENTO", lastMessageAt: old },
+    data: { companyId: "cmp_mibro", contactId: outgoingContact.id, categoryId: support.id, assignedUserId: lastAgent.id, status: "EM_ATENDIMENTO", lastMessageAt: old },
   });
   const incomingConversation = await prisma.conversation.create({
-    data: { contactId: incomingContact.id, categoryId: support.id, status: "AGUARDANDO_EQUIPE", lastMessageAt: old },
+    data: { companyId: "cmp_mibro", contactId: incomingContact.id, categoryId: support.id, status: "AGUARDANDO_EQUIPE", lastMessageAt: old },
   });
   const routingConversation = await prisma.conversation.create({
-    data: { contactId: routingContact.id, categoryId: support.id, status: "NOVO", lastMessageAt: old },
+    data: { companyId: "cmp_mibro", contactId: routingContact.id, categoryId: support.id, status: "NOVO", lastMessageAt: old },
   });
   const flowConversation = await prisma.conversation.create({
-    data: { contactId: flowContact.id, categoryId: support.id, status: "NOVO", lastMessageAt: old },
+    data: { companyId: "cmp_mibro", contactId: flowContact.id, categoryId: support.id, status: "NOVO", lastMessageAt: old },
   });
   await prisma.message.createMany({ data: [
     { conversationId: flowConversation.id, direction: "ENVIADA", status: "ENVIADA", type: "text", text: "Vou te passar para o Suporte", occurredAt: old, rawPayload: { system: "visual_flow", flowHandoff: true } },
@@ -71,7 +71,7 @@ test("finaliza após 24 horas somente quando a equipe aguarda o cliente", async 
 });
 
 test("nova mensagem em conversa finalizada remove setor para reiniciar a triagem", async () => {
-  const support = await prisma.category.findUnique({ where: { code: "SUPORTE" } });
+  const support = await prisma.category.findUnique({ where: { companyId_code: { companyId: "cmp_mibro", code: "SUPORTE" } } });
   const conversation = await prisma.conversation.findFirst({
     where: { contact: { externalId: testContacts[0] } },
   });

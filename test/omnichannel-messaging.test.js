@@ -17,11 +17,11 @@ test.before(async () => {
   await prisma.contact.deleteMany({ where: { channel: { in: ["MERCADO_LIVRE", "GOOGLE_REVIEWS", "RECLAME_AQUI", "EMAIL"] } } });
   await prisma.channelAccount.deleteMany({ where: { name: { startsWith: "Teste Mensageria" } } });
   await prisma.channelAccount.createMany({ data: [
-    { channel: "MERCADO_LIVRE", name: "Teste Mensageria ML 1", enabled: true },
-    { channel: "MERCADO_LIVRE", name: "Teste Mensageria ML 2", enabled: true },
-    { channel: "GOOGLE_REVIEWS", name: "Teste Mensageria Google", enabled: true },
-    { channel: "RECLAME_AQUI", name: "Teste Mensageria RA", enabled: true },
-    { channel: "EMAIL", name: "Teste Mensageria Email", enabled: true },
+    { companyId: "cmp_mibro", channel: "MERCADO_LIVRE", name: "Teste Mensageria ML 1", enabled: true },
+    { companyId: "cmp_mibro", channel: "MERCADO_LIVRE", name: "Teste Mensageria ML 2", enabled: true },
+    { companyId: "cmp_mibro", channel: "GOOGLE_REVIEWS", name: "Teste Mensageria Google", enabled: true },
+    { companyId: "cmp_mibro", channel: "RECLAME_AQUI", name: "Teste Mensageria RA", enabled: true },
+    { companyId: "cmp_mibro", channel: "EMAIL", name: "Teste Mensageria Email", enabled: true },
   ] });
   const accounts = await prisma.channelAccount.findMany({ where: { name: { startsWith: "Teste Mensageria" } } });
   for (const account of accounts) accountIds[account.name] = account.id;
