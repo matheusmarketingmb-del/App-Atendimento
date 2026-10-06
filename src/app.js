@@ -497,6 +497,7 @@ app.post(
   app.post("/api/bots", botController.create);
   app.get("/api/bots-legacy", botController.legacyBots);
   app.get("/api/bots/:botId", botController.detail);
+  app.get("/api/bots/:botId/observation", botController.observation);
   app.patch("/api/bots/:botId", botController.update);
   app.patch("/api/bots/:botId/status", botController.status);
   app.patch("/api/bots/:botId/auto-reply", botController.autoReply);

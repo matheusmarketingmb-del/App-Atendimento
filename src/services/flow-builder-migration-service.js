@@ -1,22 +1,6 @@
-// Migração do Bot de Triagem (type SYSTEM_TRIAGE, antes executado por
-// triage-bot-service.js — arquivado em _archive/bot-legacy/) para um fluxo
-// visual equivalente. Idempotente: só age se o Bot de Triagem ainda não
-// tiver nenhum fluxo. Nunca apaga nada e NUNCA liga a resposta automática —
-// o fluxo nasce publicado, mas o Master liga o Bot depois de validar no
-// simulador.
-//
-// Equivalência com a triagem antiga:
-//   Início -> Condição (dentro do horário/feriado?)
-//     não -> Mensagem "fora do horário" -> Menu de setores   (*)
-//     sim -> Menu de setores (lista interativa do WhatsApp)
-//   cada opção -> Transferir para o setor (mensagem de encaminhamento)
-//   opção Atendimento -> Pergunta "o que você precisa?" -> Condições por
-//     palavra-chave (mesmas listas do código antigo) -> Transferir para o
-//     setor correspondente; sem correspondência -> fica em Atendimento.
-// (*) Diferença consciente: a triagem antiga não mostrava o menu fora do
-// horário (só reenviava na próxima mensagem dentro do horário). Aqui o
-// cliente já escolhe o setor e a conversa fica na fila dele para o próximo
-// expediente. Ajustável no editor (troque a saída por Finalizar).
+// Migração seletiva de Triagem Inicial e Assistente Mibro Brasil.
+// Preserva histórico, rascunhos e os estados de ativação existentes.
+// Horários e mensagens são lidos da configuração, a cada turno.
 const prisma = require("../database/prisma");
 const audit = require("./audit-service");
 const { validateGraph } = require("./bot-visual-flow-graph");
@@ -40,33 +24,49 @@ function convertTemplate(template, { categoryName } = {}) {
     .replace(/\{\{\s*saudacao_virgula\s*\}\}/g, "{{contact.greetingComma}}")
     .replace(/\{\{\s*saudacao\s*\}\}/g, "{{contact.greeting}}")
     .replace(/\{\{\s*horario\s*\}\}/g, "{{bot.businessHours}}")
-    .replace(/\{\{\s*categoria\s*\}\}/g, categoryName || "");
+    .replace(/\{\{\s*categoria\s*\}\}/g, categoryName || "{{bot.categoryName}}");
 }
 
 function buildTriageGraph(bot, categoriesByCode) {
-  const options = (bot.triageOptions || []).filter((option) => option.enabled && option.category?.active);
+  const allOptions = (bot.triageOptions || []).filter((option) => option.enabled && option.category?.active && !option.category.masterOnly);
+  const options = allOptions.filter((option) => !allOptions.some((parent) => parent.category.id === option.category.parentId));
   const nodes = [];
   const edges = [];
   const edge = (source, sourceHandle, target) => edges.push({ id: `${source}:${sourceHandle}->${target}`, source, sourceHandle, target });
   const node = (key, type, name, x, y, config) => nodes.push({ key, type, name, x, y, config });
 
   node("start", "start", "Início", 40, 260, { trigger: "NEW_CONVERSATION", channels: [], categoryId: null, initialMessage: "" });
-  node("hours", "condition", "Dentro do horário?", 300, 260, { match: "ALL", rules: [{ left: "bot.withinBusinessHours", operator: "==", right: "true" }] });
-  node("outside", "message", "Fora do horário", 560, 420, { source: "TEXT", text: convertTemplate(bot.outsideHoursMessage), responseKey: "" });
   node("menu", "menu", "Menu de setores", 820, 260, {
-    text: convertTemplate(bot.initialMessage), display: "LIST", buttonLabel: "Escolher setor",
+    text: "{{bot.initialMessage}}", display: "LIST", buttonLabel: "Escolher setor",
     variable: "flow.selectedOption", invalidMessage: "", maxAttempts: 3,
-    options: options.map((option, index) => ({ id: `o${index + 1}`, label: option.label.slice(0, 120), keywords: [] })),
+    options: options.map((option, index) => ({ id: `o${index + 1}`, label: option.label.slice(0, 120), categoryId: option.category.id, categoryIds: [option.category.id, ...allOptions.filter((child) => child.category.parentId === option.category.id).map((child) => child.category.id)], keywords: [] })),
   });
-  edge("start", "next", "hours");
-  edge("hours", "true", "menu");
-  edge("hours", "false", "outside");
-  edge("outside", "next", "menu");
+  edge("start", "next", "menu");
 
   let y = 40;
   options.forEach((option, index) => {
     const handle = `opt:o${index + 1}`;
     const category = option.category;
+    const children = allOptions.filter((item) => item.category.parentId === category.id);
+    if (children.length) {
+      const submenu = `submenu_${index + 1}`;
+      node(submenu, "menu", category.name, 1120, y, {
+        text: `Escolha uma opção de ${category.name}:`, display: "LIST", buttonLabel: "Ver opções",
+        variable: "flow.selectedOption", maxAttempts: 3,
+        options: [...children.map((item, i) => ({ id: `child${i + 1}`, label: item.label, categoryId: item.category.id, categoryIds: [category.id, item.category.id] })), { id: "back", label: "Voltar" }],
+      });
+      edge("menu", handle, submenu);
+      edge(submenu, "opt:back", "menu");
+      children.forEach((item, i) => {
+        const key = `child_to_${index + 1}_${i + 1}`;
+        node(key, "transfer_category", item.category.name, 1400, y + i * 170, {
+          categoryId: item.category.id, message: "{{bot.handoffMessage}}", reason: "Triagem",
+        });
+        edge(submenu, `opt:child${i + 1}`, key);
+      });
+      y += children.length * 170 + 100;
+      return;
+    }
     if (category.code === ATENDIMENTO_CODE) {
       node("atd_ask", "question", "O que você precisa?", 1120, y, {
         text: ATENDIMENTO_ASK_MESSAGE, variable: "flow.atendimentoNeed", answerType: "TEXT", invalidMessage: "", maxAttempts: 3,
@@ -96,7 +96,7 @@ function buildTriageGraph(bot, categoriesByCode) {
     } else {
       const key = `to_${index + 1}`;
       node(key, "transfer_category", `Para ${category.name}`, 1120, y, {
-        categoryId: category.id, message: convertTemplate(bot.handoffMessage, { categoryName: category.name }), reason: "Triagem",
+        categoryId: category.id, message: "{{bot.handoffMessage}}", reason: "Triagem",
       });
       edge("menu", handle, key);
       y += 170;
@@ -106,48 +106,104 @@ function buildTriageGraph(bot, categoriesByCode) {
 }
 
 async function ensureTriageFlow({ client = prisma, log = console } = {}) {
-  const bot = await client.bot.findFirst({
-    where: { type: "SYSTEM_TRIAGE", archivedAt: null },
-    include: {
-      triageOptions: { orderBy: [{ order: "asc" }, { createdAt: "asc" }], include: { category: { select: { id: true, name: true, code: true, active: true } } } },
-      visualFlows: { select: { id: true } },
-    },
-    orderBy: { createdAt: "asc" },
-  });
-  if (!bot) return { migrated: false, reason: "NO_TRIAGE_BOT" };
-  if (bot.visualFlows.length) return { migrated: false, reason: "ALREADY_HAS_FLOW", botId: bot.id };
-
-  const categories = await client.category.findMany({ where: { active: true }, select: { id: true, name: true, code: true } });
-  const graph = buildTriageGraph(bot, new Map(categories.map((category) => [category.code, category])));
-  const categoryIds = new Set(categories.map((category) => category.id));
-  for (const option of bot.triageOptions) if (option.category?.active) categoryIds.add(option.category.id);
-  const { valid, errors, graph: normalized } = validateGraph(graph, { categoryIds });
-
-  const result = await client.$transaction(async (transaction) => {
-    const flow = await transaction.botFlow.create({
-      data: {
-        botId: bot.id, name: "Triagem", description: "Convertido automaticamente do Bot de Triagem antigo (menu de setores).",
-        draftGraph: normalized, isDefault: true, createdByName: "Migração automática", updatedByName: "Migração automática",
-      },
-    });
-    let version = null;
-    if (valid) {
-      version = await transaction.botFlowVersion.create({
-        data: { flowId: flow.id, version: 1, graph: normalized, label: "Conversão da triagem antiga", publishedByName: "Migração automática" },
-      });
-      await transaction.botFlow.update({ where: { id: flow.id }, data: { activeVersionId: version.id, status: "ACTIVE" } });
-    }
-    // Resposta automática fica DESLIGADA — o Master liga em Bots após testar.
-    await transaction.bot.update({ where: { id: bot.id }, data: { executionMode: "FLOW_BUILDER", autoReplyEnabled: false } });
-    await audit.recordAudit({
-      actor: null, action: "BOT_TRIAGE_MIGRATED_TO_FLOW", entityType: "BOT", entityId: bot.id,
-      summary: `Bot de Triagem convertido para o fluxo visual "Triagem"${valid ? " (v1 publicada, resposta automática desligada)" : " (rascunho com pendências)"}`,
-      details: { flowId: flow.id, published: valid, errors: valid ? [] : errors.slice(0, 20) },
-    }, transaction);
-    return { flowId: flow.id, published: valid, version: version?.version || null };
-  });
-  log.info?.(`[BOT_FLOW] Bot de Triagem convertido para fluxo visual (flow=${result.flowId}, publicado=${result.published}). Resposta automática desligada até o Master ligar.`);
-  return { migrated: true, botId: bot.id, ...result, errors: valid ? [] : errors };
+  return ensureQuestionAnswerBots({ client, log });
 }
 
-module.exports = { ATENDIMENTO_ROUTING, buildTriageGraph, convertTemplate, ensureTriageFlow };
+function buildAssistantGraph(bot) {
+  const intents = (bot.intents || []).filter((intent) => intent.active);
+  const nodes = [{ key: "start", type: "start", name: "Início", config: { trigger: "NEW_CONVERSATION", channels: [], initialMessage: "" } }];
+  const edges = [];
+  const link = (source, sourceHandle, target) => edges.push({ id: `${source}:${sourceHandle}:${target}`, source, sourceHandle, target });
+  const add = (key, type, name, config) => nodes.push({ key, type, name, x: 300 + nodes.length * 45, y: nodes.length * 90, config });
+  add("menu", "menu", "Perguntas e respostas", {
+    text: "{{bot.initialMessage}}", display: "LIST", variable: "flow.selectedOption", maxAttempts: 3,
+    options: intents.map((intent, i) => ({ id: `i${i}`, label: intent.name.slice(0, 120), keywords: (intent.examples || []).map((example) => example.text || example.example).filter(Boolean) })),
+  });
+  add("fallback", "human_handoff", "Continuar com a equipe", { message: "{{bot.fallbackMessage}}", reason: "Sem resposta configurada no modelo de perguntas e respostas" });
+  link("start", "next", intents.length ? "menu" : "fallback");
+  if (intents.length) link("menu", "invalid", "fallback");
+  intents.forEach((intent, i) => {
+    const steps = (intent.flowSteps || []).filter((step) => step.active).sort((a, b) => a.order - b.order);
+    const keyFor = (step) => `i${i}_${step.id}`;
+    if (!steps.length) {
+      const key = `answer${i}`;
+      add(key, intent.responseMessage ? "message" : "human_handoff", intent.name,
+        intent.responseMessage ? { source: "TEXT", text: convertTemplate(intent.responseMessage) } : { message: "{{bot.fallbackMessage}}", categoryId: intent.categoryId, reason: "Resposta não configurada" });
+      link("menu", `opt:i${i}`, key);
+      if (!intent.responseMessage) {
+        const question = `question${i}`;
+        add(question, "question", intent.name, { text: `Conte um pouco mais sobre ${intent.name.toLocaleLowerCase("pt-BR")}.`, variable: `customer.answer${i}`, answerType: "TEXT", maxAttempts: 3 });
+        edges.find((edge) => edge.source === "menu" && edge.sourceHandle === `opt:i${i}`).target = question;
+        link(question, "next", key);
+      }
+      if (intent.responseMessage) {
+        const end = `end${i}`;
+        add(end, intent.categoryId ? "transfer_category" : "end", "Concluir", intent.categoryId ? { categoryId: intent.categoryId, message: "{{bot.handoffMessage}}" } : { finalizeConversation: false });
+        link(key, "next", end);
+      }
+      return;
+    }
+    link("menu", `opt:i${i}`, keyFor(steps[0]));
+    steps.forEach((step, position) => {
+      const next = steps.find((item) => item.id === step.nextStepId) || steps[position + 1];
+      const key = keyFor(step);
+      if (step.action === "ASK_QUESTION") {
+        add(key, "question", step.name, { text: convertTemplate(step.question), variable: `customer.answer${i}_${position}`, answerType: "TEXT", maxAttempts: step.maxAttempts });
+      } else if (step.action === "RESPOND") {
+        add(key, "message", step.name, { source: "TEXT", text: convertTemplate(step.responseMessage) });
+      } else if (step.action === "RESOLVED") {
+        add(key, "end", step.name, { message: convertTemplate(step.responseMessage), finalizeConversation: false });
+      } else {
+        // Knowledge/tools are not converted into invented answers. Keep the original rows and hand off safely.
+        add(key, "human_handoff", step.name, { message: convertTemplate(step.responseMessage || bot.fallbackMessage), categoryId: intent.categoryId, reason: "Etapa antiga requer revisão manual (sem IA ou consulta automática)" });
+      }
+      if (["ASK_QUESTION", "RESPOND"].includes(step.action)) link(key, "next", next ? keyFor(next) : "fallback");
+    });
+  });
+  return { nodes: intents.length ? nodes : nodes.filter((node) => node.key !== "menu"), edges };
+}
+
+async function ensureQuestionAnswerBots({ client = prisma, log = console } = {}) {
+  const bots = await client.bot.findMany({
+    where: { archivedAt: null },
+    include: {
+      triageOptions: { orderBy: { order: "asc" }, include: { category: true } },
+      intents: { include: { examples: true, flowSteps: true }, orderBy: { priority: "desc" } },
+      visualFlows: { select: { id: true, activeVersionId: true, isDefault: true } },
+    },
+  });
+  const selected = bots.filter((bot) => bot.id === "system-triage-bot" || bot.id === "mibro-assistant-observer" || ["Triagem Inicial", "Assistente Mibro Brasil"].includes(bot.name));
+  const pending = selected.filter((bot) => bot.featureFlags?.questionAnswerMigration !== 2 || !bot.visualFlows.some((flow) => flow.isDefault && flow.activeVersionId));
+  if (!pending.length) return { migrated: false, reason: "ALREADY_MIGRATED_OR_NOT_PRESENT" };
+  const categories = await client.category.findMany({ where: { active: true }, select: { id: true, name: true, code: true, masterOnly: true } });
+  const categoryIds = new Set(categories.map((category) => category.id));
+  const plans = pending.map((bot) => {
+    const graph = bot.type === "SYSTEM_TRIAGE" ? buildTriageGraph(bot, new Map(categories.filter((c) => !c.masterOnly).map((c) => [c.code, c]))) : buildAssistantGraph(bot);
+    const checked = validateGraph(graph, { categoryIds });
+    if (!checked.valid) throw new Error(`Conversão de ${bot.name} bloqueada: ${checked.errors.map((error) => error.message).join("; ")}`);
+    return { bot, graph: checked.graph };
+  });
+  await client.$transaction(async (transaction) => {
+    for (const { bot, graph } of plans) {
+      await transaction.botFlow.updateMany({ where: { botId: bot.id, isDefault: true }, data: { isDefault: false } });
+      const flow = await transaction.botFlow.create({ data: { botId: bot.id, name: "Perguntas e respostas", description: "Conversão preservando configurações e histórico", draftGraph: graph, isDefault: true } });
+      const version = await transaction.botFlowVersion.create({ data: { flowId: flow.id, version: 1, graph, label: "Conversão para perguntas e respostas" } });
+      await transaction.botFlow.update({ where: { id: flow.id }, data: { activeVersionId: version.id, status: "ACTIVE" } });
+      const flags = bot.featureFlags || {};
+      await transaction.bot.update({ where: { id: bot.id }, data: {
+        executionMode: "FLOW_BUILDER", status: flags.questionAnswerMigration ? bot.status : (flags.legacyStatusBeforeArchive || bot.status),
+        autoReplyEnabled: flags.questionAnswerMigration ? bot.autoReplyEnabled : (flags.legacyAutoReplyBeforeMigration ?? bot.autoReplyEnabled),
+        featureFlags: { ...flags, questionAnswerMigration: 2, availabilityManaged: true },
+      } });
+      await audit.recordAudit({ actor: null, action: "BOT_QUESTION_ANSWER_MIGRATED", entityType: "BOT", entityId: bot.id, summary: `Converteu ${bot.name}; configurações e dados antigos preservados`, details: { flowId: flow.id } }, transaction);
+    }
+    for (const bot of bots.filter((item) => !selected.some((selectedBot) => selectedBot.id === item.id) && item.status !== "ARCHIVED_LEGACY")) {
+      await transaction.bot.update({ where: { id: bot.id }, data: { status: "ARCHIVED_LEGACY", autoReplyEnabled: false, featureFlags: { ...(bot.featureFlags || {}), legacyStatusBeforeArchive: bot.status, legacyAutoReplyBeforeMigration: bot.autoReplyEnabled, legacyArchivedAt: new Date().toISOString() } } });
+    }
+  });
+  log.info?.(`[BOT_FLOW] ${plans.length} Bots convertidos; histórico preservado.`);
+  return { migrated: true, published: true, botIds: plans.map(({ bot }) => bot.id) };
+}
+
+
+module.exports = { ATENDIMENTO_ROUTING, buildTriageGraph, buildAssistantGraph, convertTemplate, ensureTriageFlow, ensureQuestionAnswerBots };

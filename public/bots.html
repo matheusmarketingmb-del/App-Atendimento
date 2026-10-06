@@ -9,6 +9,7 @@
   <script>try{const saved=localStorage.getItem("mibro-theme");document.documentElement.dataset.theme=saved||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light")}catch{}</script>
   <link rel="stylesheet" href="/css/skeleton.css">
   <link rel="stylesheet" href="/css/bots.css">
+  <link rel="stylesheet" href="/css/bot-question-answer.css">
   <script src="/js/feature-flags.js"></script>
 </head>
 <body>
@@ -35,10 +36,11 @@
 
     <section class="bots-workspace">
       <nav class="workspace-tabs">
-        <button type="button" class="tab-button active" data-tab="bot">Bot</button>
-        <button type="button" class="tab-button" data-tab="responses">Respostas do Bot</button>
-        <button type="button" class="tab-button" data-tab="webhooks">Webhooks/API</button>
-        <button type="button" class="tab-button" data-tab="legacy">Histórico técnico</button>
+        <button type="button" class="tab-button active" data-tab="bot">Geral</button>
+        <button type="button" class="tab-button" data-tab="availability">Disponibilidade</button>
+        <button type="button" class="tab-button" data-tab="quality">Qualidade</button>
+        <button type="button" class="tab-button" data-tab="simulator">Simulador</button>
+        <button type="button" class="tab-button" data-tab="observation">Observação</button>
       </nav>
 
       <!-- ===== Bot selecionado ===== -->
@@ -64,7 +66,7 @@
           </header>
 
           <div class="editor-grid">
-            <div class="stack">
+            <div class="stack" data-config-panel="bot">
               <section class="card autoreply-card">
                 <div class="card-heading"><div><span>CLIENTES</span><h3>Resposta automática</h3></div></div>
                 <label class="global-toggle-row big"><span id="auto-reply-label">Desligada</span><input id="auto-reply" type="checkbox"></label>
@@ -84,12 +86,19 @@
                   <label class="full">Descrição<textarea id="bot-description" maxlength="500" rows="2"></textarea></label>
                   <div class="full"><span>Canais</span><div id="bot-channels" class="bot-channels-checklist"></div></div>
                   <label>Fuso horário<input id="bot-timezone" maxlength="100"></label>
+                  <label class="full">Mensagem inicial<textarea id="bot-initialMessage" rows="3" maxlength="4000"></textarea></label>
+                  <label class="full">Mensagem fora de horário ou dia<textarea id="bot-outsideHoursMessage" rows="3" maxlength="4000"></textarea></label>
+                  <label class="full">Mensagem de feriado<textarea id="bot-holidayMessage" rows="3" maxlength="4000" placeholder="Se vazia, usa a mensagem fora de horário"></textarea></label>
+                  <label class="full">Mensagem de encaminhamento<textarea id="bot-handoffMessage" rows="2" maxlength="4000"></textarea></label>
+                  <label class="full">Mensagem sem resposta configurada<textarea id="bot-fallbackMessage" rows="2" maxlength="4000"></textarea></label>
+                  <label class="checkbox full"><input id="bot-runOnNewConversation" type="checkbox">Executar em nova conversa</label>
+                  <label class="checkbox full"><input id="bot-runAfterReopen" type="checkbox">Executar quando o cliente reabrir uma conversa</label>
                   <div class="form-actions full"><button id="delete-bot" type="button" class="danger">Excluir Bot</button><button type="submit">Salvar</button></div>
                 </form>
               </section>
             </div>
 
-            <div class="stack">
+            <div class="stack" data-config-panel="availability" hidden>
               <section class="card">
                 <div class="card-heading"><div><span>HORÁRIO</span><h3>Atendimento</h3></div></div>
                 <p class="card-help">Usado pelas variáveis <code>{{bot.businessHours}}</code> e <code>bot.withinBusinessHours</code> (nó Condição). Sem horário = sempre dentro do horário.</p>
@@ -107,6 +116,26 @@
               </section>
             </div>
           </div>
+          <section class="card" data-config-panel="quality" hidden>
+            <div class="card-heading"><div><span>QUALIDADE</span><h3>Avaliação do atendimento</h3></div></div>
+            <form id="quality-form" class="fields">
+              <label class="checkbox"><input id="quality-enabled" type="checkbox">Ativar avaliação ao concluir o Bot</label>
+              <label class="checkbox"><input id="quality-comment" type="checkbox">Solicitar comentário</label>
+              <label class="full">Mensagem de avaliação<textarea id="quality-message" rows="3" maxlength="4000"></textarea></label>
+              <label class="full">Mensagem após avaliação<textarea id="quality-followup" rows="2" maxlength="4000"></textarea></label>
+              <div class="form-actions full"><button type="submit">Salvar avaliação</button></div>
+            </form>
+          </section>
+          <section class="card" data-config-panel="simulator" hidden>
+            <div class="card-heading"><div><span>SIMULADOR</span><h3>Teste sem enviar mensagens reais</h3></div><button type="button" id="simulation-reset">Reiniciar</button></div>
+            <div id="simulation-history" class="library-list" aria-live="polite"></div>
+            <form id="simulation-form" class="fields"><label class="full">Data e hora de teste (opcional, horário do seu computador)<input id="simulation-time" type="datetime-local"></label><label class="full">Sua resposta<input id="simulation-message" maxlength="2000"></label><div class="form-actions full"><button type="submit">Simular</button></div></form>
+          </section>
+          <section class="card" data-config-panel="observation" hidden>
+            <div class="card-heading"><div><span>OBSERVAÇÃO</span><h3>Métricas dos últimos 30 dias</h3></div><button type="button" id="observation-refresh">Atualizar</button></div>
+            <p class="card-help">Métricas de execução real. O simulador não gera estatísticas de clientes. Sem amostras, mostramos “Sem dados”.</p>
+            <div id="observation-metrics" class="library-list"></div>
+          </section>
         </div>
       </section>
 

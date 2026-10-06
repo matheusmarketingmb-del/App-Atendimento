@@ -357,14 +357,22 @@ function contactSeed(contact) {
 
 function botSeed(bot, now) {
   const withinBusinessHours = scheduleState(bot, now).withinHours;
-  return { name: bot.name, businessHours: describeSchedule(bot), withinBusinessHours };
+  const { convertTemplate } = require("./flow-builder-migration-service");
+  return { name: bot.name, businessHours: describeSchedule(bot), withinBusinessHours,
+    availabilityManaged: bot.featureFlags?.availabilityManaged === true,
+    assistantAfterTriage: bot.featureFlags?.assistantAfterTriage === true,
+    initialMessage: convertTemplate(bot.initialMessage), outsideHoursMessage: convertTemplate(bot.outsideHoursMessage),
+    closedMessage: convertTemplate(scheduleState(bot, now).holiday ? (bot.holidayMessage || bot.featureFlags?.holidayMessage || bot.outsideHoursMessage) : bot.outsideHoursMessage),
+    fallbackMessage: convertTemplate(bot.fallbackMessage), handoffMessage: convertTemplate(bot.handoffMessage),
+  };
 }
 
 function buildSeed({ bot, contact, conversation, now }) {
   const botVars = botSeed(bot, now);
   return {
     contact: contactSeed(contact), bot: botVars,
-    conversation: { id: conversation.id, channel: conversation.channel, withinBusinessHours: botVars.withinBusinessHours },
+    conversation: { id: conversation.id, channel: conversation.channel, categoryName: conversation.category?.name || "Atendimento", categoryCode: conversation.category?.code || "", withinBusinessHours: botVars.withinBusinessHours, allowedCategoryIds: conversation.channelAccount?.config?.allowedCategoryIds || [] },
+    flow: { initialCategoryId: conversation.categoryId || null, initialNeed: conversation.triageContext?.atendimentoNeed || "" },
   };
 }
 
@@ -384,8 +392,9 @@ function refreshSystemContext(state, seed) {
 // chamados se o Master marcar explicitamente "chamar webhooks no teste".
 function simulationAdapter({ bot, refs, outputs, source, callWebhooks, callWebhook }) {
   const categoryName = (id) => refs.categories.find((category) => category.id === id)?.name || null;
-  return {
-    skipDelays: true,
+    return {
+      skipDelays: true,
+      categoryName,
     async send(text) { if (String(text || "").trim()) outputs.push({ type: "bot", text }); },
     async sendMenu({ text, options }) {
       outputs.push({ type: "bot", text, options: options.map((option) => ({ replyId: option.replyId, label: option.label })), display: "LIST" });
@@ -436,6 +445,7 @@ function simulationAdapter({ bot, refs, outputs, source, callWebhooks, callWebho
 
 async function simulateFlow(botId, flowId, {
   message, replyId, state = null, source = "DRAFT", graph: graphOverride, callWebhooks = false, contactName,
+  chainAfterTriage = false, categoryId = null, initialNeed = "", simulatedAt = null,
 } = {}, viewer, deps = {}) {
   assertBotManager(viewer);
   const bot = await ensureBot(botId);
@@ -457,7 +467,7 @@ async function simulateFlow(botId, flowId, {
     current = { flowId: other.id, name: other.name, versionId: source === "ACTIVE" ? other.activeVersion?.id : null, version: source === "ACTIVE" ? other.activeVersion?.version : null };
   }
   const [categories, users] = await Promise.all([
-    prisma.category.findMany({ where: { active: true }, select: { id: true, name: true } }),
+    prisma.category.findMany({ where: { active: true }, select: { id: true, name: true, code: true, masterOnly: true } }),
     prisma.user.findMany({ where: { active: true, role: { not: "BOT" } }, select: { id: true, name: true } }),
   ]);
   const outputs = [];
@@ -467,16 +477,31 @@ async function simulateFlow(botId, flowId, {
   });
   const text = String(message || "").slice(0, 2000);
   const input = state ? { type: "MESSAGE", text, replyId: replyId ? String(replyId).slice(0, 120) : null } : { type: "START", text };
-  const now = deps.now || new Date();
+  const now = deps.now || (simulatedAt ? new Date(String(simulatedAt).slice(0, 40)) : new Date());
+  if (Number.isNaN(now.getTime())) throw fail("Data/hora de simulação inválida.");
+  categoryId ||= state?.context?.flow?.initialCategoryId || null;
   const seed = buildSeed({
     bot, now, contact: { name: String(contactName || "Cliente Teste").slice(0, 80), phone: "5500000000000", email: "" },
-    conversation: { id: "simulacao", channel: (bot.channels?.[0] || bot.channel) },
+    conversation: { id: "simulacao", channel: (bot.channels?.[0] || bot.channel), categoryId, category: categories.find((category) => category.id === categoryId), triageContext: { atendimentoNeed: String(initialNeed || "").slice(0, 2000) } },
   });
   const result = await runTurn({
-    graph, flow: current, state: state ? refreshSystemContext(JSON.parse(JSON.stringify(state)), seed) : null,
+    graph: require("./bot-question-answer-observation").withQuality(graph, bot), flow: current, state: state ? refreshSystemContext(JSON.parse(JSON.stringify(state)), seed) : null,
     input, adapter, seed, responses: await activeResponseMap(), now,
   });
+  if (chainAfterTriage === true && bot.type === "SYSTEM_TRIAGE" && result.state.status === STATUS.HANDED_OFF) {
+    const destination = [...result.trace].reverse().find((entry) => entry.output?.categoryId)?.output?.categoryId;
+    const category = categories.find((item) => item.id === destination && !item.masterOnly);
+    if (category) {
+      const nextBot = await prisma.bot.findFirst({ where: { archivedAt: null, status: { not: "ARCHIVED_LEGACY" }, featureFlags: { path: ["assistantAfterTriage"], equals: true }, OR: [{ channel: bot.channel }, { channels: { has: bot.channel } }] }, include: botScheduleInclude, orderBy: { updatedAt: "desc" } });
+      const nextFlow = nextBot && await prisma.botFlow.findFirst({ where: { botId: nextBot.id, isDefault: true, archivedAt: null, activeVersionId: { not: null } }, include: { activeVersion: true } });
+      if (nextFlow && nextFlow.activeVersion?.graph?.nodes?.some((node) => node.type === "start" && node.config?.trigger === "AFTER_TRIAGE")) {
+        const assistant = await simulateFlow(nextBot.id, nextFlow.id, { source, contactName, categoryId: category.id, initialNeed: result.state.context.flow.atendimentoNeed || "", callWebhooks: false, simulatedAt: now.toISOString() }, viewer, deps);
+        return { ...assistant, outputs: [...outputs, { type: "event", text: `Assistente iniciado em ${category.name}` }, ...assistant.outputs], trace: [...result.trace, ...assistant.trace] };
+      }
+    }
+  }
   return {
+    botId, flowId: result.state.flow?.flowId || flow.id,
     state: result.state, trace: result.trace, outputs, ignored: Boolean(result.ignored),
     currentNodeKey: result.state.currentNodeKey, currentFlowId: result.state.flow?.flowId || flow.id,
     status: result.state.status, dryRun: true,
@@ -522,6 +547,8 @@ function liveAdapter({ conversation, bot, channel, execution, deps }) {
   const moveToCategory = async ({ categoryId, reason, action }) => {
     const category = await prisma.category.findFirst({ where: { id: categoryId, active: true } });
     if (!category) throw new Error("Setor de destino não existe ou está inativo.");
+    const allowed = conversation.channelAccount?.config?.allowedCategoryIds || [];
+    if (category.masterOnly || (allowed.length && !allowed.includes(category.id) && !allowed.includes(category.parentId))) throw new Error("Setor indisponível para este número.");
     // Só sai do Bot se ainda estiver com o Bot e sem responsável (nunca
     // tira uma conversa que um humano assumiu no meio do fluxo).
     const moved = await prisma.conversation.updateMany({
@@ -543,6 +570,7 @@ function liveAdapter({ conversation, bot, channel, execution, deps }) {
 
   return {
     skipDelays: false,
+    async categoryName(categoryId) { return (await prisma.category.findUnique({ where: { id: categoryId }, select: { name: true } }))?.name; },
     send,
     // Lista interativa só no WhatsApp e até 10 opções (limite da Meta); fora
     // disso cai para o texto numerado — o cliente pode responder igual.
@@ -675,12 +703,13 @@ async function cancelExecution(execution, reason) {
 }
 
 const conversationInclude = {
+  channelAccount: { select: { config: true } },
   contact: true,
-  category: { select: { id: true, name: true } },
+  category: { select: { id: true, name: true, code: true, masterOnly: true, parentId: true } },
   botState: { select: { humanPausedAt: true, activeBotId: true } },
 };
 
-async function findStartBot(conversation) {
+async function findStartBot(conversation, { afterTriage = false } = {}) {
   const bots = await prisma.bot.findMany({
     where: {
       archivedAt: null, status: "ACTIVE", autoReplyEnabled: true,
@@ -694,11 +723,20 @@ async function findStartBot(conversation) {
   const preferred = conversation.botState?.activeBotId;
   bots.sort((left, right) => Number(right.id === preferred) - Number(left.id === preferred));
   for (const bot of bots) {
+    if (afterTriage !== (bot.featureFlags?.assistantAfterTriage === true)) continue;
+    const reopened = await prisma.conversationActivity.findFirst({ where: { conversationId: conversation.id, action: "REOPENED_BY_CUSTOMER_MESSAGE" }, select: { id: true } });
+    if (!afterTriage && (reopened ? !bot.runAfterReopen : !bot.runOnNewConversation)) continue;
     const flow = await prisma.botFlow.findFirst({
       where: { botId: bot.id, archivedAt: null, isDefault: true, status: "ACTIVE", activeVersionId: { not: null } },
       include: { activeVersion: true },
     });
-    if (flow?.activeVersion) return { bot, flow, version: flow.activeVersion };
+    if (flow?.activeVersion) {
+      const start = flow.activeVersion.graph?.nodes?.find((node) => node.type === "start");
+      if (afterTriage && start?.config?.trigger !== "AFTER_TRIAGE") continue;
+      if (!afterTriage && start?.config?.trigger === "AFTER_TRIAGE") continue;
+      if (start?.config?.channels?.length && !start.config.channels.includes(conversation.channel)) continue;
+      return { bot, flow, version: flow.activeVersion };
+    }
   }
   return null;
 }
@@ -717,13 +755,14 @@ async function hadExecutionThisSession(conversationId) {
 }
 
 async function runLiveTurn({ execution, claimedStep, conversation, bot, channel, version, flowName, input, now, deps }) {
+  const turnStartedAt = Date.now();
   const adapter = liveAdapter({ conversation, bot, channel, execution, deps });
   const seed = buildSeed({ bot, contact: conversation.contact, conversation, now });
   const state = execution.currentNodeKey || execution.status !== STATUS.RUNNING ? refreshSystemContext(toEngineState(execution), seed) : null;
   let turn;
   try {
     turn = await runTurn({
-      graph: version.graph, flow: { flowId: execution.flowId, versionId: version.id, version: version.version, name: flowName },
+      graph: require("./bot-question-answer-observation").withQuality(version.graph, bot), flow: { flowId: execution.flowId, versionId: version.id, version: version.version, name: flowName },
       state, input, adapter, seed, responses: await activeResponseMap(), now,
     });
   } catch (error) {
@@ -734,8 +773,34 @@ async function runLiveTurn({ execution, claimedStep, conversation, bot, channel,
     };
     await prisma.conversation.updateMany({ where: { id: conversation.id, status: "BOT", assignedUserId: null }, data: { status: "HANDOFF_BOT" } }).catch(() => {});
   }
+  if (!turn.ignored && turn.trace.length) turn.trace.push({ nodeKey: "turn_metrics", nodeType: "metrics", result: "OK", output: { botResponseMs: Date.now() - turnStartedAt }, durationMs: Date.now() - turnStartedAt });
   await persistTurn({ ...execution, version }, claimedStep, turn);
+  if (turn.state.status === STATUS.COMPLETED && bot.ratingEnabled && /^[1-5]$/.test(String(turn.state.context?.flow?.ratingScore || ""))) {
+    await prisma.botRating.upsert({ where: { conversationId: conversation.id }, update: {}, create: {
+      botId: bot.id, conversationId: conversation.id, channel: conversation.channel,
+      score: Number(turn.state.context.flow.ratingScore), comment: turn.state.context.flow.ratingComment === "pular" ? null : turn.state.context.flow.ratingComment || null,
+      resolvedByBot: true, metadata: { source: "question_answer", executionId: execution.id },
+    } });
+  }
+  if (bot.type === "SYSTEM_TRIAGE" && turn.state.status === STATUS.HANDED_OFF) {
+    await startPostTriageAssistant({ triageExecution: execution, triageContext: turn.state.context?.flow || {}, channel, now, deps });
+  }
   return turn;
+}
+
+async function startPostTriageAssistant({ triageExecution, triageContext, channel, now, deps = {} }) {
+  const conversation = await prisma.conversation.findUnique({ where: { id: triageExecution.conversationId }, include: conversationInclude });
+  if (!conversation || !botIsAllowedToRespond(conversation) || conversation.status !== "NOVO" || !conversation.categoryId || conversation.category?.masterOnly) return false;
+  const target = await findStartBot(conversation, { afterTriage: true });
+  if (!target || !botEligible(target.bot, await getGlobalSettings(prisma))) return false;
+  const existing = await prisma.botFlowExecution.findFirst({ where: { conversationId: conversation.id, botId: target.bot.id, startedAt: { gte: triageExecution.startedAt } }, select: { id: true } });
+  if (existing) return false;
+  const claimed = await prisma.conversation.updateMany({ where: { id: conversation.id, categoryId: conversation.categoryId, status: "NOVO", assignedUserId: null, updatedAt: conversation.updatedAt }, data: { status: "BOT" } });
+  if (!claimed.count) return false;
+  const execution = await prisma.botFlowExecution.create({ data: { conversationId: conversation.id, botId: target.bot.id, flowId: target.flow.id, versionId: target.version.id, status: STATUS.RUNNING, lastMessageId: triageExecution.lastMessageId, step: 0 } });
+  await prisma.conversationActivity.create({ data: { conversationId: conversation.id, action: "BOT_ASSISTANT_AFTER_TRIAGE", details: { botId: target.bot.id, triageExecutionId: triageExecution.id, executionId: execution.id, categoryId: conversation.categoryId } } });
+  await runLiveTurn({ execution, claimedStep: 0, conversation: { ...conversation, status: "BOT", triageContext }, bot: target.bot, channel, version: target.version, flowName: target.flow.name, input: { type: "START", text: "" }, now, deps });
+  return true;
 }
 
 // Hook do webhook do WhatsApp. Devolve true quando o Flow Builder é dono
@@ -772,7 +837,7 @@ async function handleIncomingVisualFlow(event, message, channel, { now = new Dat
     });
     if (!claimed.count) return true;
     await runLiveTurn({
-      execution: active, claimedStep: active.step + 1, conversation, bot, channel, version: active.version,
+      execution: { ...active, lastMessageId: message.id }, claimedStep: active.step + 1, conversation, bot, channel, version: active.version,
       flowName: active.flow.name, input: { type: "MESSAGE", text, replyId }, now, deps,
     });
     return true;

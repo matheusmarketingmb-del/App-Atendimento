@@ -550,6 +550,7 @@ model ConversationActivity {
 }
 
 model Category {
+  masterOnly      Boolean              @default(false)
   id              String               @id @default(cuid())
   parentId        String?
   code            String               @unique
@@ -592,6 +593,7 @@ model Bot {
   channels                Channel[] @default([])
   initialMessage          String    @db.Text
   outsideHoursMessage     String    @db.Text
+  holidayMessage          String?   @db.Text
   fallbackMessage         String    @db.Text
   // Mensagem enviada após o encaminhamento (handoff) para o setor escolhido
   // — usada hoje só pelo Bot de Triagem (routingText original de

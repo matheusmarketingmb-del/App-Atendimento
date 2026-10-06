@@ -1,0 +1,5 @@
+[data-config-panel] { min-width: 0; }
+.editor-grid:has([data-config-panel]) { grid-template-columns: minmax(0, 1fr); }
+#simulation-history { max-height: 50vh; overflow: auto; white-space: pre-wrap; }
+.workspace-tabs { flex-wrap: wrap; }
+[hidden] { display: none !important; }

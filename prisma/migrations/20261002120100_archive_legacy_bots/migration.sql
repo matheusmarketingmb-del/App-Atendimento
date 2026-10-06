@@ -19,9 +19,9 @@ SET "featureFlags" = COALESCE("featureFlags", '{}'::jsonb) || jsonb_build_object
 WHERE "type" = 'STANDARD'
   AND "archivedAt" IS NULL
   AND "status" <> 'ARCHIVED_LEGACY'
-  AND NOT EXISTS (
-    SELECT 1 FROM "BotFlow" f WHERE f."botId" = "Bot"."id" AND f."archivedAt" IS NULL
-  );
+  AND "executionMode" = 'LEGACY'
+  AND "id" NOT IN ('system-triage-bot', 'mibro-assistant-observer')
+  AND "name" NOT IN ('Triagem Inicial', 'Assistente Mibro Brasil');
 
 -- 2) Segurança: antes desta migração só Bots em executionMode FLOW_BUILDER
 --    executavam fluxos. Agora todo Bot ativo executa o fluxo padrão — então
@@ -36,4 +36,6 @@ SET "featureFlags" = COALESCE("featureFlags", '{}'::jsonb) || jsonb_build_object
     "updatedAt" = NOW()
 WHERE "executionMode" = 'LEGACY'
   AND "status" <> 'ARCHIVED_LEGACY'
+  AND "id" NOT IN ('system-triage-bot', 'mibro-assistant-observer')
+  AND "name" NOT IN ('Triagem Inicial', 'Assistente Mibro Brasil')
   AND "autoReplyEnabled" = true;

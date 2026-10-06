@@ -767,7 +767,7 @@
     const c = node.config;
     switch (node.type) {
       case "start": return `
-        <label>Quando iniciar ${select("trigger", { NEW_CONVERSATION: "Nova conversa (uma vez por sessão)", ANY_MESSAGE: "Nova conversa (sempre que voltar à fila sem setor)" }, c.trigger)}</label>
+        <label>Quando iniciar ${select("trigger", { NEW_CONVERSATION: "Nova conversa (uma vez por sessão)", ANY_MESSAGE: "Nova conversa (sempre que voltar à fila sem setor)", AFTER_TRIAGE: "Após a Triagem encaminhar ao setor" }, c.trigger)}</label>
         <label>Mensagem inicial (opcional)<textarea data-field="initialMessage" placeholder="{{contact.greeting}}! Bem-vindo(a)!">${escapeHtml(c.initialMessage)}</textarea></label>
         ${variableChips()}
         <label>Setor inicial (usado como setor padrão de handoff)<select data-field="categoryId">${categoryOptions(c.categoryId)}</select></label>

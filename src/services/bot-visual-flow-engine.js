@@ -59,11 +59,12 @@ function setPath(context, path, value) {
   return true;
 }
 
-function renderTemplate(template, context) {
+function renderTemplate(template, context, depth = 0) {
   return String(template || "").replace(/\{\{\s*([A-Za-z_][A-Za-z0-9_.]*)\s*\}\}/g, (_match, path) => {
     const value = getPath(context, path);
     if (value === undefined || value === null) return "";
-    return typeof value === "object" ? JSON.stringify(value) : String(value);
+    const rendered = typeof value === "object" ? JSON.stringify(value) : String(value);
+    return depth < 3 && rendered.includes("{{") ? renderTemplate(rendered, context, depth + 1) : rendered;
   });
 }
 
@@ -72,7 +73,7 @@ function baseContext(seed = {}) {
     contact: { ...(seed.contact || {}) },
     conversation: { ...(seed.conversation || {}) },
     bot: { ...(seed.bot || {}) },
-    flow: {}, customer: {}, vars: {}, custom: {},
+    flow: { ...(seed.flow || {}) }, customer: {}, vars: {}, custom: {},
     _engine: { attempts: {}, visited: [] },
   };
 }
@@ -216,7 +217,7 @@ async function retryOrFail(node, run, invalidText, repeatText) {
     if (run.hasEdge(node.key, "invalid")) return { branch: "invalid", output: { attempts, exhausted: true } };
     // Sem saída "inválida" conectada: nunca prende o cliente num loop —
     // entrega para humano com o motivo registrado.
-    await run.adapter.handoff({ reason: `Resposta inválida após ${attempts} tentativas em "${node.name}".`, categoryId: context.flow.initialCategoryId || null });
+    await run.adapter.handoff({ reason: `Resposta inválida após ${attempts} tentativas em "${node.name}".`, message: renderTemplate(context.bot.fallbackMessage, context), categoryId: context.flow.initialCategoryId || null });
     return { terminal: STATUS.HANDED_OFF, output: { attempts, exhausted: true } };
   }
   await run.adapter.send([invalidText, repeatText].filter(Boolean).join("\n"));
@@ -224,6 +225,11 @@ async function retryOrFail(node, run, invalidText, repeatText) {
 }
 
 async function sendMenu(node, run) {
+  node = effectiveMenu(node, run.context);
+  if (run.context.bot.assistantAfterTriage && !String(node.config.variable || "").startsWith("flow.rating") && node.config.options.length < 10) {
+    node = { ...node, config: { ...node.config, options: [...node.config.options, { id: "assistant_back", label: "Voltar" }] } };
+  }
+  if (!node.config.options.length) throw new Error("Nenhuma opção disponível para este número.");
   const textToSend = renderMenuText(node.config, run.context);
   if (node.config.display === "LIST" && run.adapter.sendMenu) {
     await run.adapter.sendMenu({
@@ -233,6 +239,12 @@ async function sendMenu(node, run) {
   } else {
     await run.adapter.send(textToSend);
   }
+}
+
+function effectiveMenu(node, context) {
+  const allowed = context.conversation?.allowedCategoryIds || [];
+  if (!allowed.length) return node;
+  return { ...node, config: { ...node.config, options: node.config.options.filter((option) => !option.categoryId || [option.categoryId, ...(option.categoryIds || [])].some((id) => allowed.includes(id))) } };
 }
 
 const HANDLERS = {
@@ -262,7 +274,7 @@ const HANDLERS = {
   },
 
   async question(node, run) {
-    await run.adapter.send(renderTemplate(node.config.text, run.context));
+    await run.adapter.send(renderTemplate(node.config.text, run.context) + (run.context.bot.assistantAfterTriage && !String(node.config.variable || "").startsWith("flow.rating") ? "\n↩ Para retornar à opção anterior, digite Voltar." : ""));
     return { wait: "CUSTOMER" };
   },
   async resumeQuestion(node, run, input) {
@@ -282,6 +294,7 @@ const HANDLERS = {
     return { wait: "CUSTOMER" };
   },
   async resumeMenu(node, run, input) {
+    node = effectiveMenu(node, run.context);
     const option = matchMenuOption(node.config.options || [], input.text, input.replyId);
     if (!option) {
       return retryOrFail(node, run, node.config.invalidMessage || DEFAULT_MENU_INVALID_MESSAGE, renderMenuText(node.config, run.context));
@@ -327,6 +340,7 @@ const HANDLERS = {
   },
 
   async transfer_category(node, run) {
+    run.context.bot.categoryName = await run.adapter.categoryName?.(node.config.categoryId) || "";
     const message = renderTemplate(node.config.message, run.context);
     const outcome = await run.adapter.transferToCategory({ categoryId: node.config.categoryId, message, reason: renderTemplate(node.config.reason, run.context) || `Fluxo "${run.flow.name}"` });
     return { terminal: STATUS.HANDED_OFF, output: outcome };
@@ -396,6 +410,27 @@ async function runTurn({
     adapter, now, responses, flow: next.flow, context: next.context,
     hasEdge: (nodeKey, handle) => indexed.edges.has(`${nodeKey}::${handle}`),
   };
+  const inputAt = Date.now();
+  const humanRequestText = input?.type === "MESSAGE" ? input.text : run.context.flow.initialNeed;
+  if (!FINISHED_STATUSES.has(next.status) && run.context.bot.assistantAfterTriage && /(?:falar|conversar|quero|preciso|chamar).*(?:atendente|humano|pessoa|vendedor)|^(?:atendente|humano|pessoa|vendedor)$/.test(normalizeText(humanRequestText))) {
+    await adapter.handoff({ message: "Claro, vou chamar nossa equipe para continuar seu atendimento.", reason: "Cliente pediu atendimento humano", categoryId: run.context.flow.initialCategoryId || null });
+    next.status = STATUS.HANDED_OFF;
+    return { state: next, trace: [{ nodeKey: next.currentNodeKey || "start", nodeType: "human_handoff", result: "DONE", output: { requestedByCustomer: true }, durationMs: Date.now() - inputAt }] };
+  }
+  if (input?.type === "MESSAGE" && next.context._engine.promptAt) {
+    run.customerReplyMs = Math.max(0, now.getTime() - next.context._engine.promptAt);
+  }
+  if (run.context.bot.availabilityManaged && !run.context.bot.withinBusinessHours) {
+    await adapter.send(renderTemplate(run.context.bot.closedMessage, run.context));
+    next.currentNodeKey ||= indexed.start?.key;
+    next.status = STATUS.WAITING_CUSTOMER;
+    next.context._engine.availabilityWaiting = true;
+    return { state: next, trace: [{ nodeKey: next.currentNodeKey, nodeType: "availability", result: "WAITING", input: null, output: { outsideHours: true }, durationMs: Date.now() - inputAt }] };
+  }
+  if (next.context._engine.availabilityWaiting) {
+    delete next.context._engine.availabilityWaiting;
+    next.status = STATUS.RUNNING;
+  }
   if (input?.text !== undefined && input.type !== "TIMER") run.context.flow.lastMessage = String(input.text || "");
 
   const visitedKey = (nodeKey) => (next.flow.flowId ? `${next.flow.flowId}:${nodeKey}` : nodeKey);
@@ -404,7 +439,10 @@ async function runTurn({
       nodeKey: node.key, nodeType: node.type, nodeName: node.name,
       flowId: next.flow.flowId || null, flowName: next.flow.name || null, version: next.flow.version ?? null,
       result, branch: extra.branch || null,
-      input: sanitizeForLog(extra.input ?? null), output: sanitizeForLog(extra.output ?? null),
+      input: sanitizeForLog(extra.input ?? null), output: sanitizeForLog({ ...(extra.output || {}),
+        quality: String(node.config?.variable || "").startsWith("flow.rating"),
+        ...(extra.input && Number.isFinite(run.customerReplyMs) ? { customerReplyMs: run.customerReplyMs } : {}),
+      }),
       error: extra.error || null, durationMs: Date.now() - startedAt,
       nextNodeKey: extra.nextNodeKey || null, timestamp: new Date().toISOString(),
     };
@@ -444,10 +482,29 @@ async function runTurn({
     }
     if (next.status === STATUS.WAITING_CUSTOMER) {
       if (input?.type !== "MESSAGE") return { state: next, trace, ignored: true };
+      if (run.context.bot.assistantAfterTriage && !String(current.config.variable || "").startsWith("flow.rating") &&
+          (/^(?:voltar|volte|anterior|opcao anterior)$/.test(normalizeText(input.text)) || input.replyId === `${MENU_REPLY_PREFIX}assistant_back` ||
+           (current.type === "menu" && String(input.text).trim() === String(effectiveMenu(current, run.context).config.options.length + 1)))) {
+        const prompts = run.context._engine.promptHistory || [];
+        if (prompts.length > 1) prompts.pop();
+        const previous = prompts.at(-1);
+        const target = previous && indexed.nodes.get(previous.nodeKey);
+        if (target && RESUMERS[target.type]) {
+          run.context.flow = JSON.parse(JSON.stringify(previous.flow));
+          current = target;
+          next.currentNodeKey = current.key;
+        }
+        delete run.context._engine.attempts[current.key];
+        await HANDLERS[current.type](current, run);
+        next.context._engine.promptAt = now.getTime();
+        record(current, "WAITING", Date.now(), { input: { text: input.text }, output: { navigation: "back" } });
+        return { state: next, trace };
+      }
       const startedAt = Date.now();
       try {
         const resumed = await RESUMERS[current.type](current, run, input);
         if (resumed.stay) {
+          next.context._engine.promptAt = now.getTime();
           record(current, "WAITING", startedAt, { input: { text: input.text }, output: resumed.output });
           return { state: next, trace };
         }
@@ -518,6 +575,12 @@ async function runTurn({
       continue;
     }
     if (result.wait === "CUSTOMER") {
+      if (run.context.bot.assistantAfterTriage && !String(current.config.variable || "").startsWith("flow.rating")) {
+        const history = next.context._engine.promptHistory ||= [];
+        history.push({ nodeKey: current.key, flow: JSON.parse(JSON.stringify(run.context.flow)) });
+        if (history.length > 30) history.shift();
+      }
+      next.context._engine.promptAt = now.getTime();
       record(current, "WAITING", startedAt, { output: result.output });
       next.status = STATUS.WAITING_CUSTOMER;
       return { state: next, trace };

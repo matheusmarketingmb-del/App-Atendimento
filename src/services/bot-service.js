@@ -108,6 +108,12 @@ function botSummary(bot) {
     id: bot.id, name: bot.name, description: bot.description, status: bot.status, type: bot.type, isSystem: bot.isSystem,
     channels: bot.channels?.length ? bot.channels : [bot.channel], timezone: bot.timezone,
     autoReplyEnabled: bot.autoReplyEnabled, createdAt: bot.createdAt, updatedAt: bot.updatedAt,
+    initialMessage: bot.initialMessage, outsideHoursMessage: bot.outsideHoursMessage,
+    holidayMessage: bot.holidayMessage || bot.featureFlags?.holidayMessage || "", fallbackMessage: bot.fallbackMessage, handoffMessage: bot.handoffMessage,
+    runOnNewConversation: bot.runOnNewConversation, runAfterReopen: bot.runAfterReopen,
+    ratingEnabled: bot.ratingEnabled, ratingMessage: bot.ratingMessage, ratingFollowupMessage: bot.ratingFollowupMessage,
+    requestRatingOn: bot.requestRatingOn, requestRatingComment: bot.requestRatingComment,
+    assistantAfterTriage: bot.featureFlags?.assistantAfterTriage === true,
     schedules: bot.schedules || [], holidays: bot.holidays || [],
     flows, defaultFlowId: flows.find((flow) => flow.isDefault)?.id || null,
     readyToRespond: flows.some((flow) => flow.isDefault && flow.status === "ACTIVE" && flow.activeVersion),
@@ -180,6 +186,21 @@ async function updateBot(botId, data, actor) {
     update.channel = update.channels[0];
   }
   if (data.timezone !== undefined) update.timezone = validateTimezone(data.timezone);
+  for (const key of ["initialMessage", "outsideHoursMessage", "fallbackMessage", "handoffMessage", "ratingMessage", "ratingFollowupMessage"]) {
+    if (data[key] !== undefined) update[key] = optionalText(data[key], "Mensagem", 4000) || (key.endsWith("Message") && ["initialMessage", "outsideHoursMessage", "fallbackMessage"].includes(key) ? "" : null);
+  }
+  if (data.holidayMessage !== undefined) update.holidayMessage = optionalText(data.holidayMessage, "Mensagem de feriado", 4000);
+  for (const key of ["runOnNewConversation", "runAfterReopen", "ratingEnabled", "requestRatingComment"]) {
+    if (data[key] !== undefined) {
+      if (typeof data[key] !== "boolean") throw fail("Configuração inválida.");
+      if (key === "runOnNewConversation" && data[key] && existing.featureFlags?.assistantAfterTriage) throw fail("Este Assistente inicia após a Triagem, não na recepção inicial.");
+      update[key] = data[key];
+    }
+  }
+  if (data.requestRatingOn !== undefined) {
+    if (!["BOT_COMPLETED", "HANDOFF"].includes(data.requestRatingOn)) throw fail("Momento da avaliação inválido.");
+    update.requestRatingOn = data.requestRatingOn;
+  }
   if (!Object.keys(update).length) throw fail("Informe ao menos um campo para atualizar.");
   await prisma.$transaction(async (transaction) => {
     await transaction.bot.update({ where: { id: botId }, data: update });

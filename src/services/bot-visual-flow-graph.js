@@ -28,7 +28,9 @@ const WRITABLE_ROOTS = new Set(["customer", "flow", "vars", "custom"]);
 const SYSTEM_VARIABLES = Object.freeze([
   "contact.name", "contact.firstName", "contact.phone", "contact.email", "contact.greeting", "contact.greetingComma",
   "conversation.id", "conversation.channel", "conversation.withinBusinessHours",
+  "conversation.categoryName", "conversation.categoryCode",
   "bot.name", "bot.businessHours", "bot.withinBusinessHours",
+  "bot.initialMessage", "bot.outsideHoursMessage", "bot.fallbackMessage", "bot.handoffMessage", "bot.categoryName",
 ]);
 const SYSTEM_ROOTS = new Set(["contact", "conversation", "bot"]);
 const FLOW_VARIABLES = Object.freeze(["flow.selectedOption", "flow.lastAnswer", "flow.lastMessage"]);
@@ -139,7 +141,7 @@ function normalizeConfig(type, config = {}) {
         initialMessage: text(c.initialMessage),
         channels: Array.isArray(c.channels) ? c.channels.map((item) => text(item, 40)).slice(0, 20) : [],
         categoryId: c.categoryId ? text(c.categoryId, 64) : null,
-        trigger: ["NEW_CONVERSATION", "ANY_MESSAGE"].includes(c.trigger) ? c.trigger : "NEW_CONVERSATION",
+          trigger: ["NEW_CONVERSATION", "ANY_MESSAGE", "AFTER_TRIAGE"].includes(c.trigger) ? c.trigger : "NEW_CONVERSATION",
       };
     case "message":
       return {
@@ -161,6 +163,8 @@ function normalizeConfig(type, config = {}) {
         options: (Array.isArray(c.options) ? c.options : []).slice(0, MAX_MENU_OPTIONS).map((option, index) => ({
           id: NODE_KEY_PATTERN.test(String(option?.id || "")) ? String(option.id) : `o${index + 1}`,
           label: text(option?.label, 120),
+          categoryId: typeof option?.categoryId === "string" ? text(option.categoryId, 100) : null,
+          categoryIds: Array.isArray(option?.categoryIds) ? option.categoryIds.filter((id) => typeof id === "string").slice(0, 100) : [],
           keywords: (Array.isArray(option?.keywords) ? option.keywords : String(option?.keywords || "").split(","))
             .map((word) => text(word, 60).trim()).filter(Boolean).slice(0, 30),
         })),

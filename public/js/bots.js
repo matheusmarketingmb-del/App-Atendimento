@@ -53,8 +53,12 @@ const editorUrl = (botId, flowId) => `/flow-builder?botId=${encodeURIComponent(b
 
 // ---------- abas ------------------------------------------------------------------
 function showTab(name) {
+  state.activeTab = name;
   document.querySelectorAll(".tab-button").forEach((button) => button.classList.toggle("active", button.dataset.tab === name));
-  document.querySelectorAll("[data-panel]").forEach((panel) => { panel.hidden = panel.dataset.panel !== name; });
+  const configTabs = ["bot", "availability", "quality", "simulator", "observation"];
+  document.querySelectorAll("[data-panel]").forEach((panel) => { panel.hidden = panel.dataset.panel !== (configTabs.includes(name) ? "bot" : name); });
+  document.querySelectorAll("[data-config-panel]").forEach((panel) => { panel.hidden = panel.dataset.configPanel !== name; });
+  if (name === "observation" && state.selected) loadObservation();
   if (name === "responses") loadResponses();
   if (name === "webhooks") loadWebhooks();
   if (name === "legacy" && !state.legacyLoaded) loadLegacy();
@@ -71,7 +75,7 @@ function renderBotList() {
     <button type="button" class="bot-card ${state.selected?.id === bot.id ? "active" : ""}" data-bot="${escapeHtml(bot.id)}">
       <header><b>${escapeHtml(bot.name)}</b><span class="mini-status ${bot.status}">${STATUS_LABELS[bot.status] || bot.status}</span></header>
       <small>${escapeHtml(bot.channels.map((channel) => CHANNEL_LABELS[channel] || channel).join(", "))}</small>
-      <div class="bot-meta">${bot.flows.length} fluxo(s) • ${bot.autoReplyEnabled ? "respondendo clientes" : "resposta automática desligada"}${bot.isSystem ? " • sistema" : ""}</div>
+      <div class="bot-meta">${bot.flows.length} fluxo(s) • ${bot.assistantAfterTriage ? "após a Triagem • " : ""}${bot.autoReplyEnabled ? "respondendo clientes" : "resposta automática desligada"}${bot.isSystem ? " • sistema" : ""}</div>
     </button>`).join("") : '<div class="intent-empty">Nenhum Bot ainda.</div>';
 }
 $("#bot-list").addEventListener("click", (event) => {
@@ -88,11 +92,58 @@ async function loadBots(selectId) {
 }
 
 async function selectBot(botId) {
+  state.selectingBot = true;
+  state.simulation = null;
+  state.simulationBotId = null;
+  state.simulationFlowId = null;
+  $("#simulation-history").replaceChildren();
   state.selected = await api(`/api/bots/${encodeURIComponent(botId)}`);
   renderBotList();
   renderEditor();
-  showTab("bot");
+  state.selectingBot = false;
+  showTab(state.activeTab || "bot");
 }
+
+$("#quality-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    await refreshSelected(await api(`/api/bots/${state.selected.id}`, { method: "PATCH", body: JSON.stringify({
+      ratingEnabled: $("#quality-enabled").checked, requestRatingComment: $("#quality-comment").checked,
+      ratingMessage: $("#quality-message").value, ratingFollowupMessage: $("#quality-followup").value, requestRatingOn: "BOT_COMPLETED",
+    }) }));
+    toast("Avaliação salva.");
+  } catch (error) { toast(error.message, true); }
+});
+
+async function loadObservation() {
+  try {
+    const metrics = await api(`/api/bots/${state.selected.id}/observation`);
+    const time = (item) => item.samples ? `${(item.averageMs / 1000).toFixed(1)} s (${item.samples} amostras)` : "Sem dados";
+    $("#observation-metrics").innerHTML = `<p>Tempo médio do Bot: ${time(metrics.botResponse)}</p><p>Tempo médio do cliente: ${time(metrics.customerReply)}</p>
+      <p>Mensagens sem selecionar uma opção: ${metrics.unmatchedMessages}</p><p>Conversas com 3 ou mais respostas inválidas: ${metrics.repeatedUnmatchedConversations}</p>
+      <p>Avaliações: ${metrics.ratings.count}${metrics.ratings.average === null ? "" : ` • média ${metrics.ratings.average.toFixed(1)}/5`}</p>
+      <h4>Opções mais usadas</h4>${metrics.mostUsedOptions.map((item) => `<p>${escapeHtml(item.option)} — ${item.count}</p>`).join("") || "Sem dados"}
+      ${metrics.limited ? '<p>Amostra limitada aos 10.000 eventos mais recentes.</p>' : ""}`;
+  } catch (error) { toast(error.message, true); }
+}
+$("#observation-refresh").addEventListener("click", loadObservation);
+$("#simulation-reset").addEventListener("click", () => { state.simulation = null; state.simulationBotId = null; state.simulationFlowId = null; $("#simulation-history").replaceChildren(); });
+$("#simulation-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (state.selectingBot) return toast("Aguarde o Bot carregar.");
+  if (!state.selected?.defaultFlowId) return toast("Configure o fluxo padrão primeiro.", true);
+  try {
+    const message = $("#simulation-message").value;
+    const result = await api(`/api/bots/${state.simulationBotId || state.selected.id}/visual-flows/${state.simulationFlowId || state.selected.defaultFlowId}/simulate`, {
+      method: "POST", body: JSON.stringify({ source: "DRAFT", state: state.simulation, message, callWebhooks: false, chainAfterTriage: true, simulatedAt: $("#simulation-time").value ? new Date($("#simulation-time").value).toISOString() : null }),
+    });
+    state.simulation = result.state;
+    state.simulationBotId = result.botId;
+    state.simulationFlowId = result.flowId;
+    $("#simulation-history").insertAdjacentHTML("beforeend", `<p>Cliente: ${escapeHtml(message)}</p>${result.outputs.map((output) => `<p>${escapeHtml(output.text)}${output.options ? `<br>${output.options.map((option, i) => `${i + 1}. ${escapeHtml(option.label)}`).join("<br>")}` : ""}</p>`).join("")}<small>${escapeHtml(result.status)}</small>`);
+    $("#simulation-message").value = "";
+  } catch (error) { toast(error.message, true); }
+});
 
 // ---------- editor do Bot ------------------------------------------------------------
 function renderEditor() {
@@ -131,6 +182,14 @@ function renderEditor() {
   $("#bot-name").value = bot.name;
   $("#bot-description").value = bot.description || "";
   $("#bot-timezone").value = bot.timezone || "America/Sao_Paulo";
+  for (const field of ["initialMessage", "outsideHoursMessage", "holidayMessage", "handoffMessage", "fallbackMessage"]) $("#bot-" + field).value = bot[field] || "";
+  for (const field of ["runOnNewConversation", "runAfterReopen"]) $("#bot-" + field).checked = bot[field];
+  $("#bot-runOnNewConversation").disabled = bot.assistantAfterTriage;
+  if (bot.assistantAfterTriage) $("#auto-reply-help").insertAdjacentText("beforeend", " Este Assistente inicia somente após a Triagem, dentro do setor escolhido; nunca substitui a recepção inicial.");
+  $("#quality-enabled").checked = bot.ratingEnabled;
+  $("#quality-comment").checked = bot.requestRatingComment;
+  $("#quality-message").value = bot.ratingMessage || "";
+  $("#quality-followup").value = bot.ratingFollowupMessage || "";
   channelChecklist($("#bot-channels"), bot.channels);
   renderSchedules();
   renderHolidays();
@@ -182,7 +241,10 @@ $("#bot-form").addEventListener("submit", async (event) => {
   try {
     await refreshSelected(await api(`/api/bots/${state.selected.id}`, {
       method: "PATCH",
-      body: JSON.stringify({ name: $("#bot-name").value, description: $("#bot-description").value, timezone: $("#bot-timezone").value, channels: checkedValues($("#bot-channels")) }),
+      body: JSON.stringify({ name: $("#bot-name").value, description: $("#bot-description").value, timezone: $("#bot-timezone").value, channels: checkedValues($("#bot-channels")),
+        ...Object.fromEntries(["initialMessage", "outsideHoursMessage", "holidayMessage", "handoffMessage", "fallbackMessage"].map((field) => [field, $("#bot-" + field).value])),
+        ...Object.fromEntries(["runOnNewConversation", "runAfterReopen"].map((field) => [field, $("#bot-" + field).checked])),
+      }),
     }));
     toast("Bot salvo.");
   } catch (error) { toast(error.message, true); }

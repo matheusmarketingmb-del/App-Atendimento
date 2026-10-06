@@ -215,7 +215,8 @@ test("execução real: inicia na conversa nova, pausa no menu, retoma com o cliq
   assert.equal(finished.status, "HANDED_OFF");
   assert.ok(await prisma.conversationActivity.findFirst({ where: { conversationId: conversation.id, action: "BOT_FLOW_TRANSFERRED" } }));
   const logs = await prisma.botFlowExecutionLog.findMany({ where: { executionId: execution.id }, orderBy: { createdAt: "asc" } });
-  assert.deepEqual(logs.map((log) => `${log.nodeKey}:${log.result}`).sort(), ["menu:OK", "menu:WAITING", "start:OK", "to-commercial:DONE"]);
+  assert.deepEqual(logs.filter((log) => log.nodeType !== "metrics").map((log) => `${log.nodeKey}:${log.result}`).sort(), ["menu:OK", "menu:WAITING", "start:OK", "to-commercial:DONE"]);
+  assert.equal(logs.filter((log) => log.nodeType === "metrics").length, 2);
   // Mensagem de transferência marcada: o monitor de inatividade não finaliza.
   const lastSent = await prisma.message.findFirst({ where: { conversationId: conversation.id, direction: "ENVIADA" }, orderBy: { occurredAt: "desc" } });
   assert.equal(lastSent.rawPayload.flowHandoff, true);
@@ -344,7 +345,7 @@ test("endpoints de Webhook: só HTTPS, cabeçalhos cifrados/ocultos e bloqueio d
   assert.equal(webhooks.isPrivateAddress("8.8.8.8"), false);
 });
 
-test("conversão do Bot de Triagem em fluxo: publicada, equivalente, auto-resposta desligada e idempotente", async () => {
+test("conversão do Bot de Triagem em fluxo: preserva ativação, sequência e idempotência", async () => {
   const triage = await prisma.bot.findFirst({ where: { type: "SYSTEM_TRIAGE", archivedAt: null } });
   assert.ok(triage, "seed cria o Bot de Triagem");
   // Isola o teste: guarda e remove fluxos existentes do Bot de Triagem.
@@ -356,7 +357,7 @@ test("conversão do Bot de Triagem em fluxo: publicada, equivalente, auto-respos
   assert.equal(result.migrated, true);
   assert.equal(result.published, true, JSON.stringify(result.errors));
   const bot = await prisma.bot.findUnique({ where: { id: triage.id } });
-  assert.equal(bot.autoReplyEnabled, false, "nunca liga a resposta automática sozinho");
+  assert.equal(bot.autoReplyEnabled, true, "preserva a ativação que já existia");
   assert.equal(bot.executionMode, "FLOW_BUILDER");
   const flow = await prisma.botFlow.findFirst({ where: { botId: triage.id }, include: { activeVersion: true } });
   assert.equal(flow.isDefault, true);
@@ -365,17 +366,16 @@ test("conversão do Bot de Triagem em fluxo: publicada, equivalente, auto-respos
   assert.ok(types.includes("menu") && types.includes("condition") && types.includes("transfer_category"));
   const menu = flow.activeVersion.graph.nodes.find((item) => item.type === "menu");
   assert.equal(menu.config.display, "LIST");
-  assert.match(menu.config.text, /\{\{contact\.greeting\}\}/);
-  assert.match(menu.config.text, /\{\{bot\.businessHours\}\}/);
-  assert.equal((await ensureTriageFlow({ log: {} })).reason, "ALREADY_HAS_FLOW");
+  assert.equal(menu.config.text, "{{bot.initialMessage}}");
+  assert.equal((await ensureTriageFlow({ log: {} })).reason, "ALREADY_MIGRATED_OR_NOT_PRESENT");
 
   // Simulação da triagem convertida: Atendimento -> "meu pedido não chegou" -> Pedidos.
   const first = await flows.simulateFlow(triage.id, flow.id, { message: "oi", source: "ACTIVE" }, master, { now: new Date("2026-10-05T14:00:00.000Z") });
   const atendimento = first.outputs.find((output) => output.options)?.options.find((option) => option.label === "Atendimento");
   assert.ok(atendimento, "a opção Atendimento do seed vira opção do menu");
-  const asked = await flows.simulateFlow(triage.id, flow.id, { message: "Atendimento", replyId: atendimento.replyId, state: first.state, source: "ACTIVE" }, master);
+  const asked = await flows.simulateFlow(triage.id, flow.id, { message: "Atendimento", replyId: atendimento.replyId, state: first.state, source: "ACTIVE" }, master, { now: new Date("2026-10-05T14:01:00Z") });
   assert.equal(asked.currentNodeKey, "atd_ask");
-  const routed = await flows.simulateFlow(triage.id, flow.id, { message: "meu pedido não chegou", state: asked.state, source: "ACTIVE" }, master);
+  const routed = await flows.simulateFlow(triage.id, flow.id, { message: "meu pedido não chegou", state: asked.state, source: "ACTIVE" }, master, { now: new Date("2026-10-05T14:02:00Z") });
   assert.equal(routed.status, "HANDED_OFF");
   assert.ok(routed.outputs.some((output) => output.type === "event" && /Pedidos/.test(output.text)));
 });

@@ -12,6 +12,8 @@ const { startVisualFlowWorker } = require("./src/services/bot-visual-flow-servic
 const { ensureTriageFlow } = require("./src/services/flow-builder-migration-service");
 const inboxEvents = require("./src/realtime/inbox-events");
 
+(async () => {
+await ensureTriageFlow();
 const PORT = process.env.PORT || 3000;
 const channel = new MetaCloudChannel();
 const server = createApp({ channel }).listen(PORT, () => {
@@ -32,7 +34,6 @@ const stopGmailSyncWorker = startGmailSyncWorker();
 const stopVisualFlowWorker = startVisualFlowWorker({ channel, onChange: () => inboxEvents.publish() });
 // Migração única e idempotente: converte o antigo Bot de Triagem em fluxo
 // visual (publicado, resposta automática DESLIGADA). Nunca bloqueia o boot.
-ensureTriageFlow().catch((error) => console.error("[BOT_FLOW] conversão da triagem falhou (tenta no próximo boot):", error.message));
 
 async function shutdown(signal) {
   console.log(`${signal} recebido. Encerrando servidor...`);
@@ -50,3 +51,4 @@ async function shutdown(signal) {
 
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));
+})().catch(async (error) => { console.error("[BOT_FLOW] inicialização bloqueada:", error.message); await prisma.$disconnect(); process.exitCode = 1; });
