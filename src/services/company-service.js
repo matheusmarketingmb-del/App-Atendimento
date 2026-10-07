@@ -200,7 +200,10 @@ function validateCompanyInput(data, { partial = false } = {}) {
     out.primaryColor = String(data.primaryColor).toUpperCase();
   }
   if (data.logoUrl !== undefined) out.logoUrl = data.logoUrl ? String(data.logoUrl).slice(0, 500) : null;
-  if (data.active !== undefined) out.active = Boolean(data.active);
+  if (data.active !== undefined) {
+    if (typeof data.active !== "boolean") throw fail("Informe se a empresa está ativada.");
+    out.active = data.active;
+  }
   if (data.displayOrder !== undefined) out.displayOrder = Number.parseInt(data.displayOrder, 10) || 0;
   return out;
 }
@@ -214,7 +217,18 @@ async function createCompany(data, viewer) {
 
 async function updateCompany(id, data, viewer) {
   assertGlobalMaster(viewer);
-  const company = await prisma.company.update({ where: { id }, data: validateCompanyInput(data, { partial: true }) });
+  const update = validateCompanyInput(data, { partial: true });
+  const company = await prisma.$transaction(async (transaction) => {
+    // Serializa alterações para não permitir que duas desativações simultâneas
+    // deixem a Central sem nenhuma empresa disponível.
+    await transaction.$queryRaw`SELECT "id" FROM "Company" ORDER BY "id" FOR UPDATE`;
+    const current = await transaction.company.findUnique({ where: { id } });
+    if (!current) throw fail("Empresa não encontrada.", 404);
+    if (current.active && update.active === false && await transaction.company.count({ where: { active: true } }) <= 1) {
+      throw fail("Mantenha ao menos uma empresa ativada.");
+    }
+    return transaction.company.update({ where: { id }, data: update });
+  });
   invalidateCompanyCache();
   return publicCompany(company);
 }

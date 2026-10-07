@@ -18,6 +18,37 @@ function toast(message, error = false) {
   toast.timer = setTimeout(() => element.classList.remove("show"), 3200);
 }
 
+async function loadCompanyActivation() {
+  const { companies } = await api("/api/admin/companies");
+  const list = $("#company-activation-list");
+  list.replaceChildren();
+  for (const company of companies) {
+    const row = document.createElement("div");
+    row.className = "company-activation-row";
+    const name = document.createElement("span");
+    name.textContent = company.name;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.dataset.companyActivation = company.id;
+    button.setAttribute("role", "switch");
+    button.setAttribute("aria-checked", String(company.active));
+    button.setAttribute("aria-label", `Ativar ${company.name} no app`);
+    button.textContent = company.active ? "Ativada" : "Desativada";
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      try {
+        await api(`/api/admin/companies/${encodeURIComponent(company.id)}`, { method:"PATCH", body:JSON.stringify({ active:!company.active }) });
+        // Recarrega empresas e seletores já existentes; preferências antigas
+        // de empresa oculta são descartadas pela leitura do backend.
+        location.reload();
+      } catch (error) { toast(error.message, true); button.disabled = false; }
+    });
+    row.append(name, button);
+    list.append(row);
+  }
+  $("#company-activation-panel").hidden = false;
+}
+
 function fillForm(settings) {
   $("#cs-reopen-enabled").checked = settings.reopenConversationOnCustomerMessage;
   $("#cs-reopen-window").value = settings.reopenWindowMinutes ?? "";
@@ -130,6 +161,7 @@ $("#logout").addEventListener("click", async () => {
 
     const status = await api("/api/auth/status");
     $("#current-user").textContent = status.user.name;
+    if (status.user.isMaster) await loadCompanyActivation();
     await window.CompanyContext.load();
     if (window.CompanyContext.multi()) {
       $("#settings-company-bar").hidden = false;

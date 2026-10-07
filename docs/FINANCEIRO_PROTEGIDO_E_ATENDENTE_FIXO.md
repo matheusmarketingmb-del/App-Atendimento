@@ -63,3 +63,23 @@ Nunca substitui `Conversation.assignedUserId`.
 
 Migration: `prisma/migrations/20261007120000_private_sector_and_preferred_assignee` (aditiva).
 Testes: `test/private-segments*.test.js`, `test/preferred-assignee.test.js`.
+
+## Prévia local isolada
+
+Disponível em `http://127.0.0.1:3339`, usando exclusivamente o schema
+`financeiro_preview_20261007` do PostgreSQL QA em `127.0.0.1:25432`.
+Nenhum envio real é permitido; a VPS não é alterada.
+
+- Master: `bot-qa@teste.local`.
+- Atendente Financeiro: `ana-qa@teste.local`.
+- Atendente comum/fixo: `carlos-qa@teste.local`.
+- Senha dos três usuários fictícios: `teste-local-bots`.
+
+Abra o cliente **Cliente fictício — histórico protegido**. O Master vê o trecho
+financeiro; Carlos vê o atendimento comum, com o trecho financeiro oculto.
+Em **Detalhes**, o Master pode alterar o atendente fixo. Em **Categorias**, o
+Financeiro de demonstração já está com **Histórico protegido** marcado.
+
+Para reiniciar, com o banco QA em execução e a porta 3339 livre:
+`npm run preview:financeiro`. O preparo é idempotente e não apaga dados.
+Validação de navegador: `scripts/check-local-financeiro-preview.js`.

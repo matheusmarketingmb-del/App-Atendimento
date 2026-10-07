@@ -70,8 +70,9 @@ async function recordStatusEvent(event, { client = prisma } = {}) {
     if (!message || message.channel !== "META" || message.direction !== "ENVIADA") return null;
     const pricing = event.rawPayload?.pricing || null;
     const template = message.rawPayload?.template || null;
-    const category = normalizeCategory(pricing?.category) || normalizeCategory(template?.category) || (message.type === "template" ? "MARKETING" : "SERVICE");
     const existing = await client.metaMessageCharge.findUnique({ where: { messageId: message.id } });
+    const category = normalizeCategory(pricing?.category) || normalizeCategory(existing?.pricingCategory)
+      || normalizeCategory(template?.category) || existing?.category || "SERVICE";
     const country = existing?.country || countryForPhone(message.conversation.contact?.phone);
     const billable = typeof pricing?.billable === "boolean" ? pricing.billable : existing?.billable ?? null;
     const pricingType = pricing?.type || existing?.pricingType || null;
@@ -106,19 +107,19 @@ function periodRange({ period = "month", from, to } = {}, now = new Date()) {
   if (from || to) {
     const start = from ? new Date(from) : new Date(0);
     const end = to ? new Date(to) : now;
-    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) throw fail("Período inválido.");
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start > end) throw fail("Período inválido.");
     return { start, end };
   }
-  const start = new Date(now);
-  if (period === "day") start.setHours(0, 0, 0, 0);
-  else if (period === "week") { start.setDate(start.getDate() - 6); start.setHours(0, 0, 0, 0); }
-  else if (period === "month") { start.setDate(1); start.setHours(0, 0, 0, 0); }
+  const start = require("./operations-panel-service").startOfToday(now);
+  if (period === "day") { /* início do dia no fuso da operação */ }
+  else if (period === "week") start.setUTCDate(start.getUTCDate() - 6);
+  else if (period === "month") start.setUTCDate(1);
   else throw fail("Período inválido (day, week ou month).");
   return { start, end: now };
 }
 
 function monthStart(now = new Date()) {
-  return new Date(now.getFullYear(), now.getMonth(), 1);
+  return periodRange({ period: "month" }, now).start;
 }
 
 const toNumber = (value) => (value === null || value === undefined ? null : Number(value));
@@ -129,12 +130,12 @@ async function getCostReport(viewer, query = {}, { now = new Date() } = {}) {
   const companyIds = query.company && query.company !== companyService.ALL_COMPANIES
     ? await companyService.resolveCompanyFilter(viewer, query.company)
     : await companyService.accessibleCompanyIds(viewer);
-  const where = { companyId: { in: companyIds }, sentAt: { gte: start, lte: end }, ...(query.channelAccountId ? { channelAccountId: String(query.channelAccountId) } : {}) };
+  const where = { companyId: { in: companyIds }, currency: "BRL", sentAt: { gte: start, lte: end }, ...(query.channelAccountId ? { channelAccountId: String(query.channelAccountId) } : {}) };
   const [rows, unpriced, budgets, monthRows, companies, accounts] = await Promise.all([
     prisma.metaMessageCharge.groupBy({ by: ["companyId", "channelAccountId", "category"], where, _count: { _all: true }, _sum: { estimatedCost: true } }),
     prisma.metaMessageCharge.count({ where: { ...where, estimatedCost: null } }),
     prisma.metaCostBudget.findMany({ where: { companyId: { in: companyIds } } }),
-    prisma.metaMessageCharge.groupBy({ by: ["companyId"], where: { companyId: { in: companyIds }, sentAt: { gte: monthStart(now), lte: now } }, _sum: { estimatedCost: true } }),
+    prisma.metaMessageCharge.groupBy({ by: ["companyId"], where: { companyId: { in: companyIds }, currency: "BRL", sentAt: { gte: monthStart(now), lte: now } }, _sum: { estimatedCost: true } }),
     companyService.listCompanies({ includeInactive: true }),
     prisma.channelAccount.findMany({ where: { companyId: { in: companyIds }, channel: "META" }, select: { id: true, name: true, companyId: true } }),
   ]);
@@ -205,14 +206,26 @@ async function createPricing({ country = "BR", category, price, currency = "BRL"
   const start = effectiveFrom ? new Date(effectiveFrom) : new Date();
   if (Number.isNaN(start.getTime())) throw fail("Data de início inválida.");
   const cleanCurrency = String(currency || "BRL").trim().toUpperCase().slice(0, 3);
+  if (cleanCurrency !== "BRL") throw fail("O relatório usa reais. Cadastre preços em BRL; não há conversão automática de moedas.");
   return prisma.$transaction(async (transaction) => {
+    const next = await transaction.metaPricing.findFirst({
+      where: { country: cleanCountry, category, effectiveFrom: { gt: start } }, orderBy: { effectiveFrom: "asc" },
+    });
+    const duplicate = await transaction.metaPricing.findFirst({ where: { country: cleanCountry, category, effectiveFrom: start } });
+    if (duplicate) throw fail("Já existe um preço para essa categoria, país e início de vigência.");
     await transaction.metaPricing.updateMany({
       where: { country: cleanCountry, category, effectiveFrom: { lt: start }, OR: [{ effectiveTo: null }, { effectiveTo: { gt: start } }] },
       data: { effectiveTo: start },
     });
     const created = await transaction.metaPricing.create({ data: {
-      country: cleanCountry, category, price: new Prisma.Decimal(value), currency: cleanCurrency, effectiveFrom: start, createdById: viewer.id,
+      country: cleanCountry, category, price: new Prisma.Decimal(value), currency: cleanCurrency, effectiveFrom: start, effectiveTo: next?.effectiveFrom || null, createdById: viewer.id,
     } });
+    // Cadastro posterior preenche apenas custos ainda sem preço, na vigência
+    // correspondente. Estimativas já registradas não são reescritas.
+    await transaction.metaMessageCharge.updateMany({
+      where: { country: cleanCountry, category, estimatedCost: null, sentAt: { gte: start, ...(next ? { lt: next.effectiveFrom } : {}) } },
+      data: { estimatedCost: new Prisma.Decimal(value), currency: cleanCurrency },
+    });
     await audit.recordAudit({
       actor: viewer, action: "META_PRICING_CREATED", entityType: "CONVERSATION_SETTINGS", entityId: created.id,
       summary: `Cadastrou preço Meta ${category} (${cleanCountry}): ${cleanCurrency} ${value}`,
@@ -224,6 +237,8 @@ async function createPricing({ country = "BR", category, price, currency = "BRL"
 
 async function setBudget({ company, monthlyBudget, currency = "BRL" } = {}, viewer) {
   authorization.assertMaster(viewer);
+  if (!company || company === companyService.ALL_COMPANIES) throw fail("Informe a empresa.");
+  if (currency !== "BRL") throw fail("O orçamento deve ser informado em BRL.");
   const [companyId] = await companyService.resolveCompanyFilter(viewer, company);
   if (!companyId || company === companyService.ALL_COMPANIES) throw fail("Informe a empresa.");
   if (monthlyBudget === null || monthlyBudget === "") {

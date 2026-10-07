@@ -46,7 +46,7 @@ function publicAccount(account) {
 
 async function listAccounts(viewer) {
   assertIntegrationManager(viewer);
-  const accounts = await prisma.channelAccount.findMany({ include: ACCOUNT_INCLUDE, orderBy: [{ channel: "asc" }, { name: "asc" }] });
+  const accounts = await prisma.channelAccount.findMany({ where: { company: { is: { active: true } } }, include: ACCOUNT_INCLUDE, orderBy: [{ channel: "asc" }, { name: "asc" }] });
   return accounts.map(publicAccount);
 }
 

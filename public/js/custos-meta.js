@@ -4,6 +4,7 @@ const esc = (value = "") => String(value ?? "").replace(/[&<>'"]/g, (char) => ({
 const money = (value, currency = "BRL") => (value === null || value === undefined ? "—"
   : new Intl.NumberFormat("pt-BR", { style: "currency", currency, minimumFractionDigits: 2, maximumFractionDigits: 4 }).format(value));
 const state = { company: "ALL", accounts: [] };
+let reportSequence = 0;
 
 async function api(url, options = {}) {
   const headers = { ...(options.body ? { "Content-Type": "application/json" } : {}), ...(options.headers || {}) };
@@ -50,10 +51,14 @@ function renderReport(report) {
 }
 
 async function loadReport() {
+  const sequence = ++reportSequence;
   const params = new URLSearchParams({ period: $("#cost-period").value });
   if (state.company !== "ALL") params.set("company", state.company);
   if ($("#cost-account").value) params.set("channelAccountId", $("#cost-account").value);
-  try { renderReport(await api(`/api/meta-costs/report?${params}`)); } catch (error) { toast(error.message, true); }
+  try {
+    const report = await api(`/api/meta-costs/report?${params}`);
+    if (sequence === reportSequence) renderReport(report);
+  } catch (error) { if (sequence === reportSequence) toast(error.message, true); }
 }
 
 async function loadPricing() {

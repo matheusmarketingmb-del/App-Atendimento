@@ -1,3 +1,4 @@
+@import url("/css/form-controls.css");
 :root { --orange:#ef5b2a; --orange-soft:#fff3ee; --ink:#121212; --muted:#747474; --line:#e9e9e9; --panel:#fff; --bg:#f5f5f5; }
 * { box-sizing:border-box; }
 body { margin:0; color:var(--ink); background:var(--bg); font-family:Poppins,Segoe UI,Arial,sans-serif; overflow:hidden; }
@@ -61,6 +62,10 @@ html[data-theme="dark"] .category-missing-hint,html[data-theme="dark"] .category
 .categories-heading button.active { border-color:var(--orange); color:var(--on-accent); background:var(--orange); }
 .category-filter-item { display:grid; grid-template-columns:minmax(0,1fr) 25px; align-items:center; gap:3px; }
 .category-filter-item .filter { min-width:0; }
+/* Identidade da empresa sem competir com a cor do setor ou com a seleção. */
+.category-filter-group[data-company-border] { position:relative; padding-left:7px; margin:3px 0; }
+.category-filter-group[data-company-border]::before { content:""; position:absolute; top:5px; bottom:5px; left:0; width:2px; border-radius:2px; background:var(--category-company-border); opacity:.75; pointer-events:none; }
+.category-filter-group[data-company-border]:hover::before { opacity:1; }
 .category-eye { width:25px; height:25px; padding:0; border:0; border-radius:50%; color:#8a929b; background:transparent; font-size:12px; cursor:pointer; }
 .category-hidden { opacity:.52; }
 .category-group-label { display:flex; align-items:center; gap:7px; padding:7px 8px 4px 11px; color:#7f8792; font-size:11px; }.category-group-label small { margin-left:auto; font-size:8px; text-transform:uppercase; }
@@ -2116,6 +2121,49 @@ html[data-theme="dark"] .conversation-card.active { background:var(--surface-2);
 .team-company-permissions summary::-webkit-details-marker { display:none; }
 .team-company-permission-list { display:grid; grid-template-columns:repeat(auto-fill,minmax(170px,1fr)); gap:4px 12px; padding:6px 0 2px 22px; }
 
+/* Empresa em duas linhas: Todas em destaque, marcas compactas abaixo. */
+.company-filter:not([hidden]) { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:5px; padding:5px; }
+.company-filter .company-filter-option { width:100%; min-height:30px; padding:0 5px; font-size:10px; letter-spacing:.02em; }
+.company-filter .company-filter-option[data-company-filter="ALL"] { grid-column:1 / -1; min-height:38px; font-size:13px; letter-spacing:0; }
+.list-heading .company-filter-mobile:not([hidden]) { display:none; }
+
+/* Campos de cargo com a mesma largura e altura em todas as empresas. */
+.team-company-row { display:grid; grid-template-columns:minmax(0,1fr) 164px; gap:10px 12px; padding:12px; }
+.team-company-check { min-width:0; margin:0; flex-wrap:wrap; }
+.team-form .team-company-role { width:100%; min-width:0; height:40px; padding:0 10px; font-size:12px; }
+.team-company-permissions { grid-column:1 / -1; }
+
+/* A empresa adicionou um campo: cada controle agora tem sua própria coluna. */
+#category-dialog .category-create-form { grid-template-columns:minmax(0,1fr) minmax(0,1.2fr) minmax(0,1fr) 56px; gap:12px; }
+#category-dialog .category-create-form label { min-width:0; }
+#category-dialog .category-create-form input,#category-dialog .category-create-form select { width:100%; min-width:0; height:40px; font-size:12px; }
+#category-dialog .category-create-form button { grid-column:1 / -1; height:40px; }
+#category-dialog .category-manager-row { grid-template-columns:64px 40px minmax(0,1fr) 144px 62px 70px; gap:10px; padding-block:12px; }
+#category-dialog .category-manager-row .manager-company-badge { grid-column:1; justify-self:start; }
+#category-dialog .category-manager-row .managed-color { grid-column:2; width:40px; }
+#category-dialog .category-manager-row .managed-name { grid-column:3; width:100%; font-size:13px; }
+#category-dialog .category-manager-row .managed-parent { grid-column:4; width:100%; font-size:11px; }
+#category-dialog .category-manager-row .active-switch { grid-column:5; font-size:11px; }
+#category-dialog .category-manager-row button { grid-column:6; font-size:11px; }
+#category-dialog .category-manager-row input:not([type="checkbox"]),#category-dialog .category-manager-row select,#category-dialog .category-manager-row button { height:40px; }
+#category-dialog .category-manager-row > * { grid-row:1; }
+
+@media (max-width:700px) {
+  .list-heading .company-filter-mobile:not([hidden]) { display:grid; }
+  .team-company-row { grid-template-columns:minmax(0,1fr); }
+  .team-form .team-company-role { width:100%; }
+  #category-dialog .category-create-form { grid-template-columns:minmax(0,1fr) 56px; }
+  #category-company-field,#category-dialog .category-create-form label:has(#category-name) { grid-column:1 / -1; }
+  #category-dialog .category-manager-row { grid-template-columns:40px minmax(0,1fr) 76px; gap:9px; }
+  #category-dialog .category-manager-row .manager-company-badge { grid-column:1 / -1; grid-row:1; }
+  #category-dialog .category-manager-row .managed-color { grid-column:1; grid-row:2; }
+  #category-dialog .category-manager-row .managed-name { grid-column:2 / -1; grid-row:2; }
+  #category-dialog .category-manager-row .managed-parent { grid-column:1 / 3; grid-row:3; }
+  #category-dialog .category-manager-row .active-switch { grid-column:3; grid-row:3; }
+  #category-dialog .category-manager-row button { grid-column:2 / -1; grid-row:4; }
+  #category-dialog .category-manager-row.subcategory-row { padding-left:10px; }
+}
+
 /* Setor privado (Financeiro): bloco no lugar do trecho que o usuário não pode
    ler — sem conteúdo, autor ou mídia (o backend nem envia). */
 .restricted-segment { margin:14px auto; max-width:420px; padding:10px 14px; display:flex; flex-direction:column; align-items:center; gap:3px; border:1px dashed var(--border-subtle, var(--line)); border-radius:var(--radius-md, 10px); color:var(--text-3, var(--muted)); background:var(--surface-0, var(--panel)); text-align:center; }
@@ -2132,6 +2180,11 @@ html[data-theme="dark"] .conversation-card.active { background:var(--surface-2);
 .preferred-assignee-filter { display:block; margin:8px 10px 2px; }
 .preferred-assignee-filter select { width:100%; min-height:30px; padding:0 8px; border:1px solid var(--border-subtle, var(--line)); border-radius:8px; color:var(--ink); background:var(--surface-0, var(--panel)); font-size:11px; }
 .category-private-toggle { display:inline-flex; align-items:center; gap:4px; font-size:10px; white-space:nowrap; }
+#category-dialog .category-manager-row > .category-private-toggle { grid-column:3 / -1; grid-row:2; justify-self:start; min-height:28px; white-space:normal; }
+@media (max-width:700px) {
+  #category-dialog .category-manager-row > .category-private-toggle { grid-column:1 / -1; grid-row:4; }
+  #category-dialog .category-manager-row > button { grid-row:5; }
+}
 
 /* Mobile/PWA: o composer não fica sob a barra de gestos (iOS/Android com
    área segura); sem efeito onde não há área segura. */

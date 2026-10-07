@@ -1,0 +1,20 @@
+/* Controles nativos, com aparência consistente e suporte ao picker moderno. */
+select:not([multiple]):not([size]) { min-width:0; min-height:36px; max-width:100%; padding:8px 32px 8px 11px; border:1px solid var(--line,#dfe2e5); border-radius:9px; color:var(--ink,#18212b); background-color:var(--surface,var(--panel,#fff)); font-family:inherit; font-size:12px; line-height:1.4; cursor:pointer; color-scheme:light; }
+[data-theme="dark"] select:not([multiple]):not([size]) { color-scheme:dark; }
+select:focus-visible { outline:2px solid var(--orange,#ef5b2a); outline-offset:2px; }
+select:disabled { cursor:not-allowed; opacity:.55; }
+select option,select optgroup { color:var(--ink,#18212b); background:var(--surface,var(--panel,#fff)); }
+/* Celulares mantêm o seletor próprio do sistema. */
+@media (hover:hover) and (pointer:fine) {
+  @supports (appearance:base-select) {
+    select:not([multiple]):not([size]),::picker(select) { appearance:base-select; }
+    select:not([multiple]):not([size]) { padding-right:11px; gap:12px; }
+    select::picker-icon { color:var(--muted,#747474); transition:transform .15s; }
+    select:open::picker-icon { transform:rotate(180deg); }
+    ::picker(select) { padding:5px; margin-block:5px; border:1px solid var(--line,#dfe2e5); border-radius:12px; color:var(--ink,#18212b); background:var(--surface,var(--panel,#fff)); box-shadow:0 10px 30px #0003; max-height:min(360px,60vh); overflow:auto; font-family:inherit; font-size:12px; }
+    select option { min-height:34px; padding:8px 10px; gap:10px; border-radius:7px; }
+    select option:hover,select option:focus-visible { background:color-mix(in srgb,var(--ink,#18212b) 8%,var(--surface,var(--panel,#fff))); outline:none; }
+    select option:checked { background:color-mix(in srgb,var(--orange,#ef5b2a) 12%,var(--surface,var(--panel,#fff))); font-weight:600; }
+    select option::checkmark { color:var(--orange,#ef5b2a); }
+  }
+}

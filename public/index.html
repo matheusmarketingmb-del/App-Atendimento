@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#16171a">
   <meta name="application-name" content="Mibro">
   <link rel="manifest" href="/manifest.webmanifest">
-  <link rel="icon" type="image/png" sizes="192x192" href="/assets/app-icon-192.png">
+  <link rel="icon" type="image/svg+xml" href="/assets/central-favicon.svg">
   <link rel="apple-touch-icon" href="/assets/app-icon-192.png">
   <title>Central de Atendimento</title>
   <script>try{const saved=localStorage.getItem("mibro-theme");document.documentElement.dataset.theme=saved||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light")}catch{}</script>
@@ -359,6 +359,7 @@
   <dialog id="preferred-assignee-dialog" class="category-dialog transfer-dialog">
     <div class="dialog-header"><div><span>CLIENTE</span><h2>Atendente fixo</h2><p id="preferred-assignee-contact">Novos atendimentos deste cliente vão direto para o atendente escolhido.</p></div><button id="close-preferred-assignee" type="button" aria-label="Fechar">×</button></div>
     <form id="preferred-assignee-form" class="transfer-form">
+      <p id="preferred-assignee-feedback" role="status" aria-live="polite"></p>
       <label class="transfer-text-field"><span>Atendente fixo</span><select id="preferred-assignee-user" required></select></label>
       <label class="transfer-history-option"><input id="preferred-assignee-enabled" type="checkbox" checked><span><b>Direcionar automaticamente novos atendimentos</b><small>O cliente não passa pela triagem do Bot e vai direto para este atendente, mesmo que ele esteja ausente. Não altera o responsável da conversa atual.</small></span></label>
       <label class="transfer-text-field"><span>Motivo (opcional)</span><input id="preferred-assignee-reason" maxlength="500" placeholder="Ex.: cliente da carteira do vendedor"></label>

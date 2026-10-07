@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,interactive-widget=resizes-content">
   <meta name="theme-color" content="#16171a">
-  <link rel="icon" type="image/png" sizes="192x192" href="/assets/app-icon-192.png">
+  <link rel="icon" type="image/svg+xml" href="/assets/central-favicon.svg">
   <title>Custos Meta &bull; Central de Atendimento</title>
   <script>try{const saved=localStorage.getItem("mibro-theme");document.documentElement.dataset.theme=saved||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light")}catch{}</script>
   <link rel="stylesheet" href="/css/skeleton.css">
@@ -42,7 +42,7 @@
           <label><span>País</span><input id="pricing-country" value="BR" maxlength="8" required></label>
           <label><span>Categoria</span><select id="pricing-category"><option>SERVICE</option><option>MARKETING</option><option>UTILITY</option><option>AUTHENTICATION</option></select></label>
           <label><span>Preço por mensagem</span><input id="pricing-price" type="number" min="0" step="0.0001" required></label>
-          <label><span>Moeda</span><input id="pricing-currency" value="BRL" maxlength="3" required></label>
+          <label><span>Moeda (sem conversão)</span><input id="pricing-currency" value="BRL" readonly required></label>
           <label><span>Vale a partir de</span><input id="pricing-from" type="date"></label>
           <button type="submit" class="ops-more">Salvar preço</button>
         </form>

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#16171a">
-  <link rel="icon" type="image/png" sizes="192x192" href="/assets/app-icon-192.png">
+  <link rel="icon" type="image/svg+xml" href="/assets/central-favicon.svg">
   <title>Configurações &bull; Conversas &bull; Central de Atendimento</title>
   <script>try{const saved=localStorage.getItem("mibro-theme");document.documentElement.dataset.theme=saved||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light")}catch{}</script>
   <link rel="stylesheet" href="/css/skeleton.css">
@@ -26,6 +26,11 @@
       <div id="settings-readonly-note" class="readonly-note" hidden>Modo somente leitura — apenas uma conta Master pode alterar estas configurações.</div>
     </div>
 
+    <section id="company-activation-panel" class="card company-activation-panel" hidden>
+      <div class="card-heading"><div><span>EMPRESAS</span><h3>Empresas disponíveis no app</h3></div></div>
+      <p class="company-activation-help">Desativar oculta a empresa, seus filtros, categorias e contas nas telas. Nenhum dado ou permissão é apagado; ao reativar, as opções voltam. Isso não desconecta números nem altera bots.</p>
+      <div id="company-activation-list"></div>
+    </section>
     <div id="settings-company-bar" class="settings-company-bar" hidden>
       <div id="settings-company-filter" class="company-filter" role="radiogroup" aria-label="Configuração de qual empresa"></div>
       <span id="settings-company-note"></span>

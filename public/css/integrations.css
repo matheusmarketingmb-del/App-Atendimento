@@ -86,3 +86,4 @@
 .account-row-main .company-badge{margin-left:2px}
 .account-dialog-company{display:flex;align-items:center;gap:6px;margin:4px 0 10px;color:var(--muted);font-size:12px}
 .company-select-field{display:grid;gap:4px;margin-bottom:10px}
+.integrations-page{height:auto;min-height:100vh;overflow-y:auto}

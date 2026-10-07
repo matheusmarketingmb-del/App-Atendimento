@@ -240,11 +240,14 @@ async function updateUser(id, data, currentMasterId, actor) {
   try {
     return await prisma.$transaction(async (transaction) => {
       if (companyAccess !== undefined) {
-        await transaction.userCompanyAccess.deleteMany({ where: { userId: id } });
+        // As empresas desativadas não aparecem no formulário. Preserva seus
+        // vínculos para que reativar restaure exatamente as permissões antigas.
+        const submittedIds = companyAccess.map((row) => row.companyId);
+        await transaction.userCompanyAccess.deleteMany({ where: { userId: id, OR: [{ company: { is: { active: true } } }, { companyId: { in: submittedIds } }] } });
         if (companyAccess.length) await transaction.userCompanyAccess.createMany({ data: companyAccess.map((row) => ({ ...row, permissions: row.permissions ?? undefined, userId: id })) });
       }
       if (categoryIds) {
-        await transaction.userCategoryAccess.deleteMany({ where: { userId: id } });
+        await transaction.userCategoryAccess.deleteMany({ where: { userId: id, OR: [{ category: { is: { company: { is: { active: true } } } } }, { categoryId: { in: categoryIds } }] } });
         if (categoryIds.length) await transaction.userCategoryAccess.createMany({ data: categoryIds.map((categoryId) => ({ userId: id, categoryId })) });
       }
       const user = await transaction.user.update({ where: { id }, data: update, select: publicSelection });

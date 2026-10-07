@@ -2,6 +2,11 @@
 
 Nunca bloqueia envio. Tela: **Custos Meta** (`/custos-meta`, só Master).
 
+Revisão local: relatórios e orçamentos usam somente BRL, sem conversão automática.
+Os períodos seguem America/Sao_Paulo. Status posteriores sem `pricing` preservam
+a categoria já informada pela Meta. Preços retroativos respeitam a próxima vigência;
+o cadastro preenche estimativas ainda sem preço no intervalo correspondente.
+
 ## Como o custo é registrado
 - Ponto único: webhook de **status** do WhatsApp (`sent`/`delivered`/`read`), que traz
   `pricing` (`billable`, `pricing_model`, `category`, `type`). Cada mensagem ENVIADA

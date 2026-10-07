@@ -66,7 +66,7 @@ async function privateSectorCategoryIds(user) {
 // na Sincrofit). Empresa sem acesso nunca entra no OR — vale também para
 // busca por ID direto (IDOR): a conversa simplesmente não é encontrada.
 async function conversationScope(user) {
-  if (isMaster(user)) return {};
+  if (isMaster(user)) return { companyId: { in: await companyService.accessibleCompanyIds(user) } };
   const access = await companyService.companyAccess(user);
   if (!access.length) return NO_ACCESS;
   const categoryIds = await allowedCategoryIds(user);
@@ -93,7 +93,7 @@ async function conversationScope(user) {
 // "em atendimento por Fulano" a quem é do setor. Também restrito às
 // empresas acessíveis.
 async function sectorScope(user) {
-  if (isMaster(user)) return {};
+  if (isMaster(user)) return { companyId: { in: await companyService.accessibleCompanyIds(user) } };
   const companyIds = await companyService.accessibleCompanyIds(user);
   if (!companyIds.length) return NO_ACCESS;
   const queue = await queueCategoryFilters(user);
@@ -118,7 +118,6 @@ async function forCompany(user, companyId) {
 // Escopo Prisma para recursos com coluna companyId (Contact, Category, Bot,
 // Campaign…): Master Global vê tudo; demais só empresas liberadas.
 async function companyScope(user) {
-  if (isMaster(user)) return {};
   const companyIds = await companyService.accessibleCompanyIds(user);
   return companyIds.length ? { companyId: { in: companyIds } } : NO_ACCESS;
 }

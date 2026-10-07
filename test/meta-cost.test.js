@@ -55,6 +55,8 @@ test("categoria: pricing da Meta > template > SERVICE; billable=false custa 0; s
   const delivered = await costs.recordStatusEvent(status(template, "delivered", { billable: true, pricing_model: "PMP", category: "utility", type: "regular" }));
   assert.equal(delivered.category, "UTILITY");
   assert.ok(delivered.deliveredAt);
+  const read = await costs.recordStatusEvent(status(template, "read"));
+  assert.equal(read.category, "UTILITY", "status sem pricing preserva a classificação da Meta");
   assert.equal(await prisma.metaMessageCharge.count({ where: { messageId: template.id } }), 1, "um registro por mensagem");
 
   // Mensagem recebida, falha ou status desconhecido nunca vira custo.
@@ -62,6 +64,37 @@ test("categoria: pricing da Meta > template > SERVICE; billable=false custa 0; s
   assert.equal(await costs.recordStatusEvent(status(service, "failed")), null);
   assert.equal(costs.normalizeCategory("marketing_lite"), "MARKETING");
   assert.equal(costs.normalizeCategory("authentication-international"), "AUTHENTICATION");
+});
+
+test("sem categoria de template não inventa MARKETING; período usa Brasília e rejeita intervalo invertido", async () => {
+  const message = await sentMessage({ type: "template", template: { name: "sem_categoria" } });
+  const charge = await costs.recordStatusEvent(status(message, "sent"));
+  assert.equal(charge.category, "SERVICE");
+  const now = new Date("2026-10-01T01:30:00Z");
+  assert.equal(costs.periodRange({ period: "day" }, now).start.toISOString(), "2026-09-30T03:00:00.000Z");
+  assert.equal(costs.periodRange({ period: "month" }, now).start.toISOString(), "2026-09-01T03:00:00.000Z");
+  assert.throws(() => costs.periodRange({ from: "2026-10-02", to: "2026-10-01" }), { statusCode: 400 });
+});
+
+test("preço retroativo respeita a próxima vigência; não mistura moedas; cadastro preenche custos sem preço", async () => {
+  const country = `${COUNTRY}R`;
+  const early = new Date("2026-01-01T03:00:00Z");
+  const middle = new Date("2026-02-01T03:00:00Z");
+  const late = new Date("2026-03-01T03:00:00Z");
+  await costs.createPricing({ country, category: "UTILITY", price: 0.2, effectiveFrom: early }, master);
+  await costs.createPricing({ country, category: "UTILITY", price: 0.4, effectiveFrom: late }, master);
+  const inserted = await costs.createPricing({ country, category: "UTILITY", price: 0.3, effectiveFrom: middle }, master);
+  assert.equal(inserted.effectiveTo.toISOString(), late.toISOString());
+  assert.equal(Number((await costs.priceFor({ country, category: "UTILITY", at: new Date("2026-02-15") })).price), 0.3);
+  await assert.rejects(() => costs.createPricing({ country, category: "UTILITY", price: 1, effectiveFrom: middle }, master), { statusCode: 400 });
+  await assert.rejects(() => costs.createPricing({ country, category: "SERVICE", price: 1, currency: "USD" }, master), { statusCode: 400 });
+  await assert.rejects(() => costs.setBudget({ monthlyBudget: 10 }, master), { statusCode: 400 });
+  await assert.rejects(() => costs.setBudget({ company: "mibro", monthlyBudget: 10, currency: "USD" }, master), { statusCode: 400 });
+  const message = await sentMessage();
+  const charge = await costs.recordStatusEvent(status(message, "sent", { billable: true, category: "utility" }));
+  await prisma.metaMessageCharge.update({ where: { id: charge.id }, data: { country, estimatedCost: null } });
+  await costs.createPricing({ country, category: "UTILITY", price: 0.5, effectiveFrom: new Date("2026-04-01T03:00:00Z") }, master);
+  assert.equal(Number((await prisma.metaMessageCharge.findUnique({ where: { id: charge.id } })).estimatedCost), 0.5);
 });
 
 test("preços versionados por vigência; relatório por empresa e número; orçamento só alerta; só Master", async () => {

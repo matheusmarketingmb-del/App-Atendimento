@@ -40,12 +40,32 @@ const initials = (name = "?") => name.split(/\s+/).slice(0, 2).map((part) => par
 // company.primaryColor (validada como #RRGGBB) — nunca fixa no código.
 const companyColor = (company) => (/^#[0-9a-f]{6}$/i.test(company?.primaryColor || "") ? company.primaryColor : "");
 const companyStyleAttr = (company) => (companyColor(company) ? ` style="--company-color:${companyColor(company)}"` : "");
-const companyBadge = (company, extraClass = "") => (company
+const companyBadge = (company, extraClass = "") => (company && state.companies.some((entry) => entry.id === company.id)
   ? `<span class="company-badge ${extraClass}"${companyStyleAttr(company)} title="${escapeHtml(company.name || company.displayName)}">${escapeHtml(company.displayName || company.name)}</span>`
   : "");
 // Com uma empresa só, o badge seria redundante (a borda continua).
 const multiCompany = () => state.companies.length > 1;
 const companyQuery = () => (state.companyFilter && state.companyFilter !== "ALL" ? state.companyFilter : "");
+
+// A visão "Todas" reúne setores de mesmo código. Nesse caso a borda
+// mostra as cores de todas as empresas, sem atribuir o filtro a só uma.
+function categoryCompanyBorder(category, categories) {
+  const owners = new Map();
+  for (const item of categories) {
+    if (state.companyFilter !== "ALL" && item.company?.slug !== state.companyFilter) continue;
+    if (item.code !== category.code || Boolean(item.parentId) !== Boolean(category.parentId)) continue;
+    if (category.parentId && item.parent?.code !== category.parent?.code) continue;
+    const company = item.company || state.companies.find((entry) => entry.id === item.companyId);
+    if (company && companyColor(company)) owners.set(company.id, company);
+  }
+  const companies = [...owners.values()];
+  if (!companies.length) return "";
+  const stops = companies.flatMap((company, index) => [
+    `${companyColor(company)} ${index * 100 / companies.length}%`,
+    `${companyColor(company)} ${(index + 1) * 100 / companies.length}%`,
+  ]);
+  return ` data-company-border style="--category-company-border:linear-gradient(to bottom,${stops.join(",")})" title="${escapeHtml(companies.map((company) => company.name || company.displayName).join(" · "))}"`;
+}
 const conversationTimeZone = "America/Sao_Paulo";
 const time = (value) => value ? new Intl.DateTimeFormat("pt-BR", { hour:"2-digit", minute:"2-digit", timeZone:conversationTimeZone }).format(new Date(value)) : "";
 const statusLabel = (value) => ({ NOVO:"Novo", EM_ATENDIMENTO:"Em atendimento", AGUARDANDO_EQUIPE:"Aguardando equipe", AGUARDANDO_CLIENTE:"Aguardando cliente", HANDOFF_BOT:"Bot transferiu", BOT:"Bot", FINALIZADO:"Finalizado" })[value] || value;
@@ -856,7 +876,7 @@ async function loadCategories() {
   state.categories = allCategories;
   state.categoryVisibility = visibility;
   const categories = sidebarCategories(allCategories);
-  const signature = JSON.stringify([state.visibilityMode, state.companyFilter, visibility, allCategories.map((category) => [category.id, category.companyId, category.parentId, category.parent?.name, category.code, category.name, category.color, category.active, category.displayOrder, category.hidden])]);
+  const signature = JSON.stringify([state.visibilityMode, state.companyFilter, visibility, state.companies.map((company) => [company.id, company.name, company.primaryColor]), allCategories.map((category) => [category.id, category.companyId, category.parentId, category.parent?.name, category.code, category.name, category.color, category.active, category.displayOrder, category.hidden])]);
   if (signature === state.categorySignature) return;
   state.categorySignature = signature;
   state.selectedHeaderSignature = "";
@@ -878,7 +898,7 @@ async function loadCategories() {
     const expanded = !rootShown || state.expandedCategories.has(root.id);
     const row = (category, child = false) => `<div class="category-filter-item ${category.hidden ? "category-hidden" : ""}"><button class="filter ${child ? "subcategory-filter" : "category-parent-filter"}" data-category="${category.code}" ${!child ? `data-category-group="${category.id}" aria-expanded="${expanded}"` : ""}><span><i class="category-dot" style="background:${category.color || root.color || "#999"}"></i>${child ? "↳ " : ""}${escapeHtml(category.name)}${!child && children.length ? `<i class="category-chevron">${expanded ? "⌃" : "⌄"}</i>` : ""}</span><strong data-category-count="${category.id}">0</strong></button><button class="category-eye" data-hide-category="${category.id}" data-hidden="${category.hidden}" title="${category.hidden ? "Exibir" : "Ocultar"}">${category.hidden ? "◉" : "⊘"}</button></div>`;
     const rootRow = rootShown ? row(root) : `<div class="category-group-label"><i class="category-dot" style="background:${root.color || "#999"}"></i><span>${escapeHtml(root.name)}</span><small>principal oculta</small></div>`;
-    return `<div class="category-filter-group">${rootRow}${children.length ? `<div class="subcategory-filters" data-category-children="${root.id}" ${expanded ? "" : "hidden"}>${children.map((child) => row(child, true)).join("")}</div>` : ""}</div>`;
+    return `<div class="category-filter-group"${categoryCompanyBorder(root, allCategories)}>${rootRow}${children.length ? `<div class="subcategory-filters" data-category-children="${root.id}" ${expanded ? "" : "hidden"}>${children.map((child) => row(child, true)).join("")}</div>` : ""}</div>`;
   }).join("");
   renderCategorySelect();
   renderCategoryCompanyOptions();
@@ -1281,7 +1301,7 @@ function renderComposerSender(c) {
 function renderContextDetails(c) {
   const name = c.contact.customName || c.contact.name || c.contact.phone;
   const channel = channelBadge(c.channel) || "WhatsApp";
-  $("#context-details-summary").innerHTML = `
+  const markup = `
     <div class="context-detail-block">
       <span class="context-detail-label">Contato</span>
       <strong>${escapeHtml(name)}</strong>
@@ -1299,6 +1319,11 @@ function renderContextDetails(c) {
     </div>
     ${preferredAssigneeMarkup(c)}
     ${postContextMarkup(c.postContext)}`;
+  const target = $("#context-details-summary");
+  if (target.detailsMarkup !== markup) {
+    target.detailsMarkup = markup;
+    target.innerHTML = markup;
+  }
 }
 
 // Atendente fixo do cliente (≠ responsável atual): para quem o cliente vai
@@ -1594,50 +1619,79 @@ $("#preferred-assignee-filter")?.addEventListener("change", (event) => {
 
 // Atendente fixo — diálogo Definir/Alterar e Remover (painel do contato).
 let preferredAssigneeContext = null;
+let preferredAssigneeBusy = false;
+let preferredAssigneeRequest = 0;
+function preferredAssigneeLoading(loading, text = "") {
+  $("#preferred-assignee-feedback").textContent = text;
+  $("#preferred-assignee-dialog").setAttribute("aria-busy", String(loading));
+  for (const selector of ["#preferred-assignee-user", "#preferred-assignee-enabled", "#preferred-assignee-reason", "#preferred-assignee-form button[type='submit']"]) $(selector).disabled = loading;
+}
 $("#context-details-summary").addEventListener("click", async (event) => {
   const button = event.target.closest("[data-preferred-assignee-action]");
-  if (!button || !state.selectedContactId) return;
+  if (!button || !state.selectedContactId || preferredAssigneeBusy) return;
   const contactId = state.selectedContactId;
+  const conversationId = state.selectedId;
+  const request = ++preferredAssigneeRequest;
+  preferredAssigneeBusy = true;
   try {
     if (button.dataset.preferredAssigneeAction === "remove") {
       if (!confirm("Remover o atendente fixo deste cliente?\n\nOs próximos atendimentos voltam a passar pelo Bot/triagem. A conversa atual não muda.")) return;
+      button.disabled = true;
+      button.textContent = "Removendo…";
       await api(`/api/contacts/${encodeURIComponent(contactId)}/preferred-assignee`, { method:"DELETE", body: JSON.stringify({}) });
       toast("Atendente fixo removido.");
-      return openConversation(state.selectedId, { refreshList: true, markRead: false });
+      if (state.selectedId === conversationId) await openConversation(conversationId, { refreshList: true, markRead: false });
+      return;
     }
+    preferredAssigneeContext = null;
+    $("#preferred-assignee-contact").textContent = `Cliente: ${state.selectedContactName}. Novos atendimentos vão direto para o atendente escolhido.`;
+    $("#preferred-assignee-user").innerHTML = '<option value="">Carregando…</option>';
+    $("#preferred-assignee-reason").value = "";
+    preferredAssigneeLoading(true, "Carregando atendentes…");
+    $("#preferred-assignee-dialog").showModal();
     const [current, candidates] = await Promise.all([
       api(`/api/contacts/${encodeURIComponent(contactId)}/preferred-assignee`),
       api(`/api/contacts/${encodeURIComponent(contactId)}/preferred-assignee/candidates`),
     ]);
-    preferredAssigneeContext = { contactId };
+    if (request !== preferredAssigneeRequest || !$("#preferred-assignee-dialog").open) return;
+    preferredAssigneeContext = { contactId, conversationId };
     $("#preferred-assignee-contact").textContent = `Cliente: ${state.selectedContactName}. Novos atendimentos vão direto para o atendente escolhido.`;
     $("#preferred-assignee-user").innerHTML = `<option value="">Selecione</option>${candidates.map((user) => `<option value="${escapeHtml(user.id)}">${escapeHtml(user.name)} · ${escapeHtml(roleLabel(user.role))}</option>`).join("")}`;
     $("#preferred-assignee-user").value = current.assignee?.id || "";
     $("#preferred-assignee-enabled").checked = current.assignee ? current.autoRouteEnabled : true;
     $("#preferred-assignee-reason").value = "";
-    $("#preferred-assignee-dialog").showModal();
-  } catch (error) { toast(error.message, true); }
+    preferredAssigneeLoading(false);
+  } catch (error) {
+    if (request === preferredAssigneeRequest) {
+      if ($("#preferred-assignee-dialog").open) preferredAssigneeLoading(true, error.message);
+      toast(error.message, true);
+    }
+  } finally {
+    if (request === preferredAssigneeRequest) preferredAssigneeBusy = false;
+    if (button.isConnected) { button.disabled = false; if (button.dataset.preferredAssigneeAction === "remove") button.textContent = "Remover"; }
+  }
 });
 $("#preferred-assignee-form").addEventListener("submit", async (event) => {
   event.preventDefault();
-  if (!preferredAssigneeContext) return;
+  if (!preferredAssigneeContext || preferredAssigneeBusy) return;
+  const context = preferredAssigneeContext;
+  preferredAssigneeBusy = true;
   try {
-    await api(`/api/contacts/${encodeURIComponent(preferredAssigneeContext.contactId)}/preferred-assignee`, {
+    const body = JSON.stringify({ userId: $("#preferred-assignee-user").value, enabled: $("#preferred-assignee-enabled").checked, reason: $("#preferred-assignee-reason").value.trim() || null });
+    preferredAssigneeLoading(true, "Salvando…");
+    await api(`/api/contacts/${encodeURIComponent(context.contactId)}/preferred-assignee`, {
       method:"PUT",
-      body: JSON.stringify({
-        userId: $("#preferred-assignee-user").value,
-        enabled: $("#preferred-assignee-enabled").checked,
-        reason: $("#preferred-assignee-reason").value.trim() || null,
-      }),
+      body,
     });
     $("#preferred-assignee-dialog").close();
     toast("Atendente fixo salvo.");
-    await openConversation(state.selectedId, { refreshList: true, markRead: false });
-  } catch (error) { toast(error.message, true); }
+    if (state.selectedId === context.conversationId) await openConversation(context.conversationId, { refreshList: true, markRead: false });
+  } catch (error) { preferredAssigneeLoading(false, error.message); toast(error.message, true); }
+  finally { preferredAssigneeBusy = false; }
 });
 $("#cancel-preferred-assignee").addEventListener("click", () => $("#preferred-assignee-dialog").close());
 $("#close-preferred-assignee").addEventListener("click", () => $("#preferred-assignee-dialog").close());
-$("#preferred-assignee-dialog").addEventListener("close", () => { preferredAssigneeContext = null; });
+$("#preferred-assignee-dialog").addEventListener("close", () => { preferredAssigneeContext = null; ++preferredAssigneeRequest; preferredAssigneeBusy = false; });
 
 const quickFiltersTray = $("#quick-filters-tray");
 try { quickFiltersTray.open = localStorage.getItem("mibro-quick-filters-open") !== "0"; } catch {}
@@ -2776,8 +2830,13 @@ let quickReplySlashActive = null;
 
 async function loadQuickRepliesCache(conversationId) {
   if (!conversationId) return;
-  try { state.quickReplies = await api(`/api/quick-replies/composer?conversationId=${encodeURIComponent(conversationId)}`); }
-  catch { state.quickReplies = []; }
+  try {
+    const replies = await api(`/api/quick-replies/composer?conversationId=${encodeURIComponent(conversationId)}`);
+    if (state.selectedId === conversationId) state.quickReplies = replies;
+  } catch (error) {
+    if (state.selectedId === conversationId) state.quickReplies = [];
+    throw error;
+  }
 }
 
 function quickReplyCategories() {

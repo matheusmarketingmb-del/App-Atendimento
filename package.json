@@ -5,6 +5,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
+    "preview:financeiro": "node scripts/local-financeiro-preview.js",
     "start:prod": "node scripts/start-production.js",
     "test": "node scripts/run-tests.js",
     "prisma:generate": "prisma generate",
