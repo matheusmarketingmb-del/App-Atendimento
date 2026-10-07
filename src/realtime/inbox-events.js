@@ -83,4 +83,12 @@ function publishForConversation(conversationId) {
     .catch(() => publish());
 }
 
-module.exports = { handle, publish, publishForConversation, publishToUsers, shouldReceive };
+// Presença "online" = usuário com o painel aberto agora (conexão SSE viva).
+// Só em memória deste processo; não muda nenhuma regra de atribuição.
+function connectedUserIds() {
+  const ids = new Set();
+  for (const client of clients) if (client.userId && !client.res.destroyed && !client.res.writableEnded) ids.add(client.userId);
+  return ids;
+}
+
+module.exports = { connectedUserIds, handle, publish, publishForConversation, publishToUsers, shouldReceive };

@@ -59,6 +59,21 @@ async function requireConversationSettingsPage(req, res, next) {
   } catch (error) { return next(error); }
 }
 
+// Central de Operação: Master ou Supervisor em ALGUMA empresa (o escopo de
+// cada empresa é revalidado em cada chamada da API).
+async function requireOperationsPage(req, res, next) {
+  try {
+    const user = await auth.userFromToken(req.cookies[auth.COOKIE_NAME]);
+    if (!user) return res.redirect("/login.html");
+    const publicUser = auth.publicUser(user);
+    if (!(await require("../services/operations-panel-service").canOpenPanel(publicUser))) {
+      return res.status(403).send("Acesso restrito a Master ou Supervisor.");
+    }
+    req.user = publicUser;
+    return next();
+  } catch (error) { return next(error); }
+}
+
 module.exports = {
-  authenticate, requireCampaignsPage, requireConversationSettingsPage, requireMasterPage, requirePageAuth,
+  authenticate, requireCampaignsPage, requireConversationSettingsPage, requireMasterPage, requireOperationsPage, requirePageAuth,
 };

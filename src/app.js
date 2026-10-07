@@ -12,8 +12,9 @@ const authController = require("./controllers/auth-controller");
 const companyController = require("./controllers/company-controller");
 const whatsappAccounts = require("./services/whatsapp-account-service");
 const {
-  authenticate, requireCampaignsPage, requireConversationSettingsPage, requireMasterPage, requirePageAuth,
+  authenticate, requireCampaignsPage, requireConversationSettingsPage, requireMasterPage, requireOperationsPage, requirePageAuth,
 } = require("./middleware/auth");
+const operationsPanel = require("./services/operations-panel-service");
 const conversationSettingsController = require("./controllers/conversation-settings-controller");
 const conversationReportController = require("./controllers/conversation-report-controller");
 const verifyMetaSignature = require("./middleware/meta-signature");
@@ -381,6 +382,9 @@ function createApp({ channel = new MetaCloudChannel() } = {}) {
   app.get(["/relatorio-conversas", "/relatorio-conversas.html"], requireMasterPage, (_req, res) => (
     res.sendFile(path.join(process.cwd(), "public", "relatorio-conversas.html"))
   ));
+  app.get(["/operacao", "/operacao.html"], requireOperationsPage, (_req, res) => (
+    res.sendFile(path.join(process.cwd(), "public", "operacao.html"))
+  ));
   app.get(["/configuracoes", "/configuracoes.html"], requireConversationSettingsPage, (_req, res) => (
     res.sendFile(path.join(process.cwd(), "public", "configuracoes.html"))
   ));
@@ -477,6 +481,15 @@ app.post(
   app.get("/api/admin/companies", companyController.adminList);
   app.post("/api/admin/companies", companyController.create);
   app.patch("/api/admin/companies/:companyId", companyController.update);
+  // Central de Operação (Supervisor/Master) — só agregações e metadados.
+  app.get("/api/operations/overview", async (req, res, next) => {
+    try { return res.json(await operationsPanel.getOverview(req.user, req.query)); }
+    catch (error) { return next(error); }
+  });
+  app.get("/api/operations/options", async (req, res, next) => {
+    try { return res.json(await operationsPanel.getFilterOptions(req.user)); }
+    catch (error) { return next(error); }
+  });
   app.get("/api/conversations", inbox.list);
   app.get("/api/conversations/summary", inbox.summary);
   app.get("/api/alerts", inbox.alerts);

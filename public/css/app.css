@@ -2132,3 +2132,7 @@ html[data-theme="dark"] .conversation-card.active { background:var(--surface-2);
 .preferred-assignee-filter { display:block; margin:8px 10px 2px; }
 .preferred-assignee-filter select { width:100%; min-height:30px; padding:0 8px; border:1px solid var(--border-subtle, var(--line)); border-radius:8px; color:var(--ink); background:var(--surface-0, var(--panel)); font-size:11px; }
 .category-private-toggle { display:inline-flex; align-items:center; gap:4px; font-size:10px; white-space:nowrap; }
+
+/* Mobile/PWA: o composer não fica sob a barra de gestos (iOS/Android com
+   área segura); sem efeito onde não há área segura. */
+.composer { padding-bottom:calc(12px + env(safe-area-inset-bottom, 0px)); }

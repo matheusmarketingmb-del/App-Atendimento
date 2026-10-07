@@ -676,5 +676,7 @@ module.exports = {
   getSummary, getTimeseries, getStatusBreakdown, getChannelBreakdown, getCategoryBreakdown, getCompanyBreakdown,
   getAgentRanking, getAgentDetail, compareAgents, getHeatmap, getWaitTimeBuckets, getAlerts,
   listConversations, getConversationDetail,
+  // Reaproveitados pelo Painel Operacional (operations-panel-service.js).
+  computeConversationMetrics, loadMessagesByConversation,
   MAX_MESSAGE_COHORT,
 };

@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,interactive-widget=resizes-content">
+  <meta name="theme-color" content="#16171a">
+  <link rel="icon" type="image/png" sizes="192x192" href="/assets/app-icon-192.png">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <title>Central de Operação &bull; Central de Atendimento</title>
+  <script>try{const saved=localStorage.getItem("mibro-theme");document.documentElement.dataset.theme=saved||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light")}catch{}</script>
+  <link rel="stylesheet" href="/css/skeleton.css">
+  <link rel="stylesheet" href="/css/bots.css">
+  <link rel="stylesheet" href="/css/operacao.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/"><img src="/assets/central-mark.svg" alt="Central de Atendimento"><span></span><small>Operação</small></a>
+    <div class="phase-badge">CENTRAL DE OPERAÇÃO</div>
+    <a class="back-link" href="/">&larr; Central</a>
+    <button id="theme-toggle" class="round-button" type="button" title="Alternar tema">&#9790;</button>
+    <button id="logout" class="user-button" type="button"><span id="current-user">Usuário</span> &bull; Sair</button>
+  </header>
+
+  <main class="ops-shell">
+    <div class="ops-heading">
+      <div><span>SUPERVISÃO</span><h1>Central de Operação</h1><p id="ops-subtitle">O que precisa de atenção agora. Atualiza sozinho.</p></div>
+      <div class="ops-heading-actions"><small id="ops-updated" aria-live="polite"></small><button id="ops-refresh" type="button" title="Atualizar agora">↻ Atualizar</button></div>
+    </div>
+
+    <form id="ops-filters" class="ops-filters" aria-label="Filtros da operação">
+      <div id="ops-company-filter" class="company-filter" role="radiogroup" aria-label="Empresa" hidden></div>
+      <label><span>Equipe / setor</span><select id="ops-category"><option value="">Todos os setores</option><option value="UNCATEGORIZED">Sem categoria</option></select></label>
+      <label><span>Responsável</span><select id="ops-assignee"><option value="">Todos</option><option value="NONE">Sem responsável</option></select></label>
+      <label><span>Status</span><select id="ops-status">
+        <option value="">Todos ativos</option>
+        <option value="NOVO">Novos</option>
+        <option value="EM_ATENDIMENTO">Em atendimento</option>
+        <option value="AGUARDANDO_EQUIPE">Aguardando equipe</option>
+        <option value="AGUARDANDO_CLIENTE">Aguardando cliente</option>
+        <option value="HANDOFF_BOT">Bot transferiu</option>
+      </select></label>
+    </form>
+
+    <section id="ops-cards" class="ops-cards" aria-label="Indicadores"></section>
+    <p id="ops-truncated" class="ops-note" hidden>Volume alto: os indicadores detalhados consideram as 2.000 conversas ativas mais antigas.</p>
+
+    <div class="ops-grid">
+      <section class="ops-panel" aria-labelledby="ops-attention-title">
+        <div class="ops-panel-heading"><h2 id="ops-attention-title">Precisa de atenção</h2><small id="ops-attention-count"></small></div>
+        <div id="ops-attention" class="ops-attention"></div>
+        <button id="ops-attention-more" class="ops-more" type="button" hidden>Carregar mais</button>
+      </section>
+      <section class="ops-panel" aria-labelledby="ops-team-title">
+        <div class="ops-panel-heading"><h2 id="ops-team-title">Equipe</h2><small>Online = painel aberto agora</small></div>
+        <div id="ops-team" class="ops-team"></div>
+      </section>
+    </div>
+
+    <section class="ops-panel" aria-labelledby="ops-metrics-title">
+      <div class="ops-panel-heading"><h2 id="ops-metrics-title">Hoje</h2><small id="ops-metrics-note"></small></div>
+      <div id="ops-metrics" class="ops-metrics"></div>
+      <div id="ops-by-agent" class="ops-by-agent"></div>
+    </section>
+  </main>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script src="/js/company-context.js"></script>
+  <script src="/js/operacao.js"></script>
+</body>
+</html>

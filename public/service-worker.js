@@ -12,6 +12,7 @@ const STATIC_ASSETS = [
   "/css/skeleton.css",
   "/css/campaigns.css",
   "/css/configuracoes.css",
+  "/css/operacao.css",
 
   "/js/feature-flags.js",
   "/js/app.js",
@@ -22,6 +23,8 @@ const STATIC_ASSETS = [
   "/js/pwa.js",
   "/js/campaigns.js",
   "/js/configuracoes.js",
+  "/js/company-context.js",
+  "/js/operacao.js",
 
   "/assets/mibro-logo.png",
   "/assets/app-icon-192.png",
