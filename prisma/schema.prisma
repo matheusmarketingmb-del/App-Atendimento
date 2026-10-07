@@ -308,6 +308,8 @@ model Company {
   optOuts              OptOut[]
   auditLogs            AuditLog[]
   conversationSettings ConversationSettings[]
+  metaMessageCharges   MetaMessageCharge[]
+  metaCostBudget       MetaCostBudget?
 }
 
 // Acesso N:N usuário x empresa com role POR EMPRESA (Ana pode ser SUPERVISOR
@@ -484,10 +486,10 @@ model Conversation {
 }
 
 model Message {
-  id                    String           @id @default(cuid())
+  id                    String             @id @default(cuid())
   conversationId        String
-  externalId            String?          @unique
-  channel               Channel          @default(META)
+  externalId            String?            @unique
+  channel               Channel            @default(META)
   channelAccountId      String?
   direction             MessageDirection
   status                MessageStatus
@@ -505,8 +507,8 @@ model Message {
   // JSON, planilha com macro, tipo não identificado). Nunca marca mídia do
   // WhatsApp/Meta (essa já passa por um allowlist estrito por assinatura
   // binária, nunca fica "suspeita").
-  mediaSuspicious       Boolean          @default(false)
-  mediaSuspiciousReason String?          @db.Text
+  mediaSuspicious       Boolean            @default(false)
+  mediaSuspiciousReason String?            @db.Text
   occurredAt            DateTime
   sentByUserId          String?
   rawPayload            Json?
@@ -514,12 +516,13 @@ model Message {
   // conversa estava quando a mensagem foi criada. Carimbado automaticamente
   // (database/prisma.js) — nunca reescrito; nulo = mensagem comum.
   privateCategoryId     String?
-  createdAt             DateTime         @default(now())
-  updatedAt             DateTime         @updatedAt
-  conversation          Conversation     @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  sentByUser            User?            @relation("SentMessages", fields: [sentByUserId], references: [id], onDelete: SetNull)
-  privateCategory       Category?        @relation("MessagePrivateCategory", fields: [privateCategoryId], references: [id], onDelete: Restrict)
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @updatedAt
+  conversation          Conversation       @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sentByUser            User?              @relation("SentMessages", fields: [sentByUserId], references: [id], onDelete: SetNull)
+  privateCategory       Category?          @relation("MessagePrivateCategory", fields: [privateCategoryId], references: [id], onDelete: Restrict)
   botObservation        BotObservation?
+  metaCharge            MetaMessageCharge?
 
   @@index([conversationId, occurredAt])
   @@index([conversationId, privateCategoryId])
@@ -1542,6 +1545,7 @@ model ChannelAccount {
   events        ExternalChannelEvent[]
   campaigns     Campaign[]
   accessUsers   ChannelAccountUserAccess[]
+  metaCharges   MetaMessageCharge[]
   company       Company                    @relation(fields: [companyId], references: [id], onDelete: Restrict)
 
   @@unique([channel, name])
@@ -2400,4 +2404,77 @@ model BotWebhookEndpoint {
   updatedByName     String?
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
+}
+
+// =============================================================================
+// Controle de custos da Meta (meta-cost-service.js) — estimativa, nunca
+// bloqueia envio. Um registro por mensagem WhatsApp ENVIADA, criado/atualizado
+// pelo webhook de STATUS da Meta (que traz `pricing`): categoria cobrada pela
+// própria Meta > categoria do template > SERVICE. Nunca classifica texto.
+// =============================================================================
+enum MetaPricingCategory {
+  SERVICE
+  MARKETING
+  UTILITY
+  AUTHENTICATION
+}
+
+model MetaMessageCharge {
+  id               String              @id @default(cuid())
+  companyId        String
+  channelAccountId String?
+  messageId        String              @unique
+  conversationId   String
+  messageType      String
+  templateName     String?
+  // Categoria do template como a Meta a cadastrou (texto livre da Meta).
+  templateCategory String?
+  category         MetaPricingCategory
+  // `pricing` do webhook de status (fonte oficial quando presente).
+  pricingCategory  String?
+  pricingModel     String?
+  pricingType      String?
+  billable         Boolean?
+  country          String              @default("BR")
+  sentAt           DateTime
+  deliveredAt      DateTime?
+  estimatedCost    Decimal?            @db.Decimal(12, 6)
+  currency         String              @default("BRL")
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+  company          Company             @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  channelAccount   ChannelAccount?     @relation(fields: [channelAccountId], references: [id], onDelete: SetNull)
+  message          Message             @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, sentAt])
+  @@index([channelAccountId, sentAt])
+  @@index([category, sentAt])
+}
+
+// Tabela de preços versionada (nada de preço fixo no código): o preço vale
+// de effectiveFrom até effectiveTo (nulo = vigente).
+model MetaPricing {
+  id            String              @id @default(cuid())
+  country       String
+  category      MetaPricingCategory
+  price         Decimal             @db.Decimal(12, 6)
+  currency      String              @default("BRL")
+  effectiveFrom DateTime
+  effectiveTo   DateTime?
+  createdById   String?
+  createdAt     DateTime            @default(now())
+
+  @@index([country, category, effectiveFrom])
+}
+
+// Orçamento mensal opcional por empresa — só alerta visual, nunca bloqueia.
+model MetaCostBudget {
+  id            String   @id @default(cuid())
+  companyId     String   @unique
+  monthlyBudget Decimal  @db.Decimal(12, 2)
+  currency      String   @default("BRL")
+  updatedById   String?
+  updatedAt     DateTime @updatedAt
+  createdAt     DateTime @default(now())
+  company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
 }

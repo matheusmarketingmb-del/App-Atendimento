@@ -535,6 +535,7 @@ async function loadCurrentUser() {
   $("#campaigns-button").hidden = !status.user.canManageCampaigns;
   // Central de Operação: Master ou Supervisor em alguma empresa (backend revalida).
   $("#operations-button").hidden = !status.user.isMaster && !state.companies.some((company) => company.role === "SUPERVISOR");
+  $("#meta-costs-button").hidden = !status.user.isMaster;
   $("#new-conversation").hidden = !status.user.canStartConversations;
   $("#conversation-settings-button").hidden = !status.user.isMaster && status.user.role !== "SUPERVISOR";
   $("#team-button").hidden = !status.user.isMaster;
@@ -1796,6 +1797,7 @@ $("#bots-button").addEventListener("click", () => { location.href = "/bots"; });
 $("#quick-replies-admin-button").addEventListener("click", () => { location.href = "/quick-replies"; });
 $("#campaigns-button").addEventListener("click", () => { location.href = "/campaigns"; });
 $("#operations-button").addEventListener("click", () => { location.href = "/operacao"; });
+$("#meta-costs-button").addEventListener("click", () => { location.href = "/custos-meta"; });
 $("#conversation-settings-button").addEventListener("click", () => { location.href = "/configuracoes"; });
 $("#integrations-button").addEventListener("click", () => { location.href = "/integrations"; });
 $("#user-button").addEventListener("click", async () => { await api("/api/auth/logout", { method:"POST" }); location.replace("/login.html"); });

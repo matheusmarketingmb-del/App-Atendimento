@@ -15,6 +15,7 @@ const {
   authenticate, requireCampaignsPage, requireConversationSettingsPage, requireMasterPage, requireOperationsPage, requirePageAuth,
 } = require("./middleware/auth");
 const operationsPanel = require("./services/operations-panel-service");
+const metaCosts = require("./services/meta-cost-service");
 const conversationSettingsController = require("./controllers/conversation-settings-controller");
 const conversationReportController = require("./controllers/conversation-report-controller");
 const verifyMetaSignature = require("./middleware/meta-signature");
@@ -251,6 +252,9 @@ function createApp({ channel = new MetaCloudChannel() } = {}) {
             if (statusAccount) changedCompanyIds.add(statusAccount.companyId);
             const result = await updateStatus(event);
             if (result?.count) changed = true;
+            // Custos Meta: estimativa a partir do `pricing` do status (nunca
+            // bloqueia nem derruba o webhook).
+            metaCosts.recordStatusEvent(event).catch(() => {});
             campaignReplyService.handleCampaignStatusEvent(event).catch(() => {});
           }
         } catch (eventError) {
@@ -385,6 +389,9 @@ function createApp({ channel = new MetaCloudChannel() } = {}) {
   app.get(["/operacao", "/operacao.html"], requireOperationsPage, (_req, res) => (
     res.sendFile(path.join(process.cwd(), "public", "operacao.html"))
   ));
+  app.get(["/custos-meta", "/custos-meta.html"], requireMasterPage, (_req, res) => (
+    res.sendFile(path.join(process.cwd(), "public", "custos-meta.html"))
+  ));
   app.get(["/configuracoes", "/configuracoes.html"], requireConversationSettingsPage, (_req, res) => (
     res.sendFile(path.join(process.cwd(), "public", "configuracoes.html"))
   ));
@@ -489,6 +496,19 @@ app.post(
   app.get("/api/operations/options", async (req, res, next) => {
     try { return res.json(await operationsPanel.getFilterOptions(req.user)); }
     catch (error) { return next(error); }
+  });
+  // Custos Meta (Master): relatório estimado, preços versionados e orçamento.
+  app.get("/api/meta-costs/report", async (req, res, next) => {
+    try { return res.json(await metaCosts.getCostReport(req.user, req.query)); } catch (error) { return next(error); }
+  });
+  app.get("/api/meta-costs/pricing", async (req, res, next) => {
+    try { return res.json(await metaCosts.listPricing(req.user)); } catch (error) { return next(error); }
+  });
+  app.post("/api/meta-costs/pricing", async (req, res, next) => {
+    try { return res.status(201).json(await metaCosts.createPricing(req.body || {}, req.user)); } catch (error) { return next(error); }
+  });
+  app.put("/api/meta-costs/budget", async (req, res, next) => {
+    try { return res.json(await metaCosts.setBudget(req.body || {}, req.user)); } catch (error) { return next(error); }
   });
   app.get("/api/conversations", inbox.list);
   app.get("/api/conversations/summary", inbox.summary);

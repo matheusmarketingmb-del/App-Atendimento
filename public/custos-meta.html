@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,interactive-widget=resizes-content">
+  <meta name="theme-color" content="#16171a">
+  <link rel="icon" type="image/png" sizes="192x192" href="/assets/app-icon-192.png">
+  <title>Custos Meta &bull; Central de Atendimento</title>
+  <script>try{const saved=localStorage.getItem("mibro-theme");document.documentElement.dataset.theme=saved||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light")}catch{}</script>
+  <link rel="stylesheet" href="/css/skeleton.css">
+  <link rel="stylesheet" href="/css/bots.css">
+  <link rel="stylesheet" href="/css/operacao.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/"><img src="/assets/central-mark.svg" alt="Central de Atendimento"><span></span><small>Custos Meta</small></a>
+    <div class="phase-badge">CUSTOS META &bull; ESTIMATIVA</div>
+    <a class="back-link" href="/">&larr; Central</a>
+    <button id="theme-toggle" class="round-button" type="button" title="Alternar tema">&#9790;</button>
+    <button id="logout" class="user-button" type="button"><span id="current-user">Usuário</span> &bull; Sair</button>
+  </header>
+
+  <main class="ops-shell">
+    <div class="ops-heading">
+      <div><span>WHATSAPP</span><h1>Custos da Meta</h1><p>Estimativa a partir da categoria informada pela própria Meta em cada envio. Não bloqueia nenhum envio.</p></div>
+    </div>
+
+    <form id="cost-filters" class="ops-filters" aria-label="Filtros">
+      <div id="cost-company-filter" class="company-filter" role="radiogroup" aria-label="Empresa" hidden></div>
+      <label><span>Período</span><select id="cost-period"><option value="day">Hoje</option><option value="week">Últimos 7 dias</option><option value="month" selected>Este mês</option></select></label>
+      <label><span>Número</span><select id="cost-account"><option value="">Todos os números</option></select></label>
+    </form>
+
+    <section id="cost-total" class="ops-cards" aria-label="Total"></section>
+    <p id="cost-unpriced" class="ops-note" hidden></p>
+    <section id="cost-companies" class="cost-companies"></section>
+
+    <div class="ops-grid">
+      <section class="ops-panel" aria-labelledby="pricing-title">
+        <div class="ops-panel-heading"><h2 id="pricing-title">Tabela de preços</h2><small>Novo preço encerra o anterior na data de início</small></div>
+        <form id="pricing-form" class="ops-filters cost-inline-form">
+          <label><span>País</span><input id="pricing-country" value="BR" maxlength="8" required></label>
+          <label><span>Categoria</span><select id="pricing-category"><option>SERVICE</option><option>MARKETING</option><option>UTILITY</option><option>AUTHENTICATION</option></select></label>
+          <label><span>Preço por mensagem</span><input id="pricing-price" type="number" min="0" step="0.0001" required></label>
+          <label><span>Moeda</span><input id="pricing-currency" value="BRL" maxlength="3" required></label>
+          <label><span>Vale a partir de</span><input id="pricing-from" type="date"></label>
+          <button type="submit" class="ops-more">Salvar preço</button>
+        </form>
+        <div id="pricing-list" class="cost-table"></div>
+      </section>
+      <section class="ops-panel" aria-labelledby="budget-title">
+        <div class="ops-panel-heading"><h2 id="budget-title">Orçamento mensal</h2><small>Só alerta — nunca bloqueia envio</small></div>
+        <form id="budget-form" class="ops-filters cost-inline-form">
+          <label><span>Empresa</span><select id="budget-company"></select></label>
+          <label><span>Orçamento (R$)</span><input id="budget-value" type="number" min="0" step="1" placeholder="Vazio = sem orçamento"></label>
+          <button type="submit" class="ops-more">Salvar orçamento</button>
+        </form>
+      </section>
+    </div>
+  </main>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <style>
+    .cost-companies { display:grid; grid-template-columns:repeat(auto-fit, minmax(300px, 1fr)); gap:12px; margin-bottom:12px; }
+    .cost-company { border-left:3px solid color-mix(in srgb, var(--company-color, var(--line)) 70%, transparent); }
+    .cost-company dl { margin:0; display:grid; grid-template-columns:1fr auto; gap:6px 12px; font-size:12px; }
+    .cost-company dt { color:var(--muted); }
+    .cost-company dd { margin:0; font-weight:800; text-align:right; }
+    .cost-budget { margin-top:10px; }
+    .cost-budget i { display:block; height:8px; border-radius:4px; background:linear-gradient(90deg, var(--ink) var(--value), var(--panel) var(--value)); }
+    .cost-budget.warning i { background:linear-gradient(90deg, var(--ops-warning) var(--value), var(--panel) var(--value)); }
+    .cost-budget.critical i { background:linear-gradient(90deg, var(--ops-critical) var(--value), var(--panel) var(--value)); }
+    .cost-budget small { display:block; margin-top:4px; color:var(--muted); font-size:11px; }
+    .cost-inline-form { border:0; padding:0; margin:0 0 10px; }
+    .cost-inline-form input { width:100%; min-height:36px; padding:0 10px; border:1px solid var(--line); border-radius:8px; color:var(--ink); background:var(--surface); font-size:12px; }
+    .cost-table { overflow:auto; font-size:12px; }
+    .cost-table table { width:100%; border-collapse:collapse; }
+    .cost-table th, .cost-table td { padding:6px 8px; border-bottom:1px solid var(--line); text-align:left; white-space:nowrap; }
+    .cost-table th { color:var(--muted); font-size:11px; }
+  </style>
+  <script src="/js/company-context.js"></script>
+  <script src="/js/custos-meta.js"></script>
+</body>
+</html>
