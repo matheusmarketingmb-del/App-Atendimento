@@ -106,6 +106,17 @@ enum MessageStatus {
   FALHOU
 }
 
+// Visibilidade do histórico de um setor (Financeiro protegido). NORMAL = regra
+// de sempre. SECTOR_PRIVATE = as mensagens/eventos/notas criados enquanto a
+// conversa está neste setor ficam carimbados (privateCategoryId) e só os
+// membros do setor (UserCategoryAccess) e o Master os enxergam — o banco
+// mantém tudo, muda só a leitura. Definido no setor principal; subcategoria
+// herda. Ver private-segment-service.js.
+enum CategoryVisibilityMode {
+  NORMAL
+  SECTOR_PRIVATE
+}
+
 enum UserRole {
   ADMIN
   SUPERVISOR
@@ -305,47 +316,60 @@ model Company {
 // sem acesso àquela empresa. Setores (UserCategoryAccess) continuam valendo
 // e, como cada Category pertence a uma empresa, já ficam por empresa.
 model UserCompanyAccess {
-  id        String   @id @default(cuid())
-  userId    String
-  companyId String
+  id          String    @id @default(cuid())
+  userId      String
+  companyId   String
   // Nulo = usa o cargo padrão do usuário (User.role) nesta empresa.
-  role      UserRole?
+  role        UserRole?
   // Permissões individuais NESTA empresa (ex.: {"canTransferConversations":
   // true}). Nulo = usa as permissões do cadastro do usuário.
   permissions Json?
-  active    Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  active      Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  company     Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
   @@unique([userId, companyId])
   @@index([companyId, active])
 }
 
 model Contact {
-  id               String            @id @default(cuid())
+  id                       String            @id @default(cuid())
   // Empresa dona deste cadastro: o mesmo telefone pode existir uma vez por
   // empresa, com históricos separados.
-  companyId        String
-  channel          Channel           @default(META)
-  externalId       String
+  companyId                String
+  channel                  Channel           @default(META)
+  externalId               String
   // Opcional: nem todo canal tem telefone (Mercado Livre = buyerId, e-mail =
   // endereço, Google Review = reviewer). WhatsApp continua sempre populando.
-  phone            String?
-  email            String?
-  name             String?
-  customName       String?
-  identityId       String?
-  createdAt        DateTime          @default(now())
-  updatedAt        DateTime          @updatedAt
-  conversations    Conversation[]
-  notes            ContactNote[]
-  campaignContacts CampaignContact[]
-  identity         ContactIdentity?  @relation(fields: [identityId], references: [id], onDelete: SetNull)
-  company          Company           @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  phone                    String?
+  email                    String?
+  name                     String?
+  customName               String?
+  identityId               String?
+  // Atendente fixo (preferred-assignee-service.js): para quem este cliente
+  // é direcionado sempre que inicia um NOVO atendimento. Nunca substitui
+  // Conversation.assignedUserId (quem atende agora) — transferir ou
+  // finalizar a conversa não mexe aqui. Por empresa: Contact já é por
+  // empresa, então o mesmo telefone pode ter um atendente na Mibro e outro
+  // na Sincrofit.
+  preferredAssigneeId      String?
+  preferredAssigneeEnabled Boolean           @default(false)
+  preferredAssigneeSetById String?
+  preferredAssigneeSetAt   DateTime?
+  createdAt                DateTime          @default(now())
+  updatedAt                DateTime          @updatedAt
+  preferredAssignee        User?             @relation("ContactPreferredAssignee", fields: [preferredAssigneeId], references: [id], onDelete: SetNull)
+  preferredAssigneeSetBy   User?             @relation("ContactPreferredAssigneeSetBy", fields: [preferredAssigneeSetById], references: [id], onDelete: SetNull)
+  conversations            Conversation[]
+  notes                    ContactNote[]
+  campaignContacts         CampaignContact[]
+  identity                 ContactIdentity?  @relation(fields: [identityId], references: [id], onDelete: SetNull)
+  company                  Company           @relation(fields: [companyId], references: [id], onDelete: Restrict)
 
   @@unique([companyId, channel, externalId])
+  @@index([companyId, preferredAssigneeId])
   @@index([companyId, phone])
   @@index([phone])
   @@index([email])
@@ -361,17 +385,22 @@ model ContactIdentity {
 }
 
 model ContactNote {
-  id        String   @id @default(cuid())
-  contactId String
-  authorId  String?
-  content   String
-  pinned    Boolean  @default(false)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  contact   Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
-  author    User?    @relation("ContactNotes", fields: [authorId], references: [id], onDelete: SetNull)
+  id                String    @id @default(cuid())
+  contactId         String
+  authorId          String?
+  content           String
+  pinned            Boolean   @default(false)
+  // Nota criada numa conversa em setor privado (Financeiro): só membros do
+  // setor e o Master a veem. Nulo = nota comum.
+  privateCategoryId String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  contact           Contact   @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  author            User?     @relation("ContactNotes", fields: [authorId], references: [id], onDelete: SetNull)
+  privateCategory   Category? @relation("ContactNotePrivateCategory", fields: [privateCategoryId], references: [id], onDelete: Restrict)
 
   @@index([contactId, createdAt])
+  @@index([privateCategoryId])
   @@index([authorId])
 }
 
@@ -481,13 +510,19 @@ model Message {
   occurredAt            DateTime
   sentByUserId          String?
   rawPayload            Json?
+  // Segmento privado (Financeiro): setor principal SECTOR_PRIVATE em que a
+  // conversa estava quando a mensagem foi criada. Carimbado automaticamente
+  // (database/prisma.js) — nunca reescrito; nulo = mensagem comum.
+  privateCategoryId     String?
   createdAt             DateTime         @default(now())
   updatedAt             DateTime         @updatedAt
   conversation          Conversation     @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   sentByUser            User?            @relation("SentMessages", fields: [sentByUserId], references: [id], onDelete: SetNull)
+  privateCategory       Category?        @relation("MessagePrivateCategory", fields: [privateCategoryId], references: [id], onDelete: Restrict)
   botObservation        BotObservation?
 
   @@index([conversationId, occurredAt])
+  @@index([conversationId, privateCategoryId])
   @@index([sentByUserId])
 }
 
@@ -553,6 +588,8 @@ model User {
   localAiProviderSettingsUpdated LocalAiProviderSettings[]  @relation("LocalAiProviderSettingsUpdatedBy")
   socialContentMappingsCreated   SocialContentMapping[]
   companyAccess                  UserCompanyAccess[]
+  preferredContacts              Contact[]                  @relation("ContactPreferredAssignee")
+  preferredContactsSet           Contact[]                  @relation("ContactPreferredAssigneeSetBy")
 }
 
 model PushSubscription {
@@ -618,46 +655,56 @@ model ConversationMasterRead {
 }
 
 model ConversationActivity {
-  id             String       @id @default(cuid())
-  conversationId String
-  actorUserId    String?
-  action         String
-  details        Json?
-  createdAt      DateTime     @default(now())
-  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  actorUser      User?        @relation("ConversationActivityActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+  id                String       @id @default(cuid())
+  conversationId    String
+  actorUserId       String?
+  action            String
+  details           Json?
+  // Evento ocorrido durante segmento privado (Financeiro) — mesmo carimbo
+  // de Message.privateCategoryId.
+  privateCategoryId String?
+  createdAt         DateTime     @default(now())
+  conversation      Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  actorUser         User?        @relation("ConversationActivityActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+  privateCategory   Category?    @relation("ActivityPrivateCategory", fields: [privateCategoryId], references: [id], onDelete: Restrict)
 
   @@index([conversationId, createdAt])
+  @@index([conversationId, privateCategoryId])
   @@index([actorUserId])
 }
 
 model Category {
-  masterOnly      Boolean              @default(false)
-  id              String               @id @default(cuid())
+  masterOnly        Boolean                @default(false)
+  // Ver enum CategoryVisibilityMode. Só tem efeito no setor principal.
+  visibilityMode    CategoryVisibilityMode @default(NORMAL)
+  id                String                 @id @default(cuid())
   // Setor/categoria sempre de uma empresa ("Suporte" da Mibro e "Suporte" da
   // Sincrofit são registros distintos). Subcategoria herda a do pai.
-  companyId       String
-  parentId        String?
-  code            String
-  name            String
-  color           String?
-  active          Boolean              @default(true)
-  displayOrder    Int                  @default(0)
-  createdAt       DateTime             @default(now())
-  updatedAt       DateTime             @updatedAt
-  conversations   Conversation[]
-  parent          Category?            @relation("CategoryHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
-  children        Category[]           @relation("CategoryHierarchy")
-  userAccess      UserCategoryAccess[]
-  hiddenByUsers   UserHiddenCategory[]
-  internalChats   InternalChat[]
-  defaultForBots  Bot[]
-  botIntents      BotIntent[]
-  botObservations BotObservation[]
-  quickReplies    QuickReply[]
-  campaigns       Campaign[]
-  triageOptions   BotTriageOption[]
-  company         Company              @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  companyId         String
+  parentId          String?
+  code              String
+  name              String
+  color             String?
+  active            Boolean                @default(true)
+  displayOrder      Int                    @default(0)
+  createdAt         DateTime               @default(now())
+  updatedAt         DateTime               @updatedAt
+  conversations     Conversation[]
+  parent            Category?              @relation("CategoryHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  children          Category[]             @relation("CategoryHierarchy")
+  userAccess        UserCategoryAccess[]
+  hiddenByUsers     UserHiddenCategory[]
+  internalChats     InternalChat[]
+  defaultForBots    Bot[]
+  botIntents        BotIntent[]
+  botObservations   BotObservation[]
+  quickReplies      QuickReply[]
+  campaigns         Campaign[]
+  triageOptions     BotTriageOption[]
+  privateMessages   Message[]              @relation("MessagePrivateCategory")
+  privateActivities ConversationActivity[] @relation("ActivityPrivateCategory")
+  privateNotes      ContactNote[]          @relation("ContactNotePrivateCategory")
+  company           Company                @relation(fields: [companyId], references: [id], onDelete: Restrict)
 
   @@unique([companyId, code])
   @@index([companyId, parentId, displayOrder])
@@ -1912,6 +1959,11 @@ model ConversationSettings {
   // antes hardcoded — agora configurável a partir daqui).
   autoFinalizationEnabled Boolean @default(true)
   autoFinalizationMinutes Int     @default(1440)
+
+  // Atendente fixo (preferred-assignee-routing-service.js): mensagem curta
+  // enviada pelo Bot ao direcionar o cliente para o atendente fixo, antes
+  // de qualquer triagem. Sem nome do atendente de propósito.
+  preferredAssigneeRoutingMessage String @default("Olá! Identificamos seu atendimento e já estamos redirecionando você para o seu atendente responsável.") @db.Text
 
   updatedAt DateTime @updatedAt
   createdAt DateTime @default(now())

@@ -9,7 +9,7 @@ const state = {
   // de status principal (single-select, inalterado) em vez de substituí-lo —
   // o backend já aceita status/priority como CSV, então cada Set aqui só
   // precisa virar uma lista separada por vírgula na hora de montar a query.
-  statusToggle: new Set(), priorityToggle: new Set(), slaBreached: false, unassigned: false,
+  statusToggle: new Set(), priorityToggle: new Set(), slaBreached: false, unassigned: false, preferredAssignee: "",
   categorySignature: "", listSignature: "", selectedHeaderSignature: "",
   selectedMessagesSignature: "", selectedNotesSignature: "", selectedActivitiesSignature: "", selectedMessageItems: [],
   selectedMessages: [], selectedContactName: "", contactFilesTab: "media",
@@ -286,6 +286,7 @@ function conversationSignature(conversation) {
     conversation.contact.customName, conversation.contact.name, conversation.contact.email, conversation.contact.phone, conversation.contact._count?.notes,
     note?.id, note?.content,
     lastMessage?.id, lastMessage?.text, lastMessage?.type,
+    conversation.contact.preferredAssigneeEnabled, conversation.contact.preferredAssignee?.id, conversation.contact.preferredAssignee?.name,
   ]);
 }
 
@@ -295,7 +296,7 @@ function conversationCardMarkup(c) {
     <span class="card-grip" aria-hidden="true"></span><span class="avatar">${escapeHtml(initials(name))}</span><span class="card-main">
     <span class="card-title"><strong>${c.isPinned ? `<i class="conversation-pin" title="Conversa fixada">★</i>` : ""}${escapeHtml(name)}</strong>${multiCompany() ? companyBadge(c.company, "card-company-badge") : ""}<small>${escapeHtml(c.contact.email || c.contact.phone || "")}</small></span>
     <span class="preview">${escapeHtml(messagePreview(last))}</span>
-    <span class="card-labels">${channelBadge(c.channel) ? `<span class="channel-label">${escapeHtml(channelBadge(c.channel))}</span>` : ""}${needsCategoryAlert(c) ? `<span class="category-label category-missing-label" title="Esta conversa ainda não possui categoria definida.">⚠ Sem categoria</span>` : `<span class="category-label" style="color:${c.category?.color || "#666"};border-color:${c.category?.color || "#aaa"}">${escapeHtml(categoryLabel(c.category))}</span>`}<span class="status-label">${escapeHtml(statusLabel(c.status))}</span>${c.assignedUser ? `<span class="assignee-label">${escapeHtml(c.assignedUser.name)}</span>` : ""}${priorityBadge(c.priority)}${slaBadge(c.slaMinutesRemaining)}</span></span>
+    <span class="card-labels">${channelBadge(c.channel) ? `<span class="channel-label">${escapeHtml(channelBadge(c.channel))}</span>` : ""}${needsCategoryAlert(c) ? `<span class="category-label category-missing-label" title="Esta conversa ainda não possui categoria definida.">⚠ Sem categoria</span>` : `<span class="category-label" style="color:${c.category?.color || "#666"};border-color:${c.category?.color || "#aaa"}">${escapeHtml(categoryLabel(c.category))}</span>`}<span class="status-label">${escapeHtml(statusLabel(c.status))}</span>${c.assignedUser ? `<span class="assignee-label">${escapeHtml(c.assignedUser.name)}</span>` : ""}${c.contact.preferredAssigneeEnabled && c.contact.preferredAssignee && c.contact.preferredAssignee.id !== c.assignedUserId ? `<span class="preferred-assignee-label" title="Atendente fixo do cliente">★ ${escapeHtml(c.contact.preferredAssignee.name)}</span>` : ""}${priorityBadge(c.priority)}${slaBadge(c.slaMinutesRemaining)}</span></span>
     <span class="card-side"><span>${time(c.lastMessageAt)}</span><span class="card-elapsed">${escapeHtml(elapsedShort(c.lastMessageAt))}</span>${c.unreadCount ? `<span class="unread">${c.unreadCount}</span>` : ""}</span>
     <span class="note-preview"><b>NOTA</b> ${escapeHtml(note?.content || "Sem notas para este contato")}${c.contact._count?.notes ? `<i>${c.contact._count.notes}</i>` : ""}</span></button>`;
 }
@@ -374,7 +375,14 @@ function moderationActionsMarkup(message) {
   return buttons.length ? `<div class="moderation-actions">${buttons.join("")}</div>` : "";
 }
 
+// Segmento privado (ex.: Financeiro) que o usuário não pode ler: o backend
+// já entrega só este marcador — sem texto, autor, mídia ou contagem.
+function restrictedSegmentMarkup(message) {
+  return `<div class="restricted-segment" role="note" data-message-id="${escapeHtml(message.id)}"><strong>🔒 Atendimento ${escapeHtml(message.categoryName || "restrito")}</strong><span>Histórico restrito a este setor.</span></div>`;
+}
+
 function messageRowMarkup(message) {
+  if (message.restricted) return restrictedSegmentMarkup(message);
   const [symbol, label, statusClass] = deliveryStatus(message.status);
   return `<div class="message-row ${message.direction === "ENVIADA" ? "sent" : "received"}" data-message-id="${escapeHtml(message.id)}"><div class="bubble ${["image", "audio", "video", "sticker", "document"].includes(message.type) ? `${message.type}-bubble` : ""} ${message.reactionEmoji ? "has-reaction" : ""}">${messageContent(message)}<footer>${message.sentByUser ? `<span class="author">${escapeHtml(message.sentByUser.name)}</span>` : ""}<span>${time(message.occurredAt)}</span>${message.direction === "ENVIADA" ? `<span class="delivery-status ${statusClass}" title="${label}" aria-label="${label}">${symbol}</span>` : ""}</footer>${message.reactionEmoji ? `<span class="message-reaction" title="Reação do cliente">${escapeHtml(message.reactionEmoji)}</span>` : ""}${moderationActionsMarkup(message)}</div></div>`;
 }
@@ -588,6 +596,7 @@ function renderAssigneeOptions(companyId, currentAssigneeId) {
 
 async function loadUsers() {
   state.users = await api("/api/users");
+  renderPreferredAssigneeFilter();
   $("#assignee-select").innerHTML = `<option value="">Sem responsável</option>` + state.users.map((user) => `<option value="${user.id}">${escapeHtml(user.name)}</option>`).join("");
 }
 
@@ -947,6 +956,7 @@ function renderCategoryManager() {
     <input class="managed-name" maxlength="60" value="${escapeHtml(category.name)}" aria-label="Nome da categoria" required>
     <select class="managed-parent" aria-label="Categoria principal"><option value="">Principal</option>${parents.map((parent) => `<option value="${parent.id}" ${parent.id === category.parentId ? "selected" : ""}>${escapeHtml(parent.name)}</option>`).join("")}</select>
     <label class="active-switch"><input class="managed-active" type="checkbox" ${category.active ? "checked" : ""}><span>${category.active ? "Ativa" : "Inativa"}</span></label>
+    ${state.currentUser?.isMaster && !category.parentId ? `<label class="category-private-toggle" title="Mensagens enquanto a conversa estiver neste setor ficam visíveis só para os membros do setor (Equipe) e para o Master."><input class="managed-private" type="checkbox" ${category.visibilityMode === "SECTOR_PRIVATE" ? "checked" : ""}><span>🔒 Histórico protegido</span></label>` : category.visibilityMode === "SECTOR_PRIVATE" || category.parent?.visibilityMode === "SECTOR_PRIVATE" ? `<span class="category-private-toggle" title="Histórico restrito ao setor">🔒</span>` : ""}
     <button type="submit">Salvar</button>
   </form>`;
   }).join("");
@@ -964,6 +974,7 @@ async function loadConversations() {
   if (state.priorityToggle.size) params.set("priority", [...state.priorityToggle].join(","));
   if (state.slaBreached) params.set("slaBreached", "true");
   if (state.unassigned) params.set("unassigned", "true");
+  if (state.preferredAssignee) params.set("preferredAssignee", state.preferredAssignee);
   const company = companyQuery();
   if (company) params.set("company", company);
   const companyOnly = company ? `?company=${encodeURIComponent(company)}` : "";
@@ -1283,7 +1294,32 @@ function renderContextDetails(c) {
       ${c.priority && c.priority !== "NORMAL" ? `<div class="context-info-row"><span>Prioridade</span><strong>${escapeHtml(priorityLabel(c.priority))}</strong></div>` : ""}
       <div class="context-info-row"><span>Fixada</span><strong>${c.isPinned ? "Sim" : "Não"}</strong></div>
     </div>
+    ${preferredAssigneeMarkup(c)}
     ${postContextMarkup(c.postContext)}`;
+}
+
+// Atendente fixo do cliente (≠ responsável atual): para quem o cliente vai
+// sempre que iniciar um novo atendimento. Alterar/remover só Supervisor da
+// empresa ou Master (o backend decide `canEdit` e revalida tudo).
+function awaitingPreferredAssignee(c) {
+  const info = c.preferredAssignee;
+  return Boolean(info?.enabled && info.assignee && c.assignedUserId === info.assignee.id && c.status === "AGUARDANDO_EQUIPE");
+}
+
+function preferredAssigneeMarkup(c) {
+  const info = c.preferredAssignee;
+  if (!info) return "";
+  if (!info.assignee && !info.canEdit) return "";
+  const when = info.setAt ? new Intl.DateTimeFormat("pt-BR", { dateStyle:"short", timeStyle:"short" }).format(new Date(info.setAt)) : "";
+  return `
+    <div class="context-detail-block preferred-assignee-block">
+      <span class="context-detail-label">Atendente fixo</span>
+      <strong>${info.assignee ? `★ ${escapeHtml(info.assignee.name)}${info.assignee.active ? "" : " (inativo)"}` : "Nenhum"}</strong>
+      ${info.assignee ? `<small>Direcionar novos atendimentos: ${info.autoRouteEnabled ? "ligado" : "desligado"}</small>` : ""}
+      ${awaitingPreferredAssignee(c) ? `<small class="preferred-assignee-waiting">Aguardando atendente responsável</small>` : ""}
+      ${info.setBy && info.assignee ? `<small>Definido por ${escapeHtml(info.setBy.name)}${when ? ` em ${escapeHtml(when)}` : ""}</small>` : ""}
+      ${info.canEdit ? `<div class="preferred-assignee-actions"><button type="button" data-preferred-assignee-action="edit">${info.assignee ? "Alterar" : "Definir"}</button>${info.assignee ? `<button type="button" data-preferred-assignee-action="remove">Remover</button>` : ""}</div>` : ""}
+    </div>`;
 }
 
 // Item 10 do plano Social — comentário nunca chega "pelado": quando existe
@@ -1345,6 +1381,9 @@ function activityText(activity) {
     NOTE_PINNED: `fixou uma nota${details.preview ? `: “${details.preview}”` : ""}`,
     NOTE_UNPINNED: `desafixou uma nota${details.preview ? `: “${details.preview}”` : ""}`,
     BOT_TRIAGE_COMPLETED: `Bot encaminhou a conversa para ${details.categoryName || "o setor selecionado"}`,
+    PRIVATE_SEGMENT_STARTED: `🔒 conversa entrou em ${details.category || "setor protegido"} (histórico restrito ao setor)`,
+    PRIVATE_SEGMENT_ENDED: details.finalized ? "🔒 atendimento do setor protegido foi finalizado" : `🔒 conversa saiu de ${details.category || "setor protegido"} para ${details.to || "outro setor"}`,
+    ROUTED_TO_PREFERRED_ASSIGNEE: `Novo atendimento direcionado ao atendente fixo ${details.to || ""}`.trim(),
     AUTO_FINALIZED_INACTIVITY: `Sistema finalizou a conversa após ${details.inactivityMinutes || 1440} minutos sem resposta do cliente`,
   })[activity.action] || "realizou uma atualização na conversa";
 }
@@ -1532,6 +1571,71 @@ document.querySelectorAll("[data-toggle-filter]").forEach((button) => button.add
   }
   loadConversations();
 }));
+// Filtro "Atendente fixo": Com/Sem/Meus clientes fixos para todos;
+// "Atendente fixo = X" só Master/Supervisor (o backend revalida).
+function canSupervisePreferredAssignees() {
+  return Boolean(state.currentUser?.isMaster || state.companies.some((company) => company.role === "SUPERVISOR"));
+}
+
+function renderPreferredAssigneeFilter() {
+  const select = $("#preferred-assignee-filter");
+  if (!select) return;
+  const people = canSupervisePreferredAssignees() ? (state.users || []).filter((user) => user.id !== state.currentUser?.id) : [];
+  select.innerHTML = `<option value="">Atendente fixo: todos</option><option value="ANY">Com atendente fixo</option><option value="NONE">Sem atendente fixo</option><option value="ME">Meus clientes fixos</option>${people.map((user) => `<option value="${escapeHtml(user.id)}">Atendente fixo = ${escapeHtml(user.name)}</option>`).join("")}`;
+  select.value = state.preferredAssignee || "";
+}
+$("#preferred-assignee-filter")?.addEventListener("change", (event) => {
+  state.preferredAssignee = event.target.value;
+  loadConversations();
+});
+
+// Atendente fixo — diálogo Definir/Alterar e Remover (painel do contato).
+let preferredAssigneeContext = null;
+$("#context-details-summary").addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-preferred-assignee-action]");
+  if (!button || !state.selectedContactId) return;
+  const contactId = state.selectedContactId;
+  try {
+    if (button.dataset.preferredAssigneeAction === "remove") {
+      if (!confirm("Remover o atendente fixo deste cliente?\n\nOs próximos atendimentos voltam a passar pelo Bot/triagem. A conversa atual não muda.")) return;
+      await api(`/api/contacts/${encodeURIComponent(contactId)}/preferred-assignee`, { method:"DELETE", body: JSON.stringify({}) });
+      toast("Atendente fixo removido.");
+      return openConversation(state.selectedId, { refreshList: true, markRead: false });
+    }
+    const [current, candidates] = await Promise.all([
+      api(`/api/contacts/${encodeURIComponent(contactId)}/preferred-assignee`),
+      api(`/api/contacts/${encodeURIComponent(contactId)}/preferred-assignee/candidates`),
+    ]);
+    preferredAssigneeContext = { contactId };
+    $("#preferred-assignee-contact").textContent = `Cliente: ${state.selectedContactName}. Novos atendimentos vão direto para o atendente escolhido.`;
+    $("#preferred-assignee-user").innerHTML = `<option value="">Selecione</option>${candidates.map((user) => `<option value="${escapeHtml(user.id)}">${escapeHtml(user.name)} · ${escapeHtml(roleLabel(user.role))}</option>`).join("")}`;
+    $("#preferred-assignee-user").value = current.assignee?.id || "";
+    $("#preferred-assignee-enabled").checked = current.assignee ? current.autoRouteEnabled : true;
+    $("#preferred-assignee-reason").value = "";
+    $("#preferred-assignee-dialog").showModal();
+  } catch (error) { toast(error.message, true); }
+});
+$("#preferred-assignee-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!preferredAssigneeContext) return;
+  try {
+    await api(`/api/contacts/${encodeURIComponent(preferredAssigneeContext.contactId)}/preferred-assignee`, {
+      method:"PUT",
+      body: JSON.stringify({
+        userId: $("#preferred-assignee-user").value,
+        enabled: $("#preferred-assignee-enabled").checked,
+        reason: $("#preferred-assignee-reason").value.trim() || null,
+      }),
+    });
+    $("#preferred-assignee-dialog").close();
+    toast("Atendente fixo salvo.");
+    await openConversation(state.selectedId, { refreshList: true, markRead: false });
+  } catch (error) { toast(error.message, true); }
+});
+$("#cancel-preferred-assignee").addEventListener("click", () => $("#preferred-assignee-dialog").close());
+$("#close-preferred-assignee").addEventListener("click", () => $("#preferred-assignee-dialog").close());
+$("#preferred-assignee-dialog").addEventListener("close", () => { preferredAssigneeContext = null; });
+
 const quickFiltersTray = $("#quick-filters-tray");
 try { quickFiltersTray.open = localStorage.getItem("mibro-quick-filters-open") !== "0"; } catch {}
 quickFiltersTray.addEventListener("toggle", () => {
@@ -2033,7 +2137,7 @@ $("#manage-categories").addEventListener("click", () => { renderCategoryManager(
 $("#close-categories").addEventListener("click", () => $("#category-dialog").close());
 $("#category-dialog").addEventListener("click", (event) => { if (event.target === $("#category-dialog")) $("#category-dialog").close(); });
 $("#category-form").addEventListener("submit", async (event) => { event.preventDefault(); const name = $("#category-name").value.trim(); const color = $("#category-color").value; const parentId = $("#category-parent").value || null; const companyId = $("#category-company").value || undefined; try { await api("/api/categories", { method:"POST", body:JSON.stringify({ name, color, parentId, companyId }) }); $("#category-name").value = ""; await loadCategories(); await loadConversations(); toast(parentId ? "Subcategoria criada." : "Categoria criada."); } catch (e) { toast(e.message, true); } });
-$("#category-manager-list").addEventListener("submit", async (event) => { event.preventDefault(); const row = event.target.closest("[data-category-id]"); const name = row.querySelector(".managed-name").value.trim(); const color = row.querySelector(".managed-color").value; const parentId = row.querySelector(".managed-parent").value || null; const active = row.querySelector(".managed-active").checked; try { await api(`/api/categories/${row.dataset.categoryId}`, { method:"PATCH", body:JSON.stringify({ name, color, parentId, active }) }); await loadCategories(); await loadConversations(); toast("Categoria atualizada."); } catch (e) { toast(e.message, true); } });
+$("#category-manager-list").addEventListener("submit", async (event) => { event.preventDefault(); const row = event.target.closest("[data-category-id]"); const name = row.querySelector(".managed-name").value.trim(); const color = row.querySelector(".managed-color").value; const parentId = row.querySelector(".managed-parent").value || null; const active = row.querySelector(".managed-active").checked; const privateToggle = row.querySelector(".managed-private"); const visibility = privateToggle ? { visibilityMode: privateToggle.checked ? "SECTOR_PRIVATE" : "NORMAL" } : {}; try { await api(`/api/categories/${row.dataset.categoryId}`, { method:"PATCH", body:JSON.stringify({ name, color, parentId, active, ...visibility }) }); await loadCategories(); await loadConversations(); toast("Categoria atualizada."); } catch (e) { toast(e.message, true); } });
 $("#category-manager-list").addEventListener("change", (event) => { if (event.target.classList.contains("managed-active")) event.target.closest("label").querySelector("span").textContent = event.target.checked ? "Ativa" : "Inativa"; });
 $("#toggle-bot-pause").addEventListener("click", async (event) => {
   const button = event.currentTarget; const resuming = button.dataset.paused === "true";

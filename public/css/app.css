@@ -2115,3 +2115,20 @@ html[data-theme="dark"] .conversation-card.active { background:var(--surface-2);
 .team-company-permissions summary { cursor:pointer; list-style:none; }
 .team-company-permissions summary::-webkit-details-marker { display:none; }
 .team-company-permission-list { display:grid; grid-template-columns:repeat(auto-fill,minmax(170px,1fr)); gap:4px 12px; padding:6px 0 2px 22px; }
+
+/* Setor privado (Financeiro): bloco no lugar do trecho que o usuário não pode
+   ler — sem conteúdo, autor ou mídia (o backend nem envia). */
+.restricted-segment { margin:14px auto; max-width:420px; padding:10px 14px; display:flex; flex-direction:column; align-items:center; gap:3px; border:1px dashed var(--border-subtle, var(--line)); border-radius:var(--radius-md, 10px); color:var(--text-3, var(--muted)); background:var(--surface-0, var(--panel)); text-align:center; }
+.restricted-segment strong { color:var(--ink); font-size:12px; }
+.restricted-segment span { font-size:11px; }
+
+/* Atendente fixo: badge discreto no card, bloco no painel do contato e filtro. */
+.preferred-assignee-label { max-width:90px; overflow:hidden; padding:3px 6px; border:1px solid var(--border-subtle, var(--line)); border-radius:10px; color:var(--text-3, var(--muted)); font-size:8px; font-weight:800; line-height:1; text-overflow:ellipsis; white-space:nowrap; }
+.preferred-assignee-block small { display:block; margin-top:3px; }
+.preferred-assignee-waiting { color:var(--orange) !important; font-weight:700; }
+.preferred-assignee-actions { margin-top:10px; display:flex; gap:6px; }
+.preferred-assignee-actions button { padding:6px 10px; border:1px solid var(--border-subtle, var(--line)); border-radius:14px; color:var(--ink); background:transparent; font-size:10px; font-weight:800; }
+.preferred-assignee-actions button:hover { border-color:var(--orange); color:var(--orange); }
+.preferred-assignee-filter { display:block; margin:8px 10px 2px; }
+.preferred-assignee-filter select { width:100%; min-height:30px; padding:0 8px; border:1px solid var(--border-subtle, var(--line)); border-radius:8px; color:var(--ink); background:var(--surface-0, var(--panel)); font-size:11px; }
+.category-private-toggle { display:inline-flex; align-items:center; gap:4px; font-size:10px; white-space:nowrap; }

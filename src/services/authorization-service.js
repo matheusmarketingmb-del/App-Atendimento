@@ -1,5 +1,6 @@
 const prisma = require("../database/prisma");
 const companyService = require("./company-service");
+const privateSegments = require("./private-segment-service");
 
 const isMaster = (user) => user?.role === "ADMIN";
 
@@ -40,6 +41,19 @@ async function queueCategoryFilters(user) {
   return filters;
 }
 
+// Setor privado (Financeiro): membros do setor acompanham as conversas que
+// estão NELE agora, mesmo assumidas por outro membro (Emily vê a conversa
+// que a Ana assumiu) — mesma ideia do Supervisor na área dele. Só o setor
+// atual: conversa que saiu do Financeiro volta às regras normais (o
+// histórico privado dela continua legível para o membro, ver
+// private-segment-service).
+async function privateSectorCategoryIds(user) {
+  const roots = await privateSegments.readablePrivateCategoryIds(user);
+  if (!roots?.length) return [];
+  const children = await prisma.category.findMany({ where: { parentId: { in: roots } }, select: { id: true } });
+  return [...roots, ...children.map(({ id }) => id)];
+}
+
 // Privacidade de conversa assumida: enquanto a conversa não tem responsável
 // ela fica na fila do setor (categorias liberadas / Sem categoria); depois
 // que alguém assume, só o responsável atual (e o Master) enxerga. Este é o
@@ -56,6 +70,7 @@ async function conversationScope(user) {
   const access = await companyService.companyAccess(user);
   if (!access.length) return NO_ACCESS;
   const categoryIds = await allowedCategoryIds(user);
+  const privateSectorIds = await privateSectorCategoryIds(user);
   const branches = access.map(({ companyId, role, permissions }) => {
     // "Sem categoria" pode ser liberado por empresa (permissões da empresa).
     const uncategorized = permissions && typeof permissions.canViewUncategorized === "boolean"
@@ -66,6 +81,7 @@ async function conversationScope(user) {
     const visible = [{ assignedUserId: user.id }];
     if (role === "SUPERVISOR") visible.push(...queue);
     else if (queue.length) visible.push({ AND: [{ assignedUserId: null }, { OR: queue }] });
+    if (privateSectorIds.length) visible.push({ categoryId: { in: privateSectorIds } });
     return { AND: [{ companyId }, { OR: visible }] };
   });
   return { AND: [{ OR: branches }, emailAccountScope(user)] };

@@ -485,12 +485,22 @@ async function finalizeConversation({ conversationId, sentByUserId, channel }) {
     return { conversation: current, message: null, alreadyFinalized: true };
   }
   const serviceWindow = await require("./meta-template-service").getCustomerServiceWindow(conversationId);
+  // Setor privado: a mensagem de encerramento ainda é do segmento (vai antes
+  // do status); a finalização encerra o segmento — o próximo atendimento
+  // segue as regras normais. preferredAssignee do contato não muda.
+  const privateCategoryId = await require("./private-segment-service").stampForConversation(conversationId, prisma);
   const result = serviceWindow.open
     ? await sendText({ conversationId, text: closingMessage, sentByUserId, channel })
     : { message: null, providerData: null };
   const conversation = await prisma.conversation.update({ where: { id: conversationId }, data: {
     status: "FINALIZADO", finalizedAt: new Date(),
   } });
+  if (privateCategoryId) {
+    await prisma.conversationActivity.create({ data: {
+      conversationId, actorUserId: sentByUserId || null, action: "PRIVATE_SEGMENT_ENDED",
+      details: { categoryId: privateCategoryId, finalized: true }, privateCategoryId: null,
+    } });
+  }
   return { conversation, message: result.message, providerData: result.providerData, alreadyFinalized: false, previousStatus: current.status };
 }
 

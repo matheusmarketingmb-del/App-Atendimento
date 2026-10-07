@@ -187,6 +187,13 @@ async function updateConversationSettings(data, actor) {
     validateSlaNearBreachPercent(data.slaNearBreachPercent, update);
   }
 
+  // Atendente fixo: texto curto do Bot ao redirecionar o cliente.
+  if (data.preferredAssigneeRoutingMessage !== undefined) {
+    const text = typeof data.preferredAssigneeRoutingMessage === "string" ? data.preferredAssigneeRoutingMessage.trim() : "";
+    if (!text || text.length > 1000) throw fail('"preferredAssigneeRoutingMessage" deve ter entre 1 e 1000 caracteres.');
+    update.preferredAssigneeRoutingMessage = text;
+  }
+
   if (!Object.keys(update).length) throw fail("Informe ao menos um campo para atualizar.");
 
   const companyId = await resolveSettingsCompany(actor, data.company);

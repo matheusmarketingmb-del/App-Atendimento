@@ -14,6 +14,7 @@ const prisma = require("../database/prisma");
 const audit = require("./audit-service");
 const authorization = require("./authorization-service");
 const media = require("./media-storage-service");
+const privateSegments = require("./private-segment-service");
 const { assertBotManager, getGlobalSettings } = require("./bot-governance-service");
 const { activeResponseMap } = require("./bot-response-library-service");
 const webhookEndpoints = require("./bot-webhook-endpoint-service");
@@ -560,6 +561,16 @@ function liveAdapter({ conversation, bot, channel, execution, deps }) {
     await saveSent({ externalId: result?.externalId || null, type: "text", text, rawPayload: { message: result?.data || null, ...(flowHandoff ? { flowHandoff: true } : {}) } });
   };
   const activity = (action, details) => prisma.conversationActivity.create({ data: { conversationId, action, details } });
+  // Setor privado (Financeiro): Bot também pode encaminhar para ele — o
+  // histórico registra o início do segmento como na transferência manual.
+  const recordPrivateSegmentStart = async (categoryId, from) => {
+    const privateCategoryId = await privateSegments.privateRootFor(categoryId, prisma);
+    if (!privateCategoryId || privateCategoryId === privateSegments.privateRootOf(conversation.category)) return;
+    await prisma.conversationActivity.create({ data: {
+      conversationId, action: "PRIVATE_SEGMENT_STARTED", privateCategoryId,
+      details: { categoryId: privateCategoryId, from, flowId: execution.flowId, executionId: execution.id },
+    } });
+  };
   const contactLabel = conversation.contact.customName || conversation.contact.name || conversation.contact.phone;
 
   const moveToCategory = async ({ categoryId, reason, action }) => {
@@ -577,6 +588,7 @@ function liveAdapter({ conversation, bot, channel, execution, deps }) {
     });
     if (!moved.count) return { categoryId: category.id, categoryName: category.name, skipped: true };
     await activity(action, { categoryId: category.id, categoryName: category.name, reason, flowId: execution.flowId, executionId: execution.id });
+    await recordPrivateSegmentStart(category.id, conversation.category?.name || "Sem categoria");
     await audit.recordAudit({
       actor: null, action: "CONVERSATION_CATEGORY_CHANGED", entityType: "CONVERSATION", entityId: conversationId,
       summary: `Fluxo do Bot "${bot.name}" encaminhou a conversa de ${contactLabel} para ${category.name}`,
@@ -639,6 +651,7 @@ function liveAdapter({ conversation, bot, channel, execution, deps }) {
         data: { assignedUserId: user.id, categoryId: targetCategoryId, status: "EM_ATENDIMENTO", finalizedAt: null },
       });
       if (!moved.count) return { userId: user.id, userName: user.name, skipped: true };
+      if (targetCategoryId) await recordPrivateSegmentStart(targetCategoryId, conversation.category?.name || "Sem categoria");
       await activity("BOT_FLOW_TRANSFERRED_TO_USER", { toUserId: user.id, to: user.name, categoryId: targetCategoryId, reason, flowId: execution.flowId, executionId: execution.id });
       await audit.recordAudit({
         actor: null, action: "CONVERSATION_ASSIGNEE_CHANGED", entityType: "CONVERSATION", entityId: conversationId,

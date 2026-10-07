@@ -1,6 +1,7 @@
 const webpush = require("web-push");
 const prisma = require("../database/prisma");
 const authorization = require("./authorization-service");
+const privateSegments = require("./private-segment-service");
 
 let configured = false;
 let warnedMissingKeys = false;
@@ -124,10 +125,18 @@ async function notifyIncomingMessage(message) {
     const contactName = conversation.contact?.customName || conversation.contact?.name || conversation.contact?.phone || "Cliente";
     // Multiempresa (item 43): toda notificação de cliente diz a empresa.
     const companyLabel = conversation.company?.displayName ? `${conversation.company.displayName} · ` : "";
+    // Setor privado (Financeiro): sem prévia para quem não lê o segmento —
+    // a notificação aparece na tela bloqueada do aparelho.
+    let restricted = false;
+    if (message.privateCategoryId) {
+      const recipient = await prisma.user.findUnique({ where: { id: conversation.assignedUserId }, select: { id: true, role: true } });
+      restricted = !(await privateSegments.canReadRecord(recipient, message));
+    }
     await notifyUser(conversation.assignedUserId, {
       title: `${companyLabel}${contactName}`,
       company: conversation.company?.slug || null,
-      body: message.type === "text" ? (message.text || "Nova mensagem").slice(0, 140) : "Enviou uma nova mensagem",
+      body: restricted ? "Conversa atualizada"
+        : message.type === "text" ? (message.text || "Nova mensagem").slice(0, 140) : "Enviou uma nova mensagem",
       tag: `conversation-${message.conversationId}`,
       url: `/?conversation=${encodeURIComponent(message.conversationId)}`,
     });

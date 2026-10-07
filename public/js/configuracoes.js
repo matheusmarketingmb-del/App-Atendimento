@@ -39,6 +39,7 @@ function fillForm(settings) {
   $("#cs-unassigned-minutes").value = settings.unassignedConversationAlertMinutes;
   $("#cs-bot-resume-enabled").checked = settings.botResumeAfterHumanEnabled;
   $("#cs-bot-resume-minutes").value = settings.botResumeAfterHumanMinutes;
+  $("#cs-preferred-assignee-message").value = settings.preferredAssigneeRoutingMessage || "";
 }
 
 function collectPayload() {
@@ -62,6 +63,7 @@ function collectPayload() {
     stalledConversationAlertMinutes: Number($("#cs-stalled-minutes").value),
     unassignedConversationAlertEnabled: $("#cs-unassigned-enabled").checked,
     unassignedConversationAlertMinutes: Number($("#cs-unassigned-minutes").value),
+    preferredAssigneeRoutingMessage: $("#cs-preferred-assignee-message").value.trim(),
   };
 }
 

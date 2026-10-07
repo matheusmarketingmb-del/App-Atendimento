@@ -113,6 +113,7 @@
             <button class="toggle-filter" type="button" data-toggle-filter="status:AGUARDANDO_CLIENTE"><span>Aguardando cliente</span></button>
             <button class="toggle-filter" type="button" data-toggle-filter="status:HANDOFF_BOT"><span>Bot transferiu</span></button>
           </div>
+          <label class="preferred-assignee-filter"><select id="preferred-assignee-filter" aria-label="Filtrar por atendente fixo"><option value="">Atendente fixo: todos</option></select></label>
         </details>
         <div class="categories-heading"><p class="nav-title categories-title">CATEGORIAS</p><span><button id="toggle-hidden-categories" type="button" title="Mostrar categorias ocultas" aria-label="Mostrar categorias ocultas">◉</button><button id="manage-categories" type="button" title="Criar e editar categorias" aria-label="Gerenciar categorias">+</button></span></div>
         <div id="category-filters"></div>
@@ -351,6 +352,15 @@
       <label class="transfer-text-field"><span>Motivo (opcional)</span><input id="user-transfer-reason" maxlength="500" placeholder="Ex.: assunto financeiro"></label>
       <label class="transfer-text-field"><span>Resumo para o novo atendente (opcional)</span><textarea id="user-transfer-summary" maxlength="2000" rows="3" placeholder="Contexto que o próximo atendente precisa saber"></textarea></label>
       <div class="transfer-actions"><button id="cancel-user-transfer" type="button">Cancelar</button><button type="submit">Transferir</button></div>
+    </form>
+  </dialog>
+  <dialog id="preferred-assignee-dialog" class="category-dialog transfer-dialog">
+    <div class="dialog-header"><div><span>CLIENTE</span><h2>Atendente fixo</h2><p id="preferred-assignee-contact">Novos atendimentos deste cliente vão direto para o atendente escolhido.</p></div><button id="close-preferred-assignee" type="button" aria-label="Fechar">×</button></div>
+    <form id="preferred-assignee-form" class="transfer-form">
+      <label class="transfer-text-field"><span>Atendente fixo</span><select id="preferred-assignee-user" required></select></label>
+      <label class="transfer-history-option"><input id="preferred-assignee-enabled" type="checkbox" checked><span><b>Direcionar automaticamente novos atendimentos</b><small>O cliente não passa pela triagem do Bot e vai direto para este atendente, mesmo que ele esteja ausente. Não altera o responsável da conversa atual.</small></span></label>
+      <label class="transfer-text-field"><span>Motivo (opcional)</span><input id="preferred-assignee-reason" maxlength="500" placeholder="Ex.: cliente da carteira do vendedor"></label>
+      <div class="transfer-actions"><button id="cancel-preferred-assignee" type="button">Cancelar</button><button type="submit">Salvar</button></div>
     </form>
   </dialog>
   <dialog id="category-dialog" class="category-dialog">

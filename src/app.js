@@ -27,6 +27,8 @@ const { documentMimeTypes } = require("./services/media-storage-service");
 const botController = require("./controllers/bot-controller");
 const visualFlowController = require("./controllers/bot-visual-flow-controller");
 const { handleIncomingVisualFlow } = require("./services/bot-visual-flow-service");
+const { routeIncomingMessage: routeToPreferredAssignee } = require("./services/preferred-assignee-routing-service");
+const preferredAssignees = require("./services/preferred-assignee-service");
 const internalChatController = require("./controllers/internal-chat-controller");
 const integrationsController = require("./controllers/integrations-controller");
 const socialContentMappingController = require("./controllers/social-content-mapping-controller");
@@ -212,10 +214,21 @@ function createApp({ channel = new MetaCloudChannel() } = {}) {
                   // Bot ativo + auto-resposta ligada + automação global
                   // ligada. Sem fluxo aplicável, a mensagem (já salva) segue
                   // para a equipe. Falha no fluxo nunca derruba o webhook.
+                  // Atendente fixo: decisão ANTES do Flow Builder — cliente com
+                  // atendente fixo válido vai direto para ele (sem menu/
+                  // triagem). Sem vínculo (ou falha), segue o fluxo comum.
+                  let routedToPreferred = false;
                   try {
-                    await handleIncomingVisualFlow(event, result.message, accountChannel);
-                  } catch (flowError) {
-                    console.error("[BOT_FLOW] falha no Flow Builder (mensagem segue para a equipe):", flowError.message);
+                    routedToPreferred = await routeToPreferredAssignee(event, result.message, accountChannel);
+                  } catch (routingError) {
+                    console.error("[PREFERRED_ASSIGNEE] falha no roteamento (segue fluxo comum):", routingError.message);
+                  }
+                  if (!routedToPreferred) {
+                    try {
+                      await handleIncomingVisualFlow(event, result.message, accountChannel);
+                    } catch (flowError) {
+                      console.error("[BOT_FLOW] falha no Flow Builder (mensagem segue para a equipe):", flowError.message);
+                    }
                   }
                   pushService.notifyIncomingMessage(result.message).catch(() => {});
                   // Campanhas (itens 9/13): nunca bloqueia o atendimento normal —
@@ -504,6 +517,33 @@ app.post(
     "/api/contacts/:contactId/name",
     inbox.updateContactName
   );
+  // Atendente fixo por cliente (Supervisor da empresa do cliente / Master).
+  app.get("/api/contacts/:contactId/preferred-assignee", async (req, res, next) => {
+    try { return res.json(await preferredAssignees.getPreferredAssignee(req.params.contactId, req.user)); }
+    catch (error) { return next(error); }
+  });
+  app.get("/api/contacts/:contactId/preferred-assignee/candidates", async (req, res, next) => {
+    try { return res.json(await preferredAssignees.listCandidates(req.params.contactId, req.user)); }
+    catch (error) { return next(error); }
+  });
+  app.get("/api/contacts/:contactId/preferred-assignee/history", async (req, res, next) => {
+    try { return res.json(await preferredAssignees.listHistory(req.params.contactId, req.user)); }
+    catch (error) { return next(error); }
+  });
+  app.put("/api/contacts/:contactId/preferred-assignee", async (req, res, next) => {
+    try {
+      const result = await preferredAssignees.setPreferredAssignee(req.params.contactId, req.body || {}, req.user);
+      inboxEvents.publish([result.companyId]);
+      return res.json(result);
+    } catch (error) { return next(error); }
+  });
+  app.delete("/api/contacts/:contactId/preferred-assignee", async (req, res, next) => {
+    try {
+      const result = await preferredAssignees.removePreferredAssignee(req.params.contactId, req.body || {}, req.user);
+      inboxEvents.publish([result.companyId]);
+      return res.json(result);
+    } catch (error) { return next(error); }
+  });
   app.post("/api/contacts/:contactId/notes", inbox.addNote);
   app.patch("/api/contacts/:contactId/notes/:noteId", inbox.pinNote);
   app.delete("/api/contacts/:contactId/notes/:noteId", inbox.deleteNote);

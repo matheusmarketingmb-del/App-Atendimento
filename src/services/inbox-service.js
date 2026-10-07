@@ -5,6 +5,7 @@ const { removeImage } = require("./media-storage-service");
 const audit = require("./audit-service");
 const internalChat = require("./internal-chat-service");
 const { getConversationSettings } = require("./conversation-settings-service");
+const privateSegments = require("./private-segment-service");
 
 const conversationStatuses = new Set([
   "NOVO", "EM_ATENDIMENTO", "AGUARDANDO_EQUIPE", "AGUARDANDO_CLIENTE", "HANDOFF_BOT", "BOT", "FINALIZADO",
@@ -106,9 +107,13 @@ function channelAccountSummary(account) {
   return { id: account.id, name: account.name, channel: account.channel, displayNumber: displayNumber || null };
 }
 
+// Atendente fixo na lista: só id/nome (badge discreto "★ Carlos").
+const PREFERRED_ASSIGNEE_SELECT = Object.freeze({ id: true, name: true });
+
 async function listConversations({
-  search, category, status, assignedUser, activeOnly, priority, slaBreached, unassigned, channel, company,
-}, viewer) {  const where = {};
+  search, category, status, assignedUser, activeOnly, priority, slaBreached, unassigned, channel, company, preferredAssignee,
+}, viewer) {
+  const where = {};
 
   // Filtro de empresa (item 14/56): combina com todos os demais. "Todas" =
   // todas as empresas a que o usuário tem acesso; empresa sem acesso = 403.
@@ -159,16 +164,34 @@ async function listConversations({
     };
   }
 
+  const contactFilters = [];
   if (search) {
-    where.contact = {
+    contactFilters.push({
       OR: [
         { customName: { contains: search, mode: "insensitive" } },
         { name: { contains: search, mode: "insensitive" } },
         { email: { contains: search, mode: "insensitive" } },
         { phone: { contains: search } },
       ],
-    };
+    });
   }
+
+  // Atendente fixo: "ANY" (com), "NONE" (sem), "ME" (meus clientes fixos)
+  // ou um userId. Consultar o de outra pessoa é só Master/Supervisor.
+  if (preferredAssignee) {
+    const value = String(preferredAssignee);
+    if (value === "ANY") contactFilters.push({ preferredAssigneeEnabled: true, preferredAssigneeId: { not: null } });
+    else if (value === "NONE") contactFilters.push({ OR: [{ preferredAssigneeEnabled: false }, { preferredAssigneeId: null }] });
+    else {
+      const userId = value === "ME" ? viewer.id : value;
+      if (userId !== viewer.id && !authorization.isMaster(viewer)
+        && !(await companyService.companyAccess(viewer)).some(({ role }) => role === "SUPERVISOR")) {
+        throw authorization.forbidden("Você não pode consultar os clientes fixos de outro usuário.");
+      }
+      contactFilters.push({ preferredAssigneeEnabled: true, preferredAssigneeId: userId });
+    }
+  }
+  if (contactFilters.length) where.contact = contactFilters.length === 1 ? contactFilters[0] : { AND: contactFilters };
 
   if (assignedUser) {
     if (
@@ -185,6 +208,9 @@ async function listConversations({
 
   const scope = await authorization.conversationScope(viewer);
   const master = authorization.isMaster(viewer);
+  // Setor privado: prévia da última mensagem e nota mais recente nunca vêm
+  // de um segmento que o usuário não pode ler.
+  const readable = await privateSegments.readableWhereFor(viewer);
 
   const conversations = await prisma.conversation.findMany({
     where: { AND: [where, scope] },
@@ -192,7 +218,9 @@ async function listConversations({
     include: {
       contact: {
         include: {
+          preferredAssignee: { select: PREFERRED_ASSIGNEE_SELECT },
           notes: {
+            where: readable,
             orderBy: [
               { pinned: "desc" },
               { createdAt: "desc" },
@@ -202,7 +230,7 @@ async function listConversations({
 
           _count: {
             select: {
-              notes: true,
+              notes: { where: readable },
             },
           },
         },
@@ -227,9 +255,7 @@ async function listConversations({
 
       messages: {
         where: {
-          type: {
-            not: "reaction",
-          },
+          AND: [{ type: { not: "reaction" } }, readable],
         },
         orderBy: {
           occurredAt: "desc",
@@ -582,16 +608,37 @@ async function currentHandoffFor(conversation, viewer) {
 // Anexo/mensagem por ID: além do acesso à conversa, a mensagem precisa estar
 // dentro do histórico visível do usuário (evita baixar anexo de etapa oculta
 // só por conhecer o ID).
+// Setor privado: mensagem/anexo de segmento que o usuário não pode ler é
+// 403 mesmo para quem acessa a conversa e conhece o ID (IDOR). Segmento
+// privado legível ignora o corte de histórico (Ana/Emily recuperam o
+// Financeiro anterior).
 async function assertCanViewMessage(viewer, messageId) {
   const message = await prisma.message.findUnique({
     where: { id: messageId },
-    select: { id: true, conversationId: true, occurredAt: true, mediaStorageKey: true, mediaMimeType: true, mediaFileName: true },
+    select: {
+      id: true, conversationId: true, occurredAt: true, mediaStorageKey: true, mediaMimeType: true, mediaFileName: true,
+      privateCategoryId: true,
+    },
   });
   if (!message) throw Object.assign(new Error("Mídia não encontrada."), { statusCode: 404 });
   const conversation = await authorization.assertCanViewConversation(viewer, message.conversationId);
+  if (message.privateCategoryId) {
+    if (!(await privateSegments.canReadRecord(viewer, message))) {
+      throw authorization.forbidden("Conteúdo restrito ao setor responsável.");
+    }
+    return message;
+  }
   const { start } = await historyVisibility(conversation, viewer);
   if (start && message.occurredAt < start) throw Object.assign(new Error("Mídia não encontrada."), { statusCode: 404 });
   return message;
+}
+
+// Nomes dos setores privados que aparecem nos blocos "🔒 Atendimento X".
+async function privateCategoryNames(ids) {
+  const unique = [...new Set(ids.filter(Boolean))];
+  if (!unique.length) return new Map();
+  const categories = await prisma.category.findMany({ where: { id: { in: unique } }, select: { id: true, name: true } });
+  return new Map(categories.map(({ id, name }) => [id, name]));
 }
 
 async function getConversation(id, viewer) {
@@ -606,8 +653,17 @@ async function getConversation(id, viewer) {
     return null;
   }
   const visibility = await historyVisibility(access, viewer);
+  // Setor privado: segmentos legíveis (Financeiro do membro) entram mesmo
+  // antes do corte de histórico; os ilegíveis dentro da janela viram blocos
+  // "🔒" abaixo (collapseRestricted) — o conteúdo nunca sai daqui.
+  const readablePrivateIds = await privateSegments.readablePrivateCategoryIds(viewer);
+  const withinWindow = (field) => {
+    if (!visibility.start) return undefined;
+    const window = { [field]: { gte: visibility.start } };
+    return readablePrivateIds?.length ? { OR: [window, { privateCategoryId: { in: readablePrivateIds } }] } : window;
+  };
   const messageVisibility = {
-    where: visibility.start ? { occurredAt: { gte: visibility.start } } : undefined,
+    where: withinWindow("occurredAt"),
     limited: visibility.limited,
   };
   const currentHandoff = await currentHandoffFor(access, viewer);
@@ -625,7 +681,10 @@ async function getConversation(id, viewer) {
       },
       contact: {
         include: {
+          preferredAssignee: { select: { id: true, name: true, active: true } },
+          preferredAssigneeSetBy: { select: { id: true, name: true } },
           notes: {
+            where: privateSegments.readableWhere(readablePrivateIds),
             include: { author: { select: { id: true, name: true } } },
             orderBy: [{ pinned: "desc" }, { createdAt: "desc" }],
           },
@@ -635,18 +694,27 @@ async function getConversation(id, viewer) {
       activities: canViewHistory ? {
         // O histórico de eventos segue o mesmo recorte das mensagens: quem
         // recebeu sem histórico não vê notas/eventos da etapa anterior.
-        where: visibility.start ? { createdAt: { gte: visibility.start } } : undefined,
+        where: withinWindow("createdAt"),
         include: { actorUser: { select: { id: true, name: true } } },
         orderBy: { createdAt: "desc" },
         take: 100,
       } : false,
       botState: { select: { humanPausedAt: true } },
     },
-  }).then((conversation) => {
+  }).then(async (conversation) => {
     if (!conversation) return null;
     const { pins, botState, ...result } = conversation;
+    const hiddenIds = result.messages.filter((message) => !privateSegments.canRead(readablePrivateIds, message.privateCategoryId))
+      .map(({ privateCategoryId }) => privateCategoryId);
+    const messages = hiddenIds.length
+      ? privateSegments.collapseRestricted(result.messages, readablePrivateIds, await privateCategoryNames(hiddenIds))
+      : result.messages;
+    const activities = Array.isArray(result.activities)
+      ? privateSegments.sanitizeActivities(result.activities, readablePrivateIds) : result.activities;
     return {
-      ...result, channelAccount: channelAccountSummary(result.channelAccount), isPinned: pins.length > 0, canViewHistory, messageHistoryLimited: messageVisibility.limited,
+      ...result, messages, activities,
+      privateSegmentRestricted: hiddenIds.length > 0,
+      channelAccount: channelAccountSummary(result.channelAccount), isPinned: pins.length > 0, canViewHistory, messageHistoryLimited: messageVisibility.limited,
       historyVisibleFrom: visibility.start, currentHandoff,
       botPausedAt: botState?.humanPausedAt || null,
     };
@@ -723,9 +791,13 @@ async function getConversationSummary(viewer, { company } = {}) {
 
 async function addContactNote(contactId, { content, authorId, conversationId }, viewer) {
   await authorization.assertCanAccessContact(viewer, contactId);
+  let privateCategoryId = null;
   if (conversationId) {
     const conversation = await prisma.conversation.findFirst({ where: { id: conversationId, contactId }, select: { id: true } });
     if (!conversation) throw Object.assign(new Error("Conversa não encontrada."), { statusCode: 404 });
+    // Nota escrita durante o Financeiro fica restrita ao setor (o cadastro
+    // do contato é compartilhado com quem atende depois).
+    privateCategoryId = await privateSegments.stampForConversation(conversationId, prisma);
   }
   const text = content?.trim();
   if (!text) throw Object.assign(new Error("A nota não pode ficar vazia."), { statusCode: 400 });
@@ -733,7 +805,7 @@ async function addContactNote(contactId, { content, authorId, conversationId }, 
   try {
     return await prisma.$transaction(async (transaction) => {
       const note = await transaction.contactNote.create({
-        data: { contactId, content: text, authorId: authorId || null },
+        data: { contactId, content: text, authorId: authorId || null, privateCategoryId },
         include: { author: { select: { id: true, name: true } } },
       });
       if (conversationId) await recordConversationActivity({
@@ -759,10 +831,10 @@ async function deleteContactNote(contactId, noteId, { conversationId }, viewer) 
   if (!conversation) throw Object.assign(new Error("Conversa não encontrada."), { statusCode: 404 });
   return prisma.$transaction(async (transaction) => {
     await transaction.contactNote.delete({ where: { id: noteId } });
-    await recordConversationActivity({
-      conversationId, actorUserId: viewer.id, action: "NOTE_DELETED",
-      details: { preview: note.content.slice(0, 120), wasPinned: note.pinned },
-    }, transaction);
+    await transaction.conversationActivity.create({ data: {
+      ...activityRecord(conversationId, viewer.id, "NOTE_DELETED", { preview: note.content.slice(0, 120), wasPinned: note.pinned }),
+      ...(note.privateCategoryId ? { privateCategoryId: note.privateCategoryId } : {}),
+    } });
     await audit.recordAudit({
       actor: viewer,
       action: "NOTE_DELETED",
@@ -823,7 +895,7 @@ async function setContactNotePinned(contactId, noteId, { pinned, conversationId 
     throw Object.assign(new Error("Informe se a nota deve ser fixada."), { statusCode: 400 });
   }
   const note = await prisma.contactNote.findFirst({ where: { id: noteId, contactId } });
-  if (!note) throw Object.assign(new Error("Nota não encontrada."), { statusCode: 404 });
+  if (!note || !(await privateSegments.canReadRecord(viewer, note))) throw Object.assign(new Error("Nota não encontrada."), { statusCode: 404 });
   if (conversationId) {
     const conversation = await prisma.conversation.findFirst({ where: { id: conversationId, contactId }, select: { id: true } });
     if (!conversation) throw Object.assign(new Error("Conversa não encontrada."), { statusCode: 404 });
@@ -839,10 +911,11 @@ async function setContactNotePinned(contactId, noteId, { pinned, conversationId 
       where: { id: noteId }, data: { pinned },
       include: { author: { select: { id: true, name: true } } },
     });
-    if (conversationId) await recordConversationActivity({
-      conversationId, actorUserId: viewer.id, action: pinned ? "NOTE_PINNED" : "NOTE_UNPINNED",
-      details: { preview: note.content.slice(0, 120) },
-    }, transaction);
+    if (conversationId) await transaction.conversationActivity.create({ data: {
+      ...activityRecord(conversationId, viewer.id, pinned ? "NOTE_PINNED" : "NOTE_UNPINNED", { preview: note.content.slice(0, 120) }),
+      // Prévia de nota do Financeiro continua restrita ao setor.
+      ...(note.privateCategoryId ? { privateCategoryId: note.privateCategoryId } : {}),
+    } });
     return updated;
   });
 }
@@ -943,6 +1016,11 @@ async function updateConversation(id, {
         include: { contact: true, category: { include: { parent: true } }, assignedUser: { select: { id: true, name: true, email: true } } },
       });
       const activities = [];
+      // Setor privado: os eventos desta alteração recebem o carimbo do
+      // estado FINAL (entrar no Financeiro já é do Financeiro; sair dele —
+      // com motivo/resumo para quem recebe — já é do setor de destino).
+      const fromPrivate = currentSnapshot.status === "FINALIZADO" ? null : privateSegments.privateRootOf(currentSnapshot.category);
+      const toPrivate = updated.status === "FINALIZADO" ? null : privateSegments.privateRootOf(updated.category);
       if (categoryId !== undefined && currentSnapshot.categoryId !== updated.categoryId
         && (sectorChanged || currentSnapshot.assignedUserId !== viewer.id)) {
         activities.push(activityRecord(id, viewer.id, "CATEGORY_CHANGED", {
@@ -989,7 +1067,26 @@ async function updateConversation(id, {
       if (priority !== undefined && currentSnapshot.priority !== updated.priority) {
         activities.push(activityRecord(id, viewer.id, "PRIORITY_CHANGED", { from: currentSnapshot.priority, to: updated.priority }));
       }
-      if (activities.length) await transaction.conversationActivity.createMany({ data: activities });
+      if (fromPrivate !== toPrivate) {
+        if (fromPrivate) {
+          activities.push(activityRecord(id, viewer.id, "PRIVATE_SEGMENT_ENDED", {
+            categoryId: fromPrivate, category: categoryLabelForHistory(currentSnapshot.category?.parent || currentSnapshot.category),
+            to: updated.category ? categoryLabelForHistory(updated.category) : "Sem categoria",
+          }));
+        }
+        if (toPrivate) {
+          activities.push(activityRecord(id, viewer.id, "PRIVATE_SEGMENT_STARTED", {
+            categoryId: toPrivate, category: categoryLabelForHistory(updated.category?.parent || updated.category),
+            from: currentSnapshot.category ? categoryLabelForHistory(currentSnapshot.category) : "Sem categoria",
+            responsible: updated.assignedUser?.name || null,
+          }));
+        }
+      }
+      if (activities.length) {
+        await transaction.conversationActivity.createMany({
+          data: activities.map((activity) => ({ ...activity, privateCategoryId: toPrivate })),
+        });
+      }
       const contact = contactAuditSnapshot(updated);
       const audits = [];
       if (currentSnapshot.categoryId !== updated.categoryId) {
@@ -1236,7 +1333,7 @@ async function listCategories(viewer, { company } = {}) {
   const where = { AND: filters };
   const [categories, preferences] = await Promise.all([prisma.category.findMany({
     where,
-    include: { parent: { select: { id: true, name: true, code: true, active: true } }, company: { select: COMPANY_SELECT } },
+    include: { parent: { select: { id: true, name: true, code: true, active: true, visibilityMode: true } }, company: { select: COMPANY_SELECT } },
     orderBy: [{ displayOrder: "asc" }, { name: "asc" }],
   }), prisma.user.findUnique({
     where: { id: viewer.id },
@@ -1337,6 +1434,21 @@ async function updateCategory(id, data, viewer) {
   if (data.color !== undefined) allowed.color = validateCategoryColor(data.color);
   if (typeof data.active === "boolean") allowed.active = data.active;
   if (Number.isInteger(data.displayOrder)) allowed.displayOrder = data.displayOrder;
+  // Histórico protegido (Financeiro): decisão de alto risco — só Master, e
+  // só no setor principal (subcategoria herda).
+  if (data.visibilityMode !== undefined && data.visibilityMode !== existing.visibilityMode) {
+    if (!authorization.isMaster(viewer)) throw authorization.forbidden("Somente uma conta Master pode proteger o histórico de um setor.");
+    if (!["NORMAL", privateSegments.PRIVATE].includes(data.visibilityMode)) {
+      throw Object.assign(new Error("Visibilidade inválida."), { statusCode: 400 });
+    }
+    if (data.parentId !== undefined ? data.parentId : existing.parentId) {
+      throw Object.assign(new Error("O histórico protegido é definido no setor principal; a subcategoria herda."), { statusCode: 400 });
+    }
+    allowed.visibilityMode = data.visibilityMode;
+  }
+  if (data.parentId && (allowed.visibilityMode || existing.visibilityMode) === privateSegments.PRIVATE) {
+    throw Object.assign(new Error("Um setor com histórico protegido não pode virar subcategoria."), { statusCode: 400 });
+  }
   if (data.parentId !== undefined) {
     const parentId = data.parentId || null;
     if (parentId === id) throw Object.assign(new Error("Uma categoria não pode ser sua própria categoria principal."), { statusCode: 400 });

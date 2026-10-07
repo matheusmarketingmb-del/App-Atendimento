@@ -10,6 +10,7 @@ const { customerServiceWindowFrom, getCustomerServiceWindow, listApprovedTemplat
 const { createOutboundConversation, createOutboundEmail, listOutboundChannels } = require("../services/outbound-conversation-service");
 const { Channel: ChannelEnum } = require("@prisma/client");
 const contactMerge = require("../services/contact-merge-service");
+const preferredAssignees = require("../services/preferred-assignee-service");
 const { createAdapter } = require("../services/channels/channel-adapter-registry");
 const { resolveForPost } = require("../services/channels/social-content-mapping-service");
 const { moderateMessage } = require("../services/channels/social-moderation-service");
@@ -60,7 +61,9 @@ function createInboxController(channel) {
         const postContext = SOCIAL_COMMENT_CHANNELS.has(conversation.channel) && conversation.externalConversationId
           ? await resolveForPost(conversation.channel, conversation.externalConversationId)
           : null;
-        return res.json({ ...conversation, customerServiceWindow, mergedDestinations, channelCapabilities: channelCaps, postContext });
+        // Atendente fixo do cliente (somente leitura para quem não gerencia).
+        const preferredAssignee = await preferredAssignees.getPreferredAssignee(conversation.contact.id, req.user).catch(() => null);
+        return res.json({ ...conversation, customerServiceWindow, mergedDestinations, channelCapabilities: channelCaps, postContext, preferredAssignee });
       } catch (error) { return next(error); }
     },
     async mergeCandidates(req, res, next) {
