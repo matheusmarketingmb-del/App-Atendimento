@@ -162,11 +162,21 @@ function periodRange({ period = "month", from, to } = {}, now = new Date()) {
     if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start > end) throw fail("Período inválido.");
     return { start, end };
   }
+  if (period === "all") return { start: new Date(0), end: now };
   const start = require("./operations-panel-service").startOfToday(now);
   if (period === "day") { /* início do dia no fuso da operação */ }
   else if (period === "week") start.setUTCDate(start.getUTCDate() - 6);
   else if (period === "month") start.setUTCDate(1);
-  else throw fail("Período inválido (day, week ou month).");
+  else if (period === "3months") {
+    // Três meses corridos, a partir do início do dia no fuso da operação.
+    // Limita dias 29–31 ao último dia do mês de destino, sem saltar de mês.
+    const day = start.getUTCDate();
+    start.setUTCDate(1);
+    start.setUTCMonth(start.getUTCMonth() - 3);
+    const lastDay = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 0)).getUTCDate();
+    start.setUTCDate(Math.min(day, lastDay));
+  }
+  else throw fail("Período inválido (day, week, month, 3months ou all).");
   return { start, end: now };
 }
 
@@ -225,14 +235,41 @@ async function authorCostRows({ companyIds, start, end, channelAccountId }) {
     )
     SELECT "companyId", "channelAccountId", "sentByUserId" AS "userId", "authorName", source,
       count(*)::int AS messages,
-      count(*) FILTER (WHERE category = 'SERVICE')::int AS "serviceMessages",
-      count(*) FILTER (WHERE category <> 'SERVICE')::int AS templates,
+      count(*) FILTER (WHERE type <> 'template')::int AS "serviceMessages",
+      count(*) FILTER (WHERE type = 'template')::int AS templates,
       count(*) FILTER (WHERE replied IS NOT NULL)::int AS "responseEligibleTemplates",
       count(*) FILTER (WHERE replied IS TRUE)::int AS "repliedTemplates",
       count(*) FILTER (WHERE "estimatedCost" IS NULL)::int AS "unpricedCount",
       sum("estimatedCost") AS "estimatedCost"
     FROM attributed GROUP BY "companyId", "channelAccountId", "sentByUserId", "authorName", source
     ORDER BY sum("estimatedCost") DESC NULLS LAST, "authorName", "channelAccountId"
+  `);
+}
+
+// Valor nominal separado dos recibos: somente templates entregues/lidos,
+// tarifa do país/categoria vigente no envio, sem aplicar ou desfazer gratuidade.
+async function templateTariffRows({ companyIds, start, end, channelAccountId }) {
+  if (!companyIds.length) return [];
+  return prisma.$queryRaw(Prisma.sql`
+    SELECT c."companyId", c."channelAccountId", c."templateName", c."templateCategory",
+      count(*)::int AS delivered,
+      count(*) FILTER (WHERE p.price IS NULL)::int AS "unpricedCount",
+      count(*) FILTER (WHERE c.billable IS FALSE OR c."pricingType" IN ('free_entry_point', 'free_customer_service'))::int AS "freeCount",
+      sum(p.price) AS "tableValue"
+    FROM "MetaMessageCharge" c JOIN "Message" m ON m.id = c."messageId"
+    LEFT JOIN LATERAL (
+      SELECT price FROM "MetaPricing" p
+      WHERE p.country = c.country AND p.category::text = upper(c."templateCategory") AND p.currency = 'BRL'
+        AND p."effectiveFrom" <= c."sentAt" AND (p."effectiveTo" IS NULL OR p."effectiveTo" > c."sentAt")
+      ORDER BY p."effectiveFrom" DESC LIMIT 1
+    ) p ON true
+    WHERE c."companyId" IN (${Prisma.join(companyIds)}) AND c.currency = 'BRL'
+      AND c."sentAt" >= ${start} AND c."sentAt" <= ${end}
+      AND m.type = 'template' AND m.status <> 'FALHOU'
+      AND (c."deliveredAt" IS NOT NULL OR m.status IN ('ENTREGUE', 'LIDA'))
+      ${channelAccountId ? Prisma.sql`AND c."channelAccountId" = ${String(channelAccountId)}` : Prisma.empty}
+    GROUP BY c."companyId", c."channelAccountId", c."templateName", c."templateCategory"
+    ORDER BY c."templateName", c."companyId", c."channelAccountId"
   `);
 }
 
@@ -243,14 +280,15 @@ async function getCostReport(viewer, query = {}, { now = new Date() } = {}) {
     ? await companyService.resolveCompanyFilter(viewer, query.company)
     : await companyService.accessibleCompanyIds(viewer);
   const where = { companyId: { in: companyIds }, currency: "BRL", sentAt: { gte: start, lte: end }, ...(query.channelAccountId ? { channelAccountId: String(query.channelAccountId) } : {}) };
-  const [rows, unpriced, budgets, monthRows, companies, accounts, authorRows] = await Promise.all([
-    prisma.metaMessageCharge.groupBy({ by: ["companyId", "channelAccountId", "category"], where, _count: { _all: true }, _sum: { estimatedCost: true } }),
+  const [rows, unpriced, budgets, monthRows, companies, accounts, authorRows, tariffRows] = await Promise.all([
+    prisma.metaMessageCharge.groupBy({ by: ["companyId", "channelAccountId", "category", "messageType", "templateCategory"], where, _count: { _all: true }, _sum: { estimatedCost: true } }),
     prisma.metaMessageCharge.count({ where: { ...where, estimatedCost: null } }),
     prisma.metaCostBudget.findMany({ where: { companyId: { in: companyIds } } }),
     prisma.metaMessageCharge.groupBy({ by: ["companyId"], where: { companyId: { in: companyIds }, currency: "BRL", sentAt: { gte: monthStart(now), lte: now } }, _sum: { estimatedCost: true } }),
     companyService.listCompanies({ includeInactive: true }),
     prisma.channelAccount.findMany({ where: { companyId: { in: companyIds }, channel: "META" }, select: { id: true, name: true, companyId: true } }),
     authorCostRows({ companyIds, start, end, channelAccountId: query.channelAccountId }),
+    templateTariffRows({ companyIds, start, end, channelAccountId: query.channelAccountId }),
   ]);
   const accountNames = new Map(accounts.map(({ id, name }) => [id, name]));
   const responseTotals = { responseEligibleTemplates: 0, repliedTemplates: 0 };
@@ -282,13 +320,15 @@ async function getCostReport(viewer, query = {}, { now = new Date() } = {}) {
     const company = byCompany.get(row.companyId);
     if (!company) continue;
     const cost = toNumber(row._sum.estimatedCost) || 0;
-    company.byCategory[row.category] += row._count._all;
-    if (row.category === "SERVICE") company.serviceMessages += row._count._all; else company.templates += row._count._all;
+    const isTemplate = row.messageType === "template";
+    const category = isTemplate ? normalizeCategory(row.templateCategory) || row.category : "SERVICE";
+    company.byCategory[category] = (company.byCategory[category] || 0) + row._count._all;
+    if (isTemplate) company.templates += row._count._all; else company.serviceMessages += row._count._all;
     company.estimatedCost += cost;
     const key = row.channelAccountId || "none";
     if (!company.accounts.has(key)) company.accounts.set(key, { channelAccountId: row.channelAccountId, name: accountNames.get(row.channelAccountId) || "Sem número vinculado", serviceMessages: 0, templates: 0, estimatedCost: 0 });
     const account = company.accounts.get(key);
-    if (row.category === "SERVICE") account.serviceMessages += row._count._all; else account.templates += row._count._all;
+    if (isTemplate) account.templates += row._count._all; else account.serviceMessages += row._count._all;
     account.estimatedCost += cost;
   }
   const monthCost = new Map(monthRows.map((row) => [row.companyId, toNumber(row._sum.estimatedCost) || 0]));
@@ -312,6 +352,13 @@ async function getCostReport(viewer, query = {}, { now = new Date() } = {}) {
   return {
     period: { start, end }, currency: "BRL", unpricedCount: unpriced,
     companies: result,
+    templateTariffs: tariffRows.map(row => ({ ...row, tableValue: toNumber(row.tableValue) })),
+    tariff: {
+      delivered: tariffRows.reduce((n, row) => n + Number(row.delivered), 0),
+      freeCount: tariffRows.reduce((n, row) => n + Number(row.freeCount), 0),
+      unpricedCount: tariffRows.reduce((n, row) => n + Number(row.unpricedCount), 0),
+      tableValue: tariffRows.length ? toNumber(tariffRows.reduce((n, row) => n + Number(row.tableValue || 0), 0)) : null,
+    },
     // Valores não arredondados por linha preservam a soma antes da formatação.
     byAuthorAndNumber: authorRows.map((row) => ({
       ...row, ...responseMetrics(row), estimatedCost: toNumber(row.estimatedCost),

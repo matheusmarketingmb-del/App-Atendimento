@@ -12,3 +12,4 @@ backups/
 *.zip
 coverage/
 .olist-flow-test-cache/
+/attendance/public/assets/inbox-notification.mp3

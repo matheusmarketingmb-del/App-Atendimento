@@ -393,6 +393,7 @@ enum ToolRiskLevel {
 // Ver docs/MULTIEMPRESA_AUDITORIA.md e company-service.js.
 // =============================================================================
 model Company {
+  mediaAssets MediaAsset[]
   id           String   @id @default(cuid())
   name         String
   slug         String   @unique
@@ -647,9 +648,20 @@ model Message {
   // conversa estava quando a mensagem foi criada. Carimbado automaticamente
   // (database/prisma.js) — nunca reescrito; nulo = mensagem comum.
   privateCategoryId     String?
+  // Citação: wamid cru citado (mantido mesmo sem a original no banco) e, quando
+  // localizada, a mensagem interna. Encaminhamento é só um vínculo interno:
+  // a Cloud API não tem operação de encaminhar.
+  replyToExternalId      String?
+  replyToMessageId       String?
+  forwardedFromMessageId String?
   createdAt             DateTime           @default(now())
   updatedAt             DateTime           @updatedAt
   conversation          Conversation       @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  replyTo               Message?           @relation("MessageReply", fields: [replyToMessageId], references: [id], onDelete: SetNull)
+  replies               Message[]          @relation("MessageReply")
+  reactions             MessageReaction[]
+  stars                 MessageStar[]
+  pins                  MessagePin[]
   sentByUser            User?              @relation("SentMessages", fields: [sentByUserId], references: [id], onDelete: SetNull)
   privateCategory       Category?          @relation("MessagePrivateCategory", fields: [privateCategoryId], references: [id], onDelete: Restrict)
   botObservation        BotObservation?
@@ -659,9 +671,129 @@ model Message {
   @@index([conversationId, occurredAt])
   @@index([conversationId, privateCategoryId])
   @@index([sentByUserId])
+  @@index([replyToMessageId])
+}
+
+// Reação por lado da conversa: o WhatsApp guarda uma reação do cliente e uma do
+// número da empresa por mensagem. emoji vazio = removida. status: PENDING,
+// ACCEPTED (Meta aceitou a chamada), SENT (webhook), FAILED, RECEIVED (cliente).
+model MessageReaction {
+  id             String   @id @default(cuid())
+  messageId      String
+  conversationId String
+  companyId      String
+  side           String
+  emoji          String
+  previousEmoji  String?
+  status         String
+  externalId     String?  @unique
+  userId         String?
+  errorCode      String?
+  occurredAt     DateTime
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  message        Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, side])
+  @@index([conversationId])
+}
+
+// Favorito pessoal, interno à Central (a Cloud API não tem equivalente).
+model MessageStar {
+  messageId      String
+  userId         String
+  conversationId String
+  companyId      String
+  createdAt      DateTime @default(now())
+  message        Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user           User     @relation("MessageStarUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([messageId, userId])
+  @@index([userId, conversationId, createdAt])
+}
+
+// Mensagem fixada, interna à Central. Não se confunde com ContactNote.pinned
+// (observação) nem com ConversationPin (conversa fixada na lista).
+model MessagePin {
+  id             String   @id @default(cuid())
+  conversationId String
+  messageId      String
+  companyId      String
+  pinnedByUserId String?
+  createdAt      DateTime @default(now())
+  message        Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  pinnedBy       User?    @relation("MessagePinUser", fields: [pinnedByUserId], references: [id], onDelete: SetNull)
+
+  @@unique([conversationId, messageId])
+}
+
+// Biblioteca de figurinhas e GIFs. kind: STICKER | GIF.
+// scope: PERSONAL (ownerKey = usuário), TEAM (ownerKey = setor principal),
+// COMPANY (ownerKey = "company"). GIF é guardado já como MP4 compatível.
+// Remoção é lógica: o arquivo pode estar referenciado por mensagens enviadas.
+model MediaAsset {
+  id              String    @id @default(cuid())
+  companyId       String
+  kind            String
+  scope           String
+  ownerKey        String
+  name            String
+  category        String?
+  tags            String[]  @default([])
+  storageKey      String
+  mimeType        String
+  size            Int
+  sha256          String
+  width           Int?
+  height          Int?
+  animated        Boolean   @default(false)
+  durationMs      Int?
+  sourceMessageId String?
+  createdByUserId String?
+  retentionPolicy String    @default("KEEP")
+  deletedAt       DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  company         Company   @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  createdBy       User?     @relation("MediaAssetCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  favorites       MediaAssetFavorite[]
+  usages          MediaAssetUsage[]
+
+  @@unique([companyId, kind, scope, ownerKey, sha256])
+  @@index([companyId, kind, deletedAt])
+  @@index([storageKey])
+}
+
+model MediaAssetFavorite {
+  assetId   String
+  userId    String
+  createdAt DateTime   @default(now())
+  asset     MediaAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  user      User       @relation("MediaAssetFavoriteUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([assetId, userId])
+  @@index([userId])
+}
+
+model MediaAssetUsage {
+  assetId    String
+  userId     String
+  lastUsedAt DateTime   @default(now())
+  useCount   Int        @default(1)
+  asset      MediaAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  user       User       @relation("MediaAssetUsageUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([assetId, userId])
+  @@index([userId, lastUsedAt])
 }
 
 model User {
+  messageStars       MessageStar[]             @relation("MessageStarUser")
+  messagePins        MessagePin[]              @relation("MessagePinUser")
+  mediaAssets        MediaAsset[]              @relation("MediaAssetCreatedBy")
+  mediaFavorites     MediaAssetFavorite[]      @relation("MediaAssetFavoriteUser")
+  mediaUsages        MediaAssetUsage[]         @relation("MediaAssetUsageUser")
+  internalReactions  InternalMessageReaction[] @relation("InternalReactionUser")
   crmIdentityLink              CentralCrmIdentity?
   id                           String                   @id @default(cuid())
   name                         String
@@ -2163,10 +2295,23 @@ model InternalMessage {
   chat         InternalChat  @relation(fields: [chatId], references: [id], onDelete: Cascade)
   senderUser   User?         @relation(fields: [senderUserId], references: [id], onDelete: SetNull)
   conversation Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  reactions    InternalMessageReaction[]
 
   @@index([chatId, createdAt])
   @@index([senderUserId])
   @@index([conversationId])
+}
+
+// Reação do chat interno: local, nunca passa pela Meta.
+model InternalMessageReaction {
+  messageId String
+  userId    String
+  emoji     String
+  createdAt DateTime        @default(now())
+  message   InternalMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user      User            @relation("InternalReactionUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([messageId, userId])
 }
 
 // =============================================================================
@@ -2256,6 +2401,13 @@ model CampaignGlobalSettings {
 // CampaignGlobalSettings/BotGlobalSettings. Fonte central de todos os
 // prazos/flags de SLA, alertas, contexto do Bot e reabertura de conversa —
 // nenhum desses números deve viver hardcoded em outro arquivo (item 11).
+model ChatFeatureSettings {
+  id        String   @id @default("singleton")
+  values    Json     @default("{}")
+  revision  Int      @default(0)
+  updatedAt DateTime @default(now()) @updatedAt
+}
+
 model ConversationSettings {
   id String @id @default("singleton")
 

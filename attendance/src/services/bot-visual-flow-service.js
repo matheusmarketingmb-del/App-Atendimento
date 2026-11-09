@@ -23,9 +23,10 @@ const {
   FLOW_VARIABLES, MEDIA_KINDS, STORAGE_KEY_PATTERN, SYSTEM_VARIABLES, defaultGraph, nodeTypeCatalog, normalizeGraph, validateGraph,
 } = require("./bot-visual-flow-graph");
 const { FINISHED_STATUSES, STATUS, runTurn } = require("./bot-visual-flow-engine");
-const { skipPostTriageAssistant } = require("./post-triage-assistant-policy");
+const { acceptsAssistantAccount, acceptsNormalAssistantAccount, assistantBrand, isAssistantEntry, normalAssistantBrand,
+  skipPostTriageAssistant, withAssistantIntroduction, withNormalAssistantOpening } = require("./post-triage-assistant-policy");
 const { withTechnicalAssistanceIntake } = require("./technical-assistance-intake");
-const { seedEntryPattern, withSincrofitEntryReply } = require("./sincrofit-entry-patterns");
+const { withoutSincrofitSiteGreeting } = require("./sincrofit-entry-patterns");
 const assistantCalendarRuntime = require('./assistant-runtime-calendar');
 const sincrofitWholesale = require('./sincrofit-wholesale-bot');
 
@@ -399,6 +400,7 @@ function buildSeed({ bot, contact, conversation, now, availability }) {
     contact: contactSeed(contact), bot: botVars,
     conversation: { id: conversation.id, channel: conversation.channel, categoryName: conversation.category?.name || "Atendimento", categoryCode: conversation.category?.code || "", withinBusinessHours: botVars.withinBusinessHours, allowedCategoryIds: conversation.channelAccount?.config?.allowedCategoryIds || [], ...clockSeed(now || new Date()) },
     flow: { initialCategoryId: conversation.categoryId || null, initialNeed: conversation.triageContext?.atendimentoNeed || "" },
+    intakeAnswers: conversation.triageContext?.intakeAnswers,
   };
 }
 
@@ -410,6 +412,13 @@ function refreshSystemContext(state, seed) {
   state.context.bot = { ...seed.bot };
   state.context.conversation = { ...(state.context.conversation || {}), ...seed.conversation };
   return state;
+}
+
+function runtimeGraph(graph, bot, seed) {
+  const intake = withTechnicalAssistanceIntake(graph, bot);
+  const introduced = withAssistantIntroduction(intake, bot, seed.flow.assistantStartedOutsideHours, seed.conversation.categoryCode);
+  const opened = withNormalAssistantOpening(introduced, bot, seed.conversation.categoryCode, seed.flow.mibroBlackMenu);
+  return require("./bot-question-answer-observation").withQuality(withoutSincrofitSiteGreeting(opened, bot), bot);
 }
 
 // ---- simulação (dry-run) --------------------------------------------------
@@ -515,21 +524,32 @@ async function simulateFlow(botId, flowId, {
   if (Number.isNaN(now.getTime())) throw fail("Data/hora de simulação inválida.");
   categoryId ||= state?.context?.flow?.initialCategoryId || null;
   const resolvedCalendar = await assistantCalendarRuntime.resolveCalendar(prisma, bot, now);
+  const companyAssistant = Boolean(assistantBrand(bot));
+  // O simulador do assistente testa o cenário de fechamento em qualquer horário.
+  const availability = companyAssistant
+    ? { ...resolvedCalendar?.availability, configured: true, open: false }
+    : resolvedCalendar?.availability;
+  const outsideHours = availability?.configured && !availability.open;
   const seed = buildSeed({
-    availability: resolvedCalendar?.availability,
+    availability,
     bot, now, contact: { name: String(contactName || "Cliente Teste").slice(0, 80), phone: "5500000000000", email: "" },
     conversation: { id: "simulacao", channel: (bot.channels?.[0] || bot.channel), categoryId, category: categories.find((category) => category.id === categoryId), triageContext: { atendimentoNeed: String(initialNeed || "").slice(0, 2000) } },
   });
+  seed.bot.introduceAfterTriage = companyAssistant || Boolean(normalAssistantBrand(bot));
+  if (companyAssistant) seed.bot.assistantAfterTriage = true;
+  seed.bot.allowOutsideHours = Boolean(outsideHours && (companyAssistant || (chainAfterTriage === true && isAssistantEntry(bot))));
+  seed.flow.assistantStartedOutsideHours = Boolean(outsideHours || state?.context?.flow?.assistantStartedOutsideHours);
+  seed.flow.mibroBlackMenu = !state || state.context?.flow?.mibroBlackMenu === true;
   const result = await runTurn({
-    graph: require("./bot-question-answer-observation").withQuality(withSincrofitEntryReply(withTechnicalAssistanceIntake(graph, bot), bot), bot), flow: current, state: state ? refreshSystemContext(JSON.parse(JSON.stringify(state)), seed) : null,
-    input, adapter, seed: seedEntryPattern(seed, bot, input), responses: await activeResponseMap(prisma, bot.companyId), now,
+    graph: runtimeGraph(graph, bot, seed), flow: current, state: state ? refreshSystemContext(JSON.parse(JSON.stringify(state)), seed) : null,
+    input, adapter, seed, responses: await activeResponseMap(prisma, bot.companyId), now,
   });
-  if (chainAfterTriage === true && bot.type === "SYSTEM_TRIAGE" && result.state.status === STATUS.HANDED_OFF) {
+  if (chainAfterTriage === true && isAssistantEntry(bot) && result.state.status === STATUS.HANDED_OFF) {
     const destination = [...result.trace].reverse().find((entry) => entry.output?.categoryId)?.output?.categoryId;
     const category = categories.find((item) => item.id === destination && !item.masterOnly);
     if (category) {
-      const nextBot = await prisma.bot.findFirst({ where: { companyId: bot.companyId, archivedAt: null, status: { not: "ARCHIVED_LEGACY" }, featureFlags: { path: ["assistantAfterTriage"], equals: true }, OR: [{ channel: bot.channel }, { channels: { has: bot.channel } }] }, include: botScheduleInclude, orderBy: { updatedAt: "desc" } });
-      const nextFlow = nextBot && !skipPostTriageAssistant(nextBot, category) && await prisma.botFlow.findFirst({ where: { botId: nextBot.id, isDefault: true, archivedAt: null, activeVersionId: { not: null } }, include: { activeVersion: true } });
+      const nextBot = await prisma.bot.findFirst({ where: { companyId: bot.companyId, archivedAt: null, status: { not: "ARCHIVED_LEGACY" }, featureFlags: { path: [outsideHours ? "outsideHoursAssistant" : "assistantAfterTriage"], equals: true }, OR: [{ channel: bot.channel }, { channels: { has: bot.channel } }] }, include: botScheduleInclude, orderBy: { updatedAt: "desc" } });
+      const nextFlow = nextBot && !skipPostTriageAssistant(nextBot, category, { outsideHours }) && await prisma.botFlow.findFirst({ where: { botId: nextBot.id, isDefault: true, archivedAt: null, activeVersionId: { not: null } }, include: { activeVersion: true } });
       if (nextFlow && nextFlow.activeVersion?.graph?.nodes?.some((node) => node.type === "start" && node.config?.trigger === "AFTER_TRIAGE")) {
         const assistant = await simulateFlow(nextBot.id, nextFlow.id, { source, contactName, categoryId: category.id, initialNeed: result.state.context.flow.atendimentoNeed || "", callWebhooks: false, simulatedAt: now.toISOString() }, viewer, deps);
         return { ...assistant, outputs: [...outputs, { type: "event", text: `Assistente iniciado em ${category.name}` }, ...assistant.outputs], trace: [...result.trace, ...assistant.trace] };
@@ -550,8 +570,18 @@ function botIsAllowedToRespond(conversation) {
   if (conversation.archivedAt) return false;
   if (conversation.status === "FINALIZADO") return false;
   if (conversation.assignedUserId) return false;
+  if (conversation.status === "EM_ATENDIMENTO") return false;
   if (conversation.botState?.humanPausedAt) return false;
   return true;
+}
+
+function isPostTriageAssistant(bot) {
+  return bot?.featureFlags?.assistantAfterTriage === true || Boolean(assistantBrand(bot));
+}
+
+function assistantHasFixedAgent(bot, conversation) {
+  return isPostTriageAssistant(bot)
+    && Boolean(conversation.contact?.preferredAssigneeEnabled && conversation.contact.preferredAssigneeId);
 }
 
 function botEligible(bot, globalSettings) {
@@ -565,8 +595,26 @@ async function metaSenderFor(channel, conversation) {
   return accounts.senderFor(channel, await accounts.accountForConversation(conversation));
 }
 
-function liveAdapter({ conversation, bot, channel, execution, deps }) {
+async function humanRepliedSince(conversationId, since) {
+  return Boolean(await prisma.message.findFirst({
+    where: { conversationId, direction: "ENVIADA", status: { in: ["ENVIADA", "ENTREGUE", "LIDA"] }, sentByUserId: { not: null }, occurredAt: { gte: since } },
+    select: { id: true },
+  }));
+}
+
+async function triageHandledByHumanSince(conversationId, since) {
+  if (await humanRepliedSince(conversationId, since)) return true;
+  return Boolean(await prisma.conversationActivity.findFirst({
+    where: { conversationId, createdAt: { gte: since }, actorUserId: { not: null },
+      action: { in: ["CONVERSATION_CLAIMED", "CONVERSATION_TRANSFERRED"] } },
+    select: { id: true },
+  }));
+}
+
+function liveAdapter({ conversation, bot, channel, execution, deps, guardedSender = false, deferTriageConfirmation }) {
   const conversationId = conversation.id;
+  const checkLiveOwner = isPostTriageAssistant(bot) || bot.type === "SYSTEM_TRIAGE";
+  let expectedCategoryId = conversation.categoryId;
   const callWebhook = disabledExternalCall;
   const saveSent = async (data) => {
     const occurredAt = new Date();
@@ -580,12 +628,46 @@ function liveAdapter({ conversation, bot, channel, execution, deps }) {
       prisma.conversation.update({ where: { id: conversationId }, data: { lastMessageAt: occurredAt } }),
     ]);
   };
+  const prepareSender = async () => {
+    if (!guardedSender && checkLiveOwner) {
+      const fresh = await prisma.conversation.findUnique({
+        where: { id: conversationId },
+        include: { botState: true, contact: { select: { preferredAssigneeEnabled: true, preferredAssigneeId: true } } },
+      });
+      if (!fresh || !botIsAllowedToRespond(fresh) || assistantHasFixedAgent(bot, fresh)
+        || fresh.companyId !== conversation.companyId || fresh.channelAccountId !== conversation.channelAccountId
+        || fresh.categoryId !== expectedCategoryId
+        || await (bot.type === "SYSTEM_TRIAGE" ? triageHandledByHumanSince : humanRepliedSince)(conversationId, execution.startedAt)) {
+        throw Object.assign(new Error("ASSISTANT_CONVERSATION_CHANGED"), { code: "BOT_TRANSFER_SKIPPED" });
+      }
+    }
+    if (conversation.channel !== "META") return channel;
+    if (!guardedSender) return require("./whatsapp-inbox-service").botChannel(conversation, channel);
+    const fresh = await prisma.conversation.findUnique({
+      where: { id: conversationId }, include: { botState: true, category: true, channelAccount: true, company: true,
+        contact: { select: { preferredAssigneeEnabled: true, preferredAssigneeId: true } } },
+    });
+    if (!fresh?.company?.active || !botIsAllowedToRespond(fresh) || assistantHasFixedAgent(bot, fresh) || fresh.category?.masterOnly
+      || fresh.companyId !== bot.companyId || fresh.channelAccountId !== conversation.channelAccountId
+      || fresh.categoryId !== expectedCategoryId) throw new Error("ASSISTANT_CONVERSATION_CHANGED");
+    const accounts = require("./whatsapp-account-service");
+    const account = await accounts.accountForConversation(fresh);
+    if (!account?.enabled || account.status !== "CONNECTED" || account.channel !== "META" || account.companyId !== bot.companyId
+      || (assistantBrand(bot) && !acceptsAssistantAccount(bot, fresh))) throw new Error("ASSISTANT_ACCOUNT_UNAVAILABLE");
+    if (await require("./campaign-optout-service").isOptedOut(conversation.contact.phone, bot.companyId, prisma)) throw new Error("ASSISTANT_CONTACT_OPTED_OUT");
+    await require("./meta-template-service").assertFreeFormAllowed(conversationId, new Date(), fresh.channelAccountId || null);
+    if (await (bot.type === "SYSTEM_TRIAGE" ? triageHandledByHumanSince : humanRepliedSince)(conversationId, execution.startedAt)) {
+      throw Object.assign(new Error("HUMAN_TOOK_OVER"), { code: "BOT_TRANSFER_SKIPPED" });
+    }
+    return accounts.senderFor(channel, account);
+  };
   // flowHandoff marca a mensagem de encaminhamento: o monitor de
   // inatividade nunca finaliza uma conversa que está esperando a equipe.
   const send = async (text, { flowHandoff = false } = {}) => {
     if (!String(text || "").trim()) return;
-    if (conversation.channel === "META") channel = await require("./whatsapp-inbox-service").botChannel(conversation, channel);
-    const result = await channel.sendText(conversation.contact.phone, text);
+    const sender = await prepareSender();
+    if (!guardedSender) channel = sender;
+    const result = await sender.sendText(conversation.contact.phone, text);
     await saveSent({ externalId: result?.externalId || null, type: "text", text, rawPayload: { message: result?.data || null, ...(flowHandoff ? { flowHandoff: true } : {}) } });
   };
   const activity = (action, details) => prisma.conversationActivity.create({ data: { conversationId, action, details } });
@@ -621,7 +703,8 @@ function liveAdapter({ conversation, bot, channel, execution, deps }) {
       data: { categoryId: category.id, status: "NOVO", assignedUserId: null, finalizedAt: null },
     });
     if (!moved.count) return { categoryId: category.id, categoryName: category.name, skipped: true };
-    await activity(action, { categoryId: category.id, categoryName: category.name, reason, flowId: execution.flowId, executionId: execution.id });
+    await activity(action, { categoryId: category.id, previousCategoryId: conversation.categoryId || null,
+      categoryName: category.name, reason, flowId: execution.flowId, executionId: execution.id });
     await recordPrivateSegmentStart(category.id, conversation.category?.name || "Sem categoria");
     await audit.recordAudit({
       actor: null, action: "CONVERSATION_CATEGORY_CHANGED", entityType: "CONVERSATION", entityId: conversationId,
@@ -641,21 +724,22 @@ function liveAdapter({ conversation, bot, channel, execution, deps }) {
     // Lista interativa só no WhatsApp e até 10 opções (limite da Meta); fora
     // disso cai para o texto numerado — o cliente pode responder igual.
     async sendMenu({ text, fallbackText, buttonLabel, options }) {
-      if (conversation.channel === "META") channel = await require("./whatsapp-inbox-service").botChannel(conversation, channel);
-      if (conversation.channel !== "META" || options.length > WHATSAPP_LIST_MAX_ROWS || typeof channel.sendList !== "function") {
+      const sender = await prepareSender();
+      if (!guardedSender) channel = sender;
+      if (conversation.channel !== "META" || options.length > WHATSAPP_LIST_MAX_ROWS || typeof sender.sendList !== "function") {
         return send(fallbackText);
       }
       const rows = options.map((option) => ({ id: option.replyId, title: option.label.slice(0, 24) }));
-      const result = await channel.sendList(conversation.contact.phone, { body: text || fallbackText, button: buttonLabel.slice(0, 20), rows });
+      const result = await sender.sendList(conversation.contact.phone, { body: text || fallbackText, button: buttonLabel.slice(0, 20), rows });
       await saveSent({ externalId: result?.externalId || null, type: "interactive", text: fallbackText, rawPayload: { message: result?.data || null } });
     },
     async sendMedia({ kind, storageKey, mimeType, fileName, caption }) {
-      if (conversation.channel === "META") channel = await require("./whatsapp-inbox-service").botChannel(conversation, channel);
+      if (!guardedSender && !checkLiveOwner && conversation.channel === "META") channel = await require("./whatsapp-inbox-service").botChannel(conversation, channel);
       const buffer = await fs.readFile(media.resolveMedia(storageKey));
       // Cópia própria por mensagem: excluir a conversa nunca apaga o arquivo
       // do nó (que outras conversas continuam usando).
       const stored = await MEDIA_STORE[kind]({ buffer, mimeType, fileName });
-      const sender = await metaSenderFor(channel, conversation);
+      const sender = guardedSender || checkLiveOwner ? await prepareSender() : await metaSenderFor(channel, conversation);
       const result = await sender[CHANNEL_MEDIA_SENDER[kind]](conversation.contact.phone, {
         buffer, mimeType: stored.mimeType, fileName: stored.fileName, caption: caption || undefined,
       });
@@ -667,7 +751,28 @@ function liveAdapter({ conversation, bot, channel, execution, deps }) {
     },
     async transferToCategory({ categoryId, message, reason }) {
       const outcome = await moveToCategory({ categoryId, reason, action: "BOT_FLOW_TRANSFERRED" });
-      if (!outcome.skipped) await send(message, { flowHandoff: true });
+      if (!outcome.skipped) {
+        expectedCategoryId = categoryId;
+        if (deferTriageConfirmation && ["Triagem", "Triagem: reclassificação do Atendimento"].includes(reason) && message?.trim()) {
+          deferTriageConfirmation(async (assistantStarted) => {
+            const current = await prisma.conversation.findUnique({
+              where: { id: conversationId }, select: { companyId: true, channelAccountId: true, categoryId: true,
+                status: true, assignedUserId: true, archivedAt: true, botState: { select: { humanPausedAt: true } } },
+            });
+            if (!current || !botIsAllowedToRespond(current) || current.categoryId !== categoryId
+              || current.companyId !== conversation.companyId || current.channelAccountId !== conversation.channelAccountId
+              || current.status !== (assistantStarted ? "BOT" : "NOVO")
+              || await humanRepliedSince(conversationId, execution.startedAt)) return;
+            const sector = outcome.categoryName;
+            const text = assistantStarted
+              ? `Pronto! Direcionei sua conversa para *${sector}*. Nosso assistente virtual pode adiantar seu atendimento por aqui.`
+              : `Pronto! Encaminhei sua conversa para *${sector}*. Nossa equipe vai continuar o atendimento por aqui.`;
+            await send(text, { flowHandoff: true });
+          });
+        } else {
+          await send(message, { flowHandoff: true });
+        }
+      }
       return outcome;
     },
     // Mesmo sistema de atribuição da Central: responsável + setor (o
@@ -797,13 +902,13 @@ async function cancelExecution(execution, reason) {
 const conversationInclude = {
   channelAccount: { select: { config: true } },
   contact: true,
-  category: { select: { id: true, name: true, code: true, masterOnly: true, parentId: true } },
+  category: { select: { id: true, name: true, code: true, masterOnly: true, parentId: true, parent: { select: { code: true } } } },
   botState: { select: { humanPausedAt: true, activeBotId: true } },
 };
 
 // Multiempresa: só Bots da empresa da conversa — nunca um fluxo Sincrofit
 // respondendo num número Mibro.
-async function findStartBot(conversation, { afterTriage = false } = {}) {
+async function findStartBot(conversation, { afterTriage = false, companyAssistantOnly = false, now = new Date() } = {}) {
   if (!conversation.companyId) return null;
   const accountBotId = conversation.channelAccount?.config?.inboundBotId;
   const bots = await prisma.bot.findMany({
@@ -811,7 +916,12 @@ async function findStartBot(conversation, { afterTriage = false } = {}) {
       companyId: conversation.companyId,
       NOT: { id: sincrofitWholesale.BOT_ID },
       archivedAt: null, status: "ACTIVE", autoReplyEnabled: true,
-      ...(accountBotId ? { id: accountBotId } : {}),
+      ...(companyAssistantOnly ? { featureFlags: { path: ["outsideHoursAssistant"], equals: true } } :
+        afterTriage ? { AND: [{ OR: [
+          { featureFlags: { path: ["assistantAfterTriage"], equals: true } },
+          { featureFlags: { path: ["outsideHoursAssistant"], equals: true } },
+        ] }] } : {}),
+      ...(accountBotId && !afterTriage ? { id: accountBotId } : {}),
       OR: [{ channel: conversation.channel }, { channels: { has: conversation.channel } }],
     },
     include: botScheduleInclude,
@@ -820,13 +930,27 @@ async function findStartBot(conversation, { afterTriage = false } = {}) {
   // "Bot de resposta" de uma Campanha (ConversationBotState.activeBotId)
   // tem prioridade sobre os demais Bots do canal.
   const preferred = conversation.botState?.activeBotId;
-  bots.sort((left, right) => Number(right.id === preferred) - Number(left.id === preferred));
+  bots.sort((left, right) => (afterTriage ? Number(Boolean(assistantBrand(right))) - Number(Boolean(assistantBrand(left))) : 0)
+    || Number(right.id === preferred) - Number(left.id === preferred));
   for (const bot of bots) {
+    if (afterTriage) {
+      if (assistantHasFixedAgent(bot, conversation)) continue;
+      if (assistantBrand(bot)) {
+        if (!acceptsAssistantAccount(bot, conversation)) continue;
+        const calendar = await assistantCalendarRuntime.resolveCalendar(prisma, bot, now);
+        if (!calendar?.availability.configured || calendar.availability.open) continue;
+      } else if (normalAssistantBrand(bot)) {
+        if (companyAssistantOnly || !acceptsNormalAssistantAccount(bot, conversation)) continue;
+      } else if (companyAssistantOnly || (accountBotId && accountBotId !== bot.id
+        && !require("./sincrofit-assistant").belongsToAssistantAccount(bot, conversation))) continue;
+    }
     const accountIds = bot.featureFlags?.channelAccountIds;
     if (Array.isArray(accountIds) && !accountIds.includes(conversation.channelAccountId)) continue;
-    if (afterTriage !== (bot.featureFlags?.assistantAfterTriage === true)) continue;
-    const reopened = await prisma.conversationActivity.findFirst({ where: { conversationId: conversation.id, action: "REOPENED_BY_CUSTOMER_MESSAGE" }, select: { id: true } });
-    if (!afterTriage && (reopened ? !bot.runAfterReopen : !bot.runOnNewConversation)) continue;
+    if (afterTriage !== (bot.featureFlags?.assistantAfterTriage === true || Boolean(assistantBrand(bot)))) continue;
+    if (!afterTriage) {
+      const reopened = await prisma.conversationActivity.findFirst({ where: { conversationId: conversation.id, action: "REOPENED_BY_CUSTOMER_MESSAGE" }, select: { id: true } });
+      if (reopened ? !bot.runAfterReopen : !bot.runOnNewConversation) continue;
+    }
     const flow = await prisma.botFlow.findFirst({
       where: { botId: bot.id, archivedAt: null, isDefault: true, status: "ACTIVE", activeVersionId: { not: null } },
       include: { activeVersion: true },
@@ -857,21 +981,39 @@ async function hadExecutionThisSession(conversationId, botId = null) {
 
 async function runLiveTurn({ execution, claimedStep, conversation, bot, channel, version, flowName, input, now, deps }) {
   const turnStartedAt = Date.now();
-  const adapter = liveAdapter({ conversation, bot, channel, execution, deps });
   const calendar = await assistantCalendarRuntime.resolveCalendar(prisma, bot, now);
+  const outsideHours = calendar?.availability.configured && !calendar.availability.open;
+  const companyAssistant = Boolean(assistantBrand(bot));
+  const allowOutsideHours = Boolean(outsideHours && (companyAssistant || (bot.type === "SYSTEM_TRIAGE"
+    && await findStartBot(conversation, { afterTriage: true, companyAssistantOnly: true, now }))));
+  let triageConfirmation;
+  const deferTriageConfirmation = bot.type === "SYSTEM_TRIAGE" && (!calendar || calendar.availability.open)
+    ? callback => { triageConfirmation = callback; }
+    : undefined;
+  const adapter = liveAdapter({ conversation, bot, channel, execution, deps,
+    guardedSender: companyAssistant || allowOutsideHours, deferTriageConfirmation });
   const seed = buildSeed({ bot, contact: conversation.contact, conversation, now, availability: calendar?.availability });
+  seed.bot.introduceAfterTriage = companyAssistant || Boolean(normalAssistantBrand(bot));
+  if (companyAssistant) seed.bot.assistantAfterTriage = true;
+  seed.bot.allowOutsideHours = allowOutsideHours;
   const state = execution.currentNodeKey || execution.status !== STATUS.RUNNING ? refreshSystemContext(toEngineState(execution), seed) : null;
+  seed.flow.assistantStartedOutsideHours = Boolean(outsideHours || state?.context?.flow?.assistantStartedOutsideHours);
+  // A opção é acrescentada apenas nas novas execuções para preservar a numeração dos menus já enviados.
+  seed.flow.mibroBlackMenu = !state || state.context?.flow?.mibroBlackMenu === true;
   let turn;
   try {
-    if (calendar && (!calendar.availability.configured || (!calendar.availability.open && bot.id !== sincrofitWholesale.BOT_ID))) {
+    if (companyAssistant && !outsideHours) {
+      await adapter.handoff({ reason: "BUSINESS_HOURS_RESUMED", message: "" });
+      turn = { state: { ...(state || { context: seed }), status: STATUS.HANDED_OFF }, trace: [] };
+    } else if (calendar && (!calendar.availability.configured || (!calendar.availability.open && !allowOutsideHours && bot.id !== sincrofitWholesale.BOT_ID))) {
       // Customer-triggered acknowledgement is owned by the durable reception
       // hook. Timer/START turns must never send another closed-hours message.
       await adapter.handoff({ reason: 'OUTSIDE_HOURS_QUEUED', message: '' });
       turn = { state: { ...(state || { context: seed }), status: STATUS.HANDED_OFF }, trace: [{ nodeKey: 'availability', nodeType: 'availability', result: 'HANDED_OFF', durationMs: 0 }] };
     } else {
     turn = await runTurn({
-      graph: require("./bot-question-answer-observation").withQuality(withSincrofitEntryReply(withTechnicalAssistanceIntake(version.graph, bot), bot), bot), flow: { flowId: execution.flowId, versionId: version.id, version: version.version, name: flowName },
-      state, input, adapter, seed: seedEntryPattern(seed, bot, input), responses: await activeResponseMap(prisma, bot.companyId), now,
+      graph: runtimeGraph(version.graph, bot, seed), flow: { flowId: execution.flowId, versionId: version.id, version: version.version, name: flowName },
+      state, input, adapter, seed, responses: await activeResponseMap(prisma, bot.companyId), now,
     });
     }
   } catch (error) {
@@ -891,28 +1033,79 @@ async function runLiveTurn({ execution, claimedStep, conversation, bot, channel,
       resolvedByBot: true, metadata: { source: "question_answer", executionId: execution.id },
     } });
   }
-  if (bot.type === "SYSTEM_TRIAGE" && turn.state.status === STATUS.HANDED_OFF && (!calendar || calendar.availability.open)) {
-    await startPostTriageAssistant({ triageExecution: execution, triageContext: turn.state.context?.flow || {}, channel, now, deps });
+  if (isAssistantEntry(bot) && turn.state.status === STATUS.HANDED_OFF) {
+    const triageContext = {
+      ...turn.state.context?.flow,
+      intakeAnswers: turn.state.context?._engine?.intakeAnswers?.filter(answer => answer.variable === "flow.atendimentoNeed"),
+    };
+    const confirmTriage = async (assistantStarted) => {
+      const confirm = triageConfirmation;
+      triageConfirmation = null;
+      try { await confirm?.(assistantStarted); }
+      catch (error) { console.error("[BOT_FLOW] Falha ao confirmar saída da triagem:", error?.code || error?.name); }
+    };
+    const started = await startPostTriageAssistant({
+      triageExecution: execution, triageBot: bot, entryConversation: conversation,
+      triageContext: bot.type === "SYSTEM_TRIAGE" ? triageContext : { atendimentoNeed: input.text },
+      channel, now, deps, beforeStart: triageConfirmation ? () => confirmTriage(true) : undefined,
+    });
+    if (!started) await confirmTriage(false);
   }
   return turn;
 }
 
-async function startPostTriageAssistant({ triageExecution, triageContext, channel, now, deps = {} }) {
+async function startPostTriageAssistant({ triageExecution, triageBot, entryConversation, triageContext, channel, now, deps, beforeStart }) {
   const conversation = await prisma.conversation.findUnique({ where: { id: triageExecution.conversationId }, include: conversationInclude });
-  if (!conversation || !botIsAllowedToRespond(conversation) || conversation.status !== "NOVO" || !conversation.categoryId || conversation.category?.masterOnly) return false;
-  const target = await findStartBot(conversation, { afterTriage: true });
-  // Before claiming the chat or running any node (including outside-hours replies).
-  if (!target || skipPostTriageAssistant(target.bot, conversation.category) || !botEligible(target.bot, await getGlobalSettings(prisma))) return false;
+  if (!conversation || !botIsAllowedToRespond(conversation) || conversation.status !== "NOVO" || !conversation.categoryId || conversation.category?.masterOnly
+    || conversation.companyId !== entryConversation.companyId || conversation.channelAccountId !== entryConversation.channelAccountId) return false;
+  const target = await findStartBot(conversation, { afterTriage: true, now });
+  if (!target || !botEligible(target.bot, await getGlobalSettings(prisma))) return false;
+  if (normalAssistantBrand(target.bot) && triageBot.type !== "SYSTEM_TRIAGE") return false;
   const calendar = await assistantCalendarRuntime.resolveCalendar(prisma, target.bot, now);
-  if (calendar && (!calendar.availability.configured || !calendar.availability.open)) return false;
+  const outsideHours = calendar?.availability.configured && !calendar.availability.open;
+  if (calendar && (!calendar.availability.configured || (outsideHours && !assistantBrand(target.bot)))) return false;
+  if (skipPostTriageAssistant(target.bot, conversation.category, { outsideHours })) return false;
   const existing = await prisma.botFlowExecution.findFirst({ where: { conversationId: conversation.id, botId: target.bot.id, startedAt: { gte: triageExecution.startedAt } }, select: { id: true } });
-  if (existing) return false;
-  const claimed = await prisma.conversation.updateMany({ where: { id: conversation.id, categoryId: conversation.categoryId, status: "NOVO", assignedUserId: null, updatedAt: conversation.updatedAt }, data: { status: "BOT" } });
-  if (!claimed.count) return false;
-  const execution = await prisma.botFlowExecution.create({ data: { conversationId: conversation.id, botId: target.bot.id, flowId: target.flow.id, versionId: target.version.id, status: STATUS.RUNNING, lastMessageId: triageExecution.lastMessageId, step: 0 } });
-  await prisma.conversationActivity.create({ data: { conversationId: conversation.id, action: "BOT_ASSISTANT_AFTER_TRIAGE", details: { botId: target.bot.id, triageExecutionId: triageExecution.id, executionId: execution.id, categoryId: conversation.categoryId } } });
+  if (existing || await humanRepliedSince(conversation.id, triageExecution.startedAt)) return false;
+  return startAssistant({ conversation, target, lastMessageId: triageExecution.lastMessageId, triageExecutionId: triageExecution.id, triageContext, channel, now, deps, beforeStart });
+}
+
+async function startAssistant({ conversation, target, lastMessageId, triageExecutionId, triageContext, channel, now, deps, beforeStart }) {
+  const execution = await prisma.$transaction(async tx => {
+    const claimed = await tx.conversation.updateMany({
+      where: { id: conversation.id, categoryId: conversation.categoryId, status: conversation.status, assignedUserId: null, archivedAt: null, updatedAt: conversation.updatedAt,
+        NOT: { contact: { is: { preferredAssigneeEnabled: true, preferredAssigneeId: { not: null } } } },
+        OR: [{ botState: { is: null } }, { botState: { is: { humanPausedAt: null } } }] },
+      data: { status: "BOT" },
+    });
+    if (!claimed.count) return null;
+    return tx.botFlowExecution.create({ data: { conversationId: conversation.id, botId: target.bot.id, flowId: target.flow.id, versionId: target.version.id, status: STATUS.RUNNING, lastMessageId, step: 0 } });
+  });
+  if (!execution) return false;
+  await prisma.conversationActivity.create({ data: { conversationId: conversation.id, action: triageExecutionId ? "BOT_ASSISTANT_AFTER_TRIAGE" : "BOT_ASSISTANT_COMMERCIAL_OUTSIDE_HOURS", details: { botId: target.bot.id, triageExecutionId: triageExecutionId || null, executionId: execution.id, categoryId: conversation.categoryId } } });
+  await beforeStart?.();
   await runLiveTurn({ execution, claimedStep: 0, conversation: { ...conversation, status: "BOT", triageContext }, bot: target.bot, channel, version: target.version, flowName: target.flow.name, input: { type: "START", text: "" }, now, deps });
   return true;
+}
+
+async function startCommercialOutsideHours({ conversation, message, text, channel, now, deps, eligible }) {
+  const category = conversation.category;
+  const commercial = ["COMERCIAL", "ATACADO"].includes(category?.code) || category?.parent?.code === "COMERCIAL";
+  if (!commercial || category.masterOnly || !botIsAllowedToRespond(conversation)
+    || !["NOVO", "AGUARDANDO_EQUIPE", "HANDOFF_BOT"].includes(conversation.status)) return false;
+  const target = await findStartBot(conversation, { afterTriage: true, companyAssistantOnly: true, now });
+  if (!target || !(await eligible(target.bot))) return false;
+  const calendar = await assistantCalendarRuntime.resolveCalendar(prisma, target.bot, now);
+  if (!calendar?.availability.configured || calendar.availability.open || await hadExecutionThisSession(conversation.id, target.bot.id)) return false;
+  const reopened = await prisma.conversationActivity.findFirst({
+    where: { conversationId: conversation.id, action: "REOPENED_BY_CUSTOMER_MESSAGE" },
+    orderBy: { createdAt: "desc" }, select: { createdAt: true },
+  });
+  if (await humanRepliedSince(conversation.id, reopened?.createdAt || conversation.createdAt)) return false;
+  return startAssistant({ conversation, target, lastMessageId: message.id, triageContext: {
+    atendimentoNeed: text,
+    intakeAnswers: text ? [{ variable: "flow.atendimentoNeed", messageId: message.id }] : undefined,
+  }, channel, now, deps });
 }
 
 // Hook do webhook do WhatsApp. Devolve true quando o Flow Builder é dono
@@ -929,6 +1122,7 @@ async function handleIncomingVisualFlow(event, message, channel, { now = new Dat
   };
   const text = event.type === "text" ? String(event.text || "") : (event.interactiveTitle || event.text || "");
   const replyId = event.interactiveReplyId || null;
+  const sameInboundAccount = !Object.hasOwn(message, 'channelAccountId') || message.channelAccountId === conversation.channelAccountId;
 
   let active = await prisma.botFlowExecution.findFirst({
     where: { conversationId: conversation.id, status: { in: [STATUS.WAITING_CUSTOMER, STATUS.WAITING_TIMER, STATUS.RUNNING] } },
@@ -941,9 +1135,23 @@ async function handleIncomingVisualFlow(event, message, channel, { now = new Dat
   if (active) {
     if (active.lastMessageId === message.id) return true; // reentrega do mesmo evento
     const bot = activeBot = await prisma.bot.findUnique({ where: { id: active.botId }, include: botScheduleInclude });
+    if ((isPostTriageAssistant(bot) || isAssistantEntry(bot)) && !sameInboundAccount) return false;
+    if (bot?.type === "SYSTEM_TRIAGE" && (!botIsAllowedToRespond(conversation) || await triageHandledByHumanSince(conversation.id, active.startedAt))) {
+      if (await cancelExecution(active, "HUMAN_TOOK_OVER_OR_FINALIZED") && conversation.status === "BOT" && !conversation.assignedUserId) {
+        await prisma.conversation.updateMany({
+          where: { id: conversation.id, status: "BOT", assignedUserId: null, archivedAt: null, updatedAt: conversation.updatedAt },
+          data: { status: "AGUARDANDO_EQUIPE" },
+        });
+      }
+      return false;
+    }
     const boundBot = conversation.channelAccount?.config?.inboundBotId;
     const accountIds = bot?.featureFlags?.channelAccountIds;
-    if ((boundBot && boundBot !== bot?.id && !sincrofitWholesale.belongsToAccount(bot, conversation)) || (Array.isArray(accountIds) && !accountIds.includes(conversation.channelAccountId))) {
+    if ((assistantBrand(bot) && !acceptsAssistantAccount(bot, conversation))
+      || (normalAssistantBrand(bot) && !acceptsNormalAssistantAccount(bot, conversation))
+      || (boundBot && boundBot !== bot?.id && !sincrofitWholesale.belongsToAccount(bot, conversation)
+        && !acceptsAssistantAccount(bot, conversation) && !acceptsNormalAssistantAccount(bot, conversation))
+      || (Array.isArray(accountIds) && !accountIds.includes(conversation.channelAccountId))) {
       if (!(await cancelExecution(active, "CHANNEL_ACCOUNT_BOT_CHANGED"))) return true;
       channelChangeExecution = active;
       active = null;
@@ -953,11 +1161,23 @@ async function handleIncomingVisualFlow(event, message, channel, { now = new Dat
   globalSettings ||= await getGlobalSettings(prisma);
   // This exact entry routes once through its own bot, including the closed-hours
   // confirmation. All other entries retain their existing reception owner.
-  const sameInboundAccount = !Object.hasOwn(message, 'channelAccountId') || message.channelAccountId === conversation.channelAccountId;
+  if (!active && sameInboundAccount && globalSettings.automationEnabled
+    && await startCommercialOutsideHours({ conversation, message, text, channel, now, deps, eligible })) return true;
   let wholesaleTarget = !active && sameInboundAccount ? await sincrofitWholesale.findTarget(prisma, conversation, event) : null;
   if (wholesaleTarget && !(await eligible(wholesaleTarget.bot))) wholesaleTarget = null;
   if (!wholesaleTarget && await require('./outside-hours-reception-service').receiveOutsideHours({
     db: prisma, conversation, message, active, now, automationEnabled: globalSettings.automationEnabled,
+    continueWithAssistant: async triage => {
+      if (!sameInboundAccount) return false;
+      if (active && assistantBrand(activeBot)) return acceptsAssistantAccount(activeBot, conversation) && await eligible(activeBot);
+      if (conversation.categoryId || (active ? active.botId !== triage.id : conversation.status !== "NOVO")) return false;
+      if (!await findStartBot(conversation, { afterTriage: true, companyAssistantOnly: true, now })) return false;
+      if (active) return true;
+      const entry = await findStartBot(conversation);
+      if (entry?.bot.id !== triage.id) return false;
+      const start = entry.version.graph.nodes.find(node => node.type === "start");
+      return start?.config?.trigger === "ANY_MESSAGE" || !await hadExecutionThisSession(conversation.id);
+    },
     automationStillEnabled: async () => (await getGlobalSettings(prisma)).automationEnabled,
     send: (account, phone, body) => require('./whatsapp-account-service').senderFor(channel, account).sendText(phone, body),
     isOptedOut: (phone, companyId) => require('./campaign-optout-service').isOptedOut(phone, companyId, prisma),
@@ -967,7 +1187,12 @@ async function handleIncomingVisualFlow(event, message, channel, { now = new Dat
 
   if (active) {
     const bot = activeBot;
-    if (!botIsAllowedToRespond(conversation)) { await cancelExecution(active, "HUMAN_TOOK_OVER_OR_FINALIZED"); return false; }
+    const initialCategoryId = active.context?.flow?.initialCategoryId;
+    if (!botIsAllowedToRespond(conversation) || assistantHasFixedAgent(bot, conversation) || (isPostTriageAssistant(bot) && (
+      (initialCategoryId && initialCategoryId !== conversation.categoryId) || await humanRepliedSince(conversation.id, active.startedAt)
+    ))) {
+      await cancelExecution(active, "HUMAN_TOOK_OVER_OR_FINALIZED"); return false;
+    }
     if (!(await eligible(bot))) { await cancelExecution(active, "BOT_DISABLED"); return false; }
     if (active.status !== STATUS.WAITING_CUSTOMER) return true; // RUNNING/WAITING_TIMER: mensagem salva, fluxo não avança duas vezes
     // Claim otimista: só uma mensagem avança o fluxo a partir deste passo.
@@ -978,7 +1203,7 @@ async function handleIncomingVisualFlow(event, message, channel, { now = new Dat
     if (!claimed.count) return true;
     await runLiveTurn({
       execution: { ...active, lastMessageId: message.id }, claimedStep: active.step + 1, conversation, bot, channel, version: active.version,
-      flowName: active.flow.name, input: { type: "MESSAGE", text, replyId, messageType: event.type }, now, deps,
+      flowName: active.flow.name, input: { type: "MESSAGE", text, replyId, messageType: event.type, messageId: message.id }, now, deps,
     });
     return true;
   }
@@ -1003,6 +1228,7 @@ async function handleIncomingVisualFlow(event, message, channel, { now = new Dat
   if (conversation.status !== "NOVO" && !(conversation.status === "BOT" && channelChangeExecution)) return false;
   const target = wholesaleTarget || await findStartBot(conversation);
   if (!target || !(await eligible(target.bot))) return false;
+  if (!sameInboundAccount && isAssistantEntry(target.bot)) return false;
   if (channelChangeExecution?.botId === target.bot.id) return false;
   const startNode = (target.version.graph?.nodes || []).find((node) => node.type === "start");
   const allowedChannels = startNode?.config?.channels || [];
@@ -1045,7 +1271,11 @@ async function processDueTimers({ channel, now = new Date(), limit = 20, ...deps
   for (const execution of due) {
     try {
       const bot = await prisma.bot.findUnique({ where: { id: execution.botId }, include: botScheduleInclude });
-      if (!botIsAllowedToRespond(execution.conversation)) { await cancelExecution(execution, "HUMAN_TOOK_OVER_OR_FINALIZED"); continue; }
+      if (!botIsAllowedToRespond(execution.conversation) || assistantHasFixedAgent(bot, execution.conversation)
+        || (bot?.type === "SYSTEM_TRIAGE" && await triageHandledByHumanSince(execution.conversationId, execution.startedAt))) {
+        await cancelExecution(execution, "HUMAN_TOOK_OVER_OR_FINALIZED");
+        continue;
+      }
       if (!botEligible(bot, globalSettings)) { await cancelExecution(execution, "BOT_DISABLED"); continue; }
       const claimed = await prisma.botFlowExecution.updateMany({
         where: { id: execution.id, step: execution.step, status: STATUS.WAITING_TIMER },

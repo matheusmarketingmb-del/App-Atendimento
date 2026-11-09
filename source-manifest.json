@@ -1,20 +1,23 @@
 {
-  "date": "2026-11-03",
-  "scope": "Local integrated source; not a production deployment",
+  "date": "2026-11-09",
+  "scope": "Production attendance runtime 0.38.6; CRM and Olist bridge retained from the integrated snapshot.",
   "sourceRevisions": {
     "integration": "3079be1ae0f8bed1d37d6134e9ca7ea6af62ca95 plus local changes",
-    "olistBridge": "5d0ce574a2bc9816d3418b8ec0bb8d4878691620 plus CRM local changes"
+    "olistBridge": "5d0ce574a2bc9816d3418b8ec0bb8d4878691620 plus CRM local changes",
+    "attendance": "release-meta-ads-0386-20261109",
+    "integratedSnapshot": "7d82124b14424b0ab7bd0cbebdc16f728137dc82"
   },
+  "hashBasis": "Committed Git blob contents; manifest excludes itself",
   "files": [
     {
       "path": ".gitignore",
-      "blob": "ace17b4e67a2eb34cf7344516eb6fe7287c1e19f",
-      "sha256": "b1d7d99b1686baf1bd642b2e7276ff175af74fb038574c91c5a5251f215b6ecb"
+      "blob": "a68695255b4ecb7d8ab73ae910f32d2be7ca718a",
+      "sha256": "8d2dafc838f0b494e39c381755cdcdc12d37622522ecb9e8d9334a66a40cf5c5"
     },
     {
       "path": "README.md",
-      "blob": "8a5701cae24216fc050baa0ddacd6f035e9c9527",
-      "sha256": "e8e29e75a575f8a3ea808b1e967c22141a43e88ad013db7cb20a97a3715dc00f"
+      "blob": "26d91de405a048ec777cf724bfdd4a5c784eb2e7",
+      "sha256": "c913b6c77e07d72a031e183494c3baf595c4403a3eed2ec11ba6f2e1519da97f"
     },
     {
       "path": "activity-center-server.test.cjs",
@@ -602,14 +605,24 @@
       "sha256": "af3cf9fb55618e03d8961ca40fd8de12f55dea20046ff25f3771ef114032a3db"
     },
     {
+      "path": "attendance/prisma/migrations/20261104120000_chat_whatsapp_features/migration.sql",
+      "blob": "b2fbc181371782ea8cd19f931b3854c965c1f392",
+      "sha256": "f5a829059392562d21f4edbc816e26f130ae01beeea728a2e960c36979b646ef"
+    },
+    {
+      "path": "attendance/prisma/migrations/20261105120000_chat_feature_settings/migration.sql",
+      "blob": "ba3ac65ab993f373123cb60d5da6305af358fabf",
+      "sha256": "7658df26757cafc46696e0238ff3178cad1e5bee14a35545aa3fb006b80c17e7"
+    },
+    {
       "path": "attendance/prisma/migrations/migration_lock.toml",
       "blob": "044d57cdb0d5b5bff3475112359a4ee70439bf78",
       "sha256": "99836963713b4f5b269ad49af0ed3d7b0b2e336115c2f92dc9ac683d139d0900"
     },
     {
       "path": "attendance/prisma/schema.prisma",
-      "blob": "910ede341d900ad72625332b652b49ef1a13ce3b",
-      "sha256": "9fcb7f62516225678849f4747f8e90a1091c8d386ed2cfc7f2b8c080bb1a12a8"
+      "blob": "0d4a475cb2a17a591a8b51ad099316f8c2edbb60",
+      "sha256": "c44fa886e2730a41dc2e43922ef813ba97eb1df94db4299161c54e653ca1e583"
     },
     {
       "path": "attendance/prisma/seed.js",
@@ -622,9 +635,14 @@
       "sha256": "c384e317bd69b8f92de64ecc648dc92b3e5284235fa3a5bd7002d702f25cd2ca"
     },
     {
+      "path": "attendance/public/anuncios-meta.html",
+      "blob": "036b7cfcb7955c8d62b1c9aa26a30c54199d2d8d",
+      "sha256": "f2b4a89edaefb5e1121a96a9a18f33326dc8a0577487a3b1ea2a94e00fdd9d48"
+    },
+    {
       "path": "attendance/public/arquivados.html",
-      "blob": "bcb110d0f87460cac78c5961e6045ce1c00f43ac",
-      "sha256": "4ab75638b22e56c26c6f244256a4593eae55a1f765f084e75f2d7084c39c1722"
+      "blob": "cec8f14b9a8b23fd6fe209f5c3bc445de8674592",
+      "sha256": "bb06f510e59ad165c04be8dd0b8e6e7367d88506859b4bffe2c02bfedad618a0"
     },
     {
       "path": "attendance/public/assets/app-icon-192.png",
@@ -668,13 +686,18 @@
     },
     {
       "path": "attendance/public/campaigns.html",
-      "blob": "7b2dda6863baf346c7d324340681081116e3056e",
-      "sha256": "effb358465cd2ce25ed1dd0d0b504e17d1b56c6aab6b6e323789c7e982f8588f"
+      "blob": "ff28bea3b66bc6bc40b8d4fad257bef7fa1d25e8",
+      "sha256": "af8801ca9c417abc7a6c715b573ebfebff44d340e8015ac9725e1cb66abfcde8"
     },
     {
       "path": "attendance/public/configuracoes.html",
-      "blob": "5983d7e53f906a8f9c903230cd13fcffef5691e0",
-      "sha256": "8e7c10436610d5861c1ee108109be619d44b7e142e56b078fb6d94bb2ee7035a"
+      "blob": "823f32f8695af60c6fc0f3c4cfcc3597ba3e5541",
+      "sha256": "a1bb1592e67082ce72bb33baf518d97a450ba3ea45f85b7dc91462669ca0fcc0"
+    },
+    {
+      "path": "attendance/public/css/ad-origin.css",
+      "blob": "a1000a870758dc3f38d71663c3166c0498be5dfa",
+      "sha256": "342579004a09a3c96d37d309f0049a6946ae9d17ee33c9fdb47c20b8a30dcb73"
     },
     {
       "path": "attendance/public/css/admin-ux.css",
@@ -688,8 +711,8 @@
     },
     {
       "path": "attendance/public/css/app.css",
-      "blob": "4824abca2228b587965266809d70f16375bceff2",
-      "sha256": "31ca5f8f0d5afcadcd046f81537192f1ce1facebff6b824b50bc5fc576594739"
+      "blob": "496c62b52322f59c5dedbcef49ec79e368d48199",
+      "sha256": "32b31fb67ad29d5d3dd433550cf3f2ab0118d9a4936a6df9033cb19a2c29d00f"
     },
     {
       "path": "attendance/public/css/arquivados.css",
@@ -717,6 +740,16 @@
       "sha256": "95ffba2554e673a85542ca3cf77c009e0ba6e52027e4c91f68bf97cd4dedcb9f"
     },
     {
+      "path": "attendance/public/css/chat-features.css",
+      "blob": "fda96eef7dbce5bb04b030e9099eba8f410330b7",
+      "sha256": "69bae0a49e32c24389851212bf5f4feaec0fe6c7d85240b0933f68405a66b1eb"
+    },
+    {
+      "path": "attendance/public/css/chat-settings.css",
+      "blob": "cca0a7b70d7eb038c197ce7df6d3097e35610406",
+      "sha256": "8d4f869d423b433ebc645f9c98f0301ee9e4f913ab17493c193a47deefb47828"
+    },
+    {
       "path": "attendance/public/css/configuracoes.css",
       "blob": "9e217263ae8ec8987e17c198f354360f55c9e01d",
       "sha256": "5eea8a5a075b772d4968880f2805b689093714333181e53af265b0a5ba21062a"
@@ -733,8 +766,8 @@
     },
     {
       "path": "attendance/public/css/follow-ups.css",
-      "blob": "361755eae1b35bc050ae072372ae3c830ec1985a",
-      "sha256": "d0589a8e118abea09fd96b3de7bac77b7079d5b34ec87da3c22768a2407351d9"
+      "blob": "73ecbe6c429f9d91bd5106935aca1f50dbdf7069",
+      "sha256": "573fcd81ee59e53fdd0b09cec97bd18e84c4ee8f052d4ce94a2d5dd1840df799"
     },
     {
       "path": "attendance/public/css/fora-do-expediente.css",
@@ -767,6 +800,16 @@
       "sha256": "f26c514736e0e9f81e4bd54f3bd5c0cd7e7d28ec736adb49d65555cc035bb5fb"
     },
     {
+      "path": "attendance/public/css/meta-ads.css",
+      "blob": "0daefd08daaeccaedd2bc3a403be544f8d242959",
+      "sha256": "1efde4ced96ade68e970548284957248dfade968ae97a50c3927c4dc07356520"
+    },
+    {
+      "path": "attendance/public/css/metrics-tabs.css",
+      "blob": "903c3c11d005a2552d158e69df9fe5bfc650301c",
+      "sha256": "081cf78f5261d697bb012e99edbf7aa5c4cb44318fbbb73391ef0697725d9dba"
+    },
+    {
       "path": "attendance/public/css/operacao.css",
       "blob": "5b90aac94b1f07d15baa659ff7dfc4bf5c6eb90f",
       "sha256": "9929f9e2e380c731d167c9b32de55f86ae8aae2b4a2c0a47cd4b8a88aa8b44d9"
@@ -797,34 +840,44 @@
       "sha256": "f7120e158890be05810f656cce911557c20b7d16732d1d818c6cfa68ae3966f6"
     },
     {
+      "path": "attendance/public/css/team-access.css",
+      "blob": "ae8fad8cb8aae1fa8e655a0b63f6b154fa740fc0",
+      "sha256": "c0f483f9e1b17bc73a1769441377cd65e5c219e04b40d301155db2d1440af54c"
+    },
+    {
       "path": "attendance/public/css/whatsapp-send.css",
       "blob": "4523b4275298b9eb004586460efbdf6b7a15e7b9",
       "sha256": "2ada8007adf4944357855f7a0f3d100c8de98f843c4cdf5001c59ee9d82216ee"
     },
     {
       "path": "attendance/public/custos-meta.html",
-      "blob": "19b26ebf854827e225a913ff50c18216eec96b60",
-      "sha256": "fdd59e282450c33c25f36abeeaa5118d66d4ac480861e2e8bd46f8e0b71cb062"
+      "blob": "afcc6680c9afe577539a44dfaa6c330acfd562b6",
+      "sha256": "264ab15a65af6a004cab3fff0b0b68cdfb01cab5897c84442a396ec95f52700d"
     },
     {
       "path": "attendance/public/flow-builder.html",
-      "blob": "25d443a6735431186cbbd9974f435cf57c9e82b5",
-      "sha256": "ff8c72a539cbd038660bc85d5fed8e81a2b4899eec7912962bf0d5e8258b40ce"
+      "blob": "e8a297b447775691280def0b1c770fc453dd2648",
+      "sha256": "f59a9348da3139b57b38b33d346c04f4834bb50b791dcf175de9ccadddfaccf1"
     },
     {
       "path": "attendance/public/fora-do-expediente.html",
-      "blob": "7a669ede3f7225d9bbe41d62dad5b1b63d397be5",
-      "sha256": "10c8cfb328760e8afb7f2b7dddb3f91b037bbb7dcc0ef46ed1cc4c9aa7bff88a"
+      "blob": "75ffd324f301dcc2f7a345bfaf32dc607b7e8ff1",
+      "sha256": "d2c84b3cd2eddc824205559834c11a8fb0901b8a6944243af8780eaa9207a5d7"
     },
     {
       "path": "attendance/public/index.html",
-      "blob": "9d09f76738de552845766267a4903bdc540b532a",
-      "sha256": "f5c4a6d996e1c6350c6e9403f431f35b1ba8aab88acc3cc1c4523830c53dc63d"
+      "blob": "07734c7027446f45a62edc7a62b52433257156f2",
+      "sha256": "5918cd93016ace7647685de97704905622f10b67bbbcf0a3ab99f92c4b0280aa"
     },
     {
       "path": "attendance/public/integrations.html",
       "blob": "dd5aa235d531a1b352899c0cdb4a2222b0a01fc6",
       "sha256": "95b3ecf69f188c7b190d3bc55b36692fa1c29429443f03ca0022ee918be0c063"
+    },
+    {
+      "path": "attendance/public/js/ad-origin.js",
+      "blob": "f4eebb1bcbe279f23f8c16bff281bf99508a211f",
+      "sha256": "7332c590b2d1ab421330f62d94c13dc9ca73e7e1d4dd75ba1a42122ec997330b"
     },
     {
       "path": "attendance/public/js/agenda.js",
@@ -833,8 +886,8 @@
     },
     {
       "path": "attendance/public/js/app.js",
-      "blob": "bbec42bd90e07eb06c93a3cc829ed0fdc06ac4ae",
-      "sha256": "6882ddd00378e3a3d7479c8e8358bb1cd857c55fd593ffb6e058a3ba259671a4"
+      "blob": "9c40b9bf2001284a247e354ab860232e90fb05ff",
+      "sha256": "c2318d98014a7d21cd640d3b9a8ca39f3b81207005c413b404e1795033f7739c"
     },
     {
       "path": "attendance/public/js/arquivados.js",
@@ -848,8 +901,8 @@
     },
     {
       "path": "attendance/public/js/campaigns.js",
-      "blob": "1c92967f1174bb3e1d5d19bcbdf863e064536601",
-      "sha256": "22c66ca2751c33f4dee57431ed974fd1702ac25bb8514f0db223ba05de5e844e"
+      "blob": "ac2483547d1f10d44d2ee865d44a75387a40cd4b",
+      "sha256": "a8cdcd74e0d48839e275cf097c7d850de8504856f416fc78f09b2b48b2483059"
     },
     {
       "path": "attendance/public/js/central-navigation.js",
@@ -863,8 +916,18 @@
     },
     {
       "path": "attendance/public/js/changelog.js",
-      "blob": "3eb3392ffbb5ff1e5791311600d7e5d83fcb4147",
-      "sha256": "b039a86ff4947ced407a1109a8c43928928844f984f10c73f825a0375605779e"
+      "blob": "83fa657a68047229e1112e9a8015f0d0fab585cf",
+      "sha256": "3c19a1354449a71dc07b87003cf1c0bf2b0cd9dadacc81ee02cd15bc70ae103b"
+    },
+    {
+      "path": "attendance/public/js/chat-features.js",
+      "blob": "22cf725a893dfe9b81786f1f9d5aa3b4fcef764e",
+      "sha256": "b6f71cc5578803a4f07ef974ebea4639d14b17dd08195b37212700c206fd8c7e"
+    },
+    {
+      "path": "attendance/public/js/chat-settings.js",
+      "blob": "5d289e87f2110618954539b0c8ac772d7f258568",
+      "sha256": "658df5d753a145470d959ca9eb960a16533c5b846738962e94dac24cbfd22550"
     },
     {
       "path": "attendance/public/js/command-palette.js",
@@ -923,8 +986,13 @@
     },
     {
       "path": "attendance/public/js/custos-meta.js",
-      "blob": "8a056a340a280133f17368bfd7c7046f14b8f01b",
-      "sha256": "78f6772a260c8c5148141912fe2cff77f80b62e6cd161657d1cc7167897c331b"
+      "blob": "6aac941880cf204adcd636807f2d491d0fb2377b",
+      "sha256": "1f052552e80e23f431d9a663f3b67c84fcca019978d7179a6ff7a2a519483c51"
+    },
+    {
+      "path": "attendance/public/js/emoji-data.js",
+      "blob": "f65cabe3a10254ae2ae4a8a19036c83b547963bb",
+      "sha256": "07a6089b9e12f93c7c2b7909f3636d072a9c1ad108dc5849f60306c6f78fc581"
     },
     {
       "path": "attendance/public/js/feature-flags.js",
@@ -938,8 +1006,8 @@
     },
     {
       "path": "attendance/public/js/follow-ups-ui.js",
-      "blob": "51c8429f332d949e13392cbca8a79760d4bb2746",
-      "sha256": "b1ebf472475cd9f470450c52b5b4e78b57b99b32272dc7bcd04ab97e17a270ac"
+      "blob": "d61934f9342c53129edd44e734f22696aafec1bf",
+      "sha256": "347a8030df6f1dc45a1725d619ed6ec4c802af6d8920c4a6920430ff3eaf934d"
     },
     {
       "path": "attendance/public/js/fora-do-expediente.js",
@@ -953,8 +1021,8 @@
     },
     {
       "path": "attendance/public/js/internal-chat.js",
-      "blob": "d7be5b6a7236ca244db106902107e6774085edaa",
-      "sha256": "2888e2ee063c1e31b2ffc727670ffcea4b0acf1af19eb177c4e300c027314d95"
+      "blob": "61980eb33ed21d6fb25c6f62f56efffd488b4175",
+      "sha256": "e3ee43c14ceff985341b2258402be7d623d8e090a203e897cbee5b1b5a40a7a2"
     },
     {
       "path": "attendance/public/js/knowledge-base.js",
@@ -970,6 +1038,16 @@
       "path": "attendance/public/js/login.js",
       "blob": "6db8f90169bb9ebc7f775541ebe08041e873fef7",
       "sha256": "42f4e75934570e50b0d03179546134ce93444b60b4ea719fd029d6af42ab33e7"
+    },
+    {
+      "path": "attendance/public/js/meta-ads.js",
+      "blob": "08b2ca9a3ba7287f807b1203564948baf8c6b7f0",
+      "sha256": "712cb423ad5cba4c31edf6a6fcce86d74b090167c541c1ca9ea38035291da134"
+    },
+    {
+      "path": "attendance/public/js/metrics-nav.js",
+      "blob": "16742e84a149986fd43e74703a75231c70a825a2",
+      "sha256": "9fe75cf189f4cbe982626795faaff635df134bd821252304bc6fb549a3081e3c"
     },
     {
       "path": "attendance/public/js/operacao.js",
@@ -993,13 +1071,18 @@
     },
     {
       "path": "attendance/public/js/relatorio-conversas.js",
-      "blob": "e2790082226928bb9152750b04f7a8310bf61c59",
-      "sha256": "859bbb9ae0c32bbbaaf90e0a16807b81bd17ba9b74bd537087a36a46b0547f0b"
+      "blob": "f188feb79c4471f85ba0b5b2ad7e5986229b6a39",
+      "sha256": "1b73968285fb8ef07bd51b93234be6a506283f58153a6113b131a10a626bb589"
     },
     {
       "path": "attendance/public/js/release-loader.js",
-      "blob": "32c84d633a4de8dd4735963f2b15a219e0b4bad3",
-      "sha256": "eb992243fe6c343c21cd9262c742c505408714f662a8ece35eeff796c80d2fe7"
+      "blob": "39c16d389df49dff971902fd3c113051107f68ac",
+      "sha256": "dbc42b0c79532bbb9df7416e2232b5c0f2ea8b0b9c4d7bd5bf1f8f14233d480f"
+    },
+    {
+      "path": "attendance/public/js/settings-chat-tab.js",
+      "blob": "ef3b5e33f3798a48d77b10df8f8cab1c3a9ee118",
+      "sha256": "23ddf581ccc9222c4ecb56a6a5c08cfc0bfa48926e74dedfded97963dcc88adf"
     },
     {
       "path": "attendance/public/js/supervision.js",
@@ -1032,6 +1115,11 @@
       "sha256": "a67a431f5570720d812acb9083d07dc8c1f8decfa71deb7e9a0f3bedcb95bac7"
     },
     {
+      "path": "attendance/public/metricas.html",
+      "blob": "8ab6e3d8148a036bd56ada089440de4aa01908d3",
+      "sha256": "1a906463dd35c4401617bc92acff8972e872b8f6b2fd39573bd376d179219ff3"
+    },
+    {
       "path": "attendance/public/modelos/envio-em-massa.csv",
       "blob": "95908298f0fd86ce812beed5c095569ec98f109e",
       "sha256": "44115b4b8d8fe7d079eb771775c1a5eab2a165d59bc2b429ced9b67b940f33d6"
@@ -1043,8 +1131,8 @@
     },
     {
       "path": "attendance/public/operacao.html",
-      "blob": "4993e933a9af51bebf93302da6b2fb0ad6dfe852",
-      "sha256": "184edcbbae540f198347f7d636988ad22a3380726e90c4d9b4d16bd1fa074330"
+      "blob": "8e7c11ff401c44194661ec5a2a6052f438ad602f",
+      "sha256": "42521e19154f4b2779a1151a887e29cd5f13929bae66a0c9bd07d1e6e2040fa1"
     },
     {
       "path": "attendance/public/quick-replies.html",
@@ -1052,14 +1140,19 @@
       "sha256": "6f28a0fced630d29d8b6e204713ea1dbd48509e2d4f678c84c2d71d0347049e5"
     },
     {
+      "path": "attendance/public/recursos-chat.html",
+      "blob": "48c8a4678bf0d8f10470e905c53a220e81a20bd9",
+      "sha256": "b46801ce5b7558bda6d361e5f6e6cb1b05fd0ca58c023d28149dd53c62c451c5"
+    },
+    {
       "path": "attendance/public/relatorio-conversas.html",
-      "blob": "a8fa32ae00b8677ddd71df3005ffbd69c20968b1",
-      "sha256": "9801a790ae964ca7a9a4ef11a026ce4189f7971280e318c195261fdab6fd2ee2"
+      "blob": "1e5c9ce3004a36da368790aa64b8a29f65291e8e",
+      "sha256": "e9ded8e6200b636543e07bcd1ec9df3f7fed1069970555448d9036a6aabeda31"
     },
     {
       "path": "attendance/public/service-worker.js",
-      "blob": "a205a826fff54ed1b973e3c078cd3abb8f57ae0a",
-      "sha256": "8c7ac4eaf35ab56342a7cf3713ae728476af505540c81873c20e5a8ac154fe9b"
+      "blob": "e5adbe017f0cf750840f3a9c7ffcec616ea42788",
+      "sha256": "c2bada6f6d3cb39e27ff2a4591c0592425928d8cd303a0626d1d3afb3d0f1916"
     },
     {
       "path": "attendance/rag/rag_server.py",
@@ -1273,13 +1366,13 @@
     },
     {
       "path": "attendance/src/app.js",
-      "blob": "f1d4f7077ccf06936a17162fb1f079a09920bd40",
-      "sha256": "3086694bb378ba216121c498735c683cb507b036607c4c3486d48b663895bf88"
+      "blob": "99b0a6202f1af1cf4419737d5025be8e954aaec9",
+      "sha256": "f670cbc3c10440e6d6ff42568c82d545a3d8b458227ac4c0d32f9f036f69f607"
     },
     {
       "path": "attendance/src/channels/meta-cloud-channel.js",
-      "blob": "0417ecbd9c5387621cff549a92e295277da0eca4",
-      "sha256": "ae45c644f003a99470a3e29ecb7ca9a3bda307e15cc0ee4fa2f26342bc750b44"
+      "blob": "55e9b12e704fd9a9c694e305b3fd94865bf908f7",
+      "sha256": "ef42fb3e98f9a75a5376ed1ee9a06b500aa857d1aa8d671ea2918a22a50954d1"
     },
     {
       "path": "attendance/src/channels/meta-graph-messaging.js",
@@ -1322,6 +1415,11 @@
       "sha256": "532ad8040f29a4861bda6be6941a819b582d14c41cc5d7b70207093e3176a3a6"
     },
     {
+      "path": "attendance/src/controllers/chat-controller.js",
+      "blob": "f4009574ab3659af513f1b08c15b4aed3fc99b2c",
+      "sha256": "5caf709fbd2988d8d84f310773a4ed9c013c3497e6096278a10109f6722ce1db"
+    },
+    {
       "path": "attendance/src/controllers/company-controller.js",
       "blob": "a12204de1964264b22f05d50d906f1024c0f1b83",
       "sha256": "c3d1034ae18b181601af8a732a3cf814b266bf6866c693d074f901d6e5427a79"
@@ -1343,8 +1441,8 @@
     },
     {
       "path": "attendance/src/controllers/inbox-controller.js",
-      "blob": "2d033b32e8e40608143b11e4a014dfe4fce83a21",
-      "sha256": "d4580518181167e604a7f62dbd77363b74684e7df8aee553c163a8d4a05998eb"
+      "blob": "2af4bd52d1ef39e948ba2ced08abc8feb44dd7fa",
+      "sha256": "38cedc65eca55f017850d76590b3a657dbfeec8c5552b8aea967384392773c02"
     },
     {
       "path": "attendance/src/controllers/integrations-controller.js",
@@ -1353,8 +1451,8 @@
     },
     {
       "path": "attendance/src/controllers/internal-chat-controller.js",
-      "blob": "78a1ceefed83bec0dd33def184e0deb48f9153a7",
-      "sha256": "6c93ce12cd3336d54d1241bab154eb439f6af664a4aca6b822b7cee96eb01fdb"
+      "blob": "aa1f986ecf13b9f7e68d11cc0ce7b7f5f5976550",
+      "sha256": "211349ad014181ce8f1daafbe4b8b46984d5eaa8c961dc6f07bc69049aedb0fb"
     },
     {
       "path": "attendance/src/controllers/local-ai-controller.js",
@@ -1388,8 +1486,8 @@
     },
     {
       "path": "attendance/src/controllers/user-management-controller.js",
-      "blob": "0e1a2db60fb2e9a97d50fee61ee55b1d1ee406aa",
-      "sha256": "6ca985dc7885d8129244b12722ecb9148be5d96e0c9c4d4ab8a07be0e404206e"
+      "blob": "31cf0ad494d13d97a26104ec919cc2c618e9aa83",
+      "sha256": "7bd1dcb881f4ac41959e2bd257c0ddcb75d8a4108c6465bef51f83f5e730f56a"
     },
     {
       "path": "attendance/src/database/prisma.js",
@@ -1435,6 +1533,11 @@
       "path": "attendance/src/services/activity-feed-service.js",
       "blob": "1c64874ec92301e45a2f0406f710d687abaca3c1",
       "sha256": "7360f4163b281351fdd957957efe06a0909a62f936366b9053702a57f550efb0"
+    },
+    {
+      "path": "attendance/src/services/ad-origin-service.js",
+      "blob": "42cc07ba6054f3f405b6b7e351452aada9d71322",
+      "sha256": "41f9703b74c9d4870d35f4dfe83848233d64600e7684893aba79a221b84d0f32"
     },
     {
       "path": "attendance/src/services/after-hours-reminder-service.js",
@@ -1520,6 +1623,11 @@
       "path": "attendance/src/services/assistant-business-policy.js",
       "blob": "e2bcf9ec9e71d25310c538ba267f1f84d2d46a5c",
       "sha256": "6e2881bea5797021f62990366bcdf5fa09a75ce8ddb4e8cd9aac0115f16a7dce"
+    },
+    {
+      "path": "attendance/src/services/assistant-intake.js",
+      "blob": "5db13e9e88f34da229cf8d5accca37d5d399da0b",
+      "sha256": "c7d02a93b4794ceb9e05c002ba7b7ae0a5c838f361a9283b95fef41ff9f0a72a"
     },
     {
       "path": "attendance/src/services/assistant-redesign-blueprint.js",
@@ -1823,8 +1931,8 @@
     },
     {
       "path": "attendance/src/services/bot-visual-flow-engine.js",
-      "blob": "514c8ccb93fc334499a6d07f52b5800924ec2bfe",
-      "sha256": "5db69174aa2438573fd08b19e2cc4c991903f5053c7117be0ed39eadd1ddc2ce"
+      "blob": "214414c6fb2c0df789bde44a75fa693da5cb5634",
+      "sha256": "1dbcd7fcd6860ff7b8a26557439bdfdeef5d4f6232f42d9ed268c69aa030500d"
     },
     {
       "path": "attendance/src/services/bot-visual-flow-graph.js",
@@ -1833,8 +1941,8 @@
     },
     {
       "path": "attendance/src/services/bot-visual-flow-service.js",
-      "blob": "b6101b5555f077d1a670f48555cedaa4ce934084",
-      "sha256": "0ff4b00316976667549910819f7a5b4108f05a12528bd2c4dc3595498d3914d5"
+      "blob": "57831a4dc5cb72cc5719edd8ebcaaa4a72074a49",
+      "sha256": "f4ffc3e9925257653985b6b72e8dffbe915467a8f797eeb0ce4d4bac0bf74029"
     },
     {
       "path": "attendance/src/services/bulk-send-rules.js",
@@ -1898,8 +2006,8 @@
     },
     {
       "path": "attendance/src/services/campaign-worker-service.js",
-      "blob": "701f52ca3eec40aee88d5ea7fae814c2aac2eab8",
-      "sha256": "777a0beead46283e818f37d506f16e0bfe8ae3fdf41c3baaee72d9a21937d7aa"
+      "blob": "3f8b189e7d21991bb8ce3b3aaa1f62e4d423e5ea",
+      "sha256": "0f00d2f603a5b02c276517fb21d1139a3c071b127bbd751a613a642e72087ec2"
     },
     {
       "path": "attendance/src/services/central-identity-crypto.js",
@@ -1948,8 +2056,8 @@
     },
     {
       "path": "attendance/src/services/channels/channel-message-service.js",
-      "blob": "669588e873a1d22d0bc3bbfe3c83eb1615692d65",
-      "sha256": "0104f901b45db6d7f41fce2841ccccc7ec223ddb901da94fa51d630e2c3a949b"
+      "blob": "213881ccf63a846476e8dcd5fb664f821fa00cc1",
+      "sha256": "99d9a65f013c935c24a6eff518e40d9126fdaded7b90662d2ef37d68c5abe424"
     },
     {
       "path": "attendance/src/services/channels/email-adapter.js",
@@ -1998,8 +2106,8 @@
     },
     {
       "path": "attendance/src/services/channels/meta-adapter.js",
-      "blob": "1cebd8ea9287a192244eea766d0e6d0e560fc8d9",
-      "sha256": "a45a2eed1ce0aaf80b8ef19db2017cf10eb871bb7f4a22b11f756ef3afb7a866"
+      "blob": "7b2f508cb954329aa902959c5a387997d165ac87",
+      "sha256": "4a467499d6e72d24def824b8ceb6f683a1329a157f54d8a154df137b95958caa"
     },
     {
       "path": "attendance/src/services/channels/meta-messaging-adapter.js",
@@ -2052,6 +2160,21 @@
       "sha256": "e5e24c66424d8457947e3a071a59ab7fd88afa28dd138819931a82a2e8dc7656"
     },
     {
+      "path": "attendance/src/services/chat-feature-settings-service.js",
+      "blob": "03cbe44b477514c356714413ac11f47fb02e6a34",
+      "sha256": "d43d696d695246b025210af299aea10bec16740c3dd337c6fcbb37dd98f8e6dd"
+    },
+    {
+      "path": "attendance/src/services/chat-features.js",
+      "blob": "cd0ab8d10b4b6217278acd2993d59a49eb78e48d",
+      "sha256": "24c12e11ec826a7fac761506f854149b0c5f056c630249829f261a6abe8768aa"
+    },
+    {
+      "path": "attendance/src/services/chat-message-service.js",
+      "blob": "88448cc94744fe99e372c2f24be1c63b1aa02b41",
+      "sha256": "54a07827b29e5aedfd8f99f3d065931d6850234377db983bb67ef93b17b15257"
+    },
+    {
       "path": "attendance/src/services/commercial-template-owner-service.js",
       "blob": "b7a37669d3ff90a7f7e41bf03ec5554eef58fba7",
       "sha256": "3abfdd07db7b26faee1753cf2f1c1285c5eaf413517721876336583f57bc88f5"
@@ -2083,8 +2206,8 @@
     },
     {
       "path": "attendance/src/services/conversation-inactivity-service.js",
-      "blob": "0532136f1dc0a376de49a9927ff85f865f3a052b",
-      "sha256": "0bee947922f875c13328e6154d66b0c5c5b1c2f0c899264fc30d4c89164e6f8b"
+      "blob": "ba80dd2b95a58ea04cc75f10b63a3be04e0933fb",
+      "sha256": "0d80277160d925d8a387b64b3e02ad49d6c6f33ef63d1ff1d84909f4443825d6"
     },
     {
       "path": "attendance/src/services/conversation-report-constants.js",
@@ -2188,23 +2311,23 @@
     },
     {
       "path": "attendance/src/services/inbox-pagination.js",
-      "blob": "2cd8b165a12a42210e17ed835f2973b5dc8531be",
-      "sha256": "ff4ba580f9f2d4706815d9c68108d2dd301d478544598a3d7f7e07ae7349a4ed"
+      "blob": "ef388b8f0914b128a609e9530cbfc29a7d6ad9f0",
+      "sha256": "f093f92fa4a390f27dad9aa32e7d78c130e9b3bb07580af9543b0ff9e27e2048"
     },
     {
       "path": "attendance/src/services/inbox-service.js",
-      "blob": "839c746f37e334e8760663f6734643365fa9837e",
-      "sha256": "dcddb10e3699e752e4f7cfe4241b0da3dcb927b71634be8f5bb2b3c7da7aa13a"
+      "blob": "03f03f46efcd8f101a75a0e6ed8416eabc4075d7",
+      "sha256": "2a9bc23abf0e8607b4c9a6053858226ce96f909d09f5d4a536aa0358b4613aee"
     },
     {
       "path": "attendance/src/services/internal-chat-service.js",
-      "blob": "d1d6243afd0ccb82baad50522e00520389531b09",
-      "sha256": "7f4831723ef55ff91d4a1227ecad533b5bb1de4fe445272fcf9753548a1183ab"
+      "blob": "616b14b45390361dc037bbb844c87bcbf63bbb98",
+      "sha256": "eaf8be47f774a164f77915818affce2e75911c2d043b1bd5d404d2a124e3fc6c"
     },
     {
       "path": "attendance/src/services/internal-message-page-service.js",
-      "blob": "5cb081c37bd2261fd1e99e091e9315667f749670",
-      "sha256": "279ef2f1012f06b6f94a3e2ef030b16ae2555418bf30b03bb97571eff6fcf41b"
+      "blob": "28438c98f6211c92352d23a7fa858ac5dfa58ccb",
+      "sha256": "450b4493f68b50c9735deca49b239cf8210ab28eae2887a79a337e4879ef1da7"
     },
     {
       "path": "attendance/src/services/jpeg-pages-pdf.js",
@@ -2237,19 +2360,29 @@
       "sha256": "57022f91383f0e189174e8bf74e74ca5083f31b8c6d985338152670ec4da9680"
     },
     {
+      "path": "attendance/src/services/media-library-service.js",
+      "blob": "6daeb81c9b4ae963f610d97bea1427e230ab1ad3",
+      "sha256": "f27db4c2fdc91f3f5d0b53551737ba9e1c05b03d26a1096461ebfc8ec5db23f0"
+    },
+    {
       "path": "attendance/src/services/media-storage-service.js",
       "blob": "cbffe1e215361916689df076fc63e9d80cb40bfa",
       "sha256": "495b35c44405279909de6ecd7c715280741a399de40cd1c6fe29a8564df5fe24"
     },
     {
       "path": "attendance/src/services/message-service.js",
-      "blob": "69eee4d351a36566160e76354734b80092a2c923",
-      "sha256": "39f27427b608e6e156494e16b5f0ead2f805b660e59381d19e5da2316e0fc9f4"
+      "blob": "ae5908a0787bad6854734cf9e27fcbae088651ac",
+      "sha256": "f28ac931f942585bc7fb17de75d4dc4392d1487d8eb1c2c844638fc5f773ea07"
+    },
+    {
+      "path": "attendance/src/services/meta-ads-service.js",
+      "blob": "619c57e874158c813eb53fcc98a86f4b0336537c",
+      "sha256": "49302baaf46f70c974defa1e9c27032da55fddd69e8f7305edcd40ef42edfe7c"
     },
     {
       "path": "attendance/src/services/meta-cost-service.js",
-      "blob": "363256df0b59b2af58a57dbdec07affbf55ef7d7",
-      "sha256": "c2a7651cdb4778b187bd536cb2e5f5bcd225e5f6ad8ce1dcaf911139f7710949"
+      "blob": "7b55934e724b7c93c0db1daa4ebd64c1ff86c617",
+      "sha256": "13803902cf8f8c14cbfa47b551eb29366120bd837fd6882a683befd9608247a0"
     },
     {
       "path": "attendance/src/services/meta-template-service.js",
@@ -2293,18 +2426,18 @@
     },
     {
       "path": "attendance/src/services/outbound-text-request-service.js",
-      "blob": "2362d96c21300eda844cdfa28c957ba2d4353b5d",
-      "sha256": "f7eda7426ea1239ed772b8e1124a9117dbdc8fe4eeaa0da089fe6f19bec406a0"
+      "blob": "d93f9c94efea8efad7feea3fcdfb3c023186be42",
+      "sha256": "b2bb56c3ad40d13823943bbeb174eba4878f3d2c256d57b8a9974224ac12ab49"
     },
     {
       "path": "attendance/src/services/outside-hours-reception-service.js",
-      "blob": "9a8968e22d022b04592dba11d6e021e369a0805c",
-      "sha256": "bb76683a23a8ecef3cbb9114f5125ad730d9056cd0a7b019aedc8861c4174ff3"
+      "blob": "9762ae580a80927b01aa029c578ae4f30a959c9b",
+      "sha256": "81f644bcf1bad807c37c7b0f4ecbcca3b90989337d2da878ce8e6c39f5836d41"
     },
     {
       "path": "attendance/src/services/post-triage-assistant-policy.js",
-      "blob": "08017bb258f60053532a3884251e7b911d984d0c",
-      "sha256": "fb332e39908bb99c4ec63d08de828328ada09fc5af96aa1ba37695250caca5f8"
+      "blob": "2298e0431666ed9a9402388a1cf486f491d65427",
+      "sha256": "061364840e0a0cb5e421a669f4aa6eab3ab878c229dd55dae9c78290cafd0955"
     },
     {
       "path": "attendance/src/services/post-triage-release-migration.js",
@@ -2377,9 +2510,19 @@
       "sha256": "783597f7ec0692ea4b652bd61ec5ffa5af9387402e6f9282e4ed7cf25d388d4a"
     },
     {
+      "path": "attendance/src/services/sincrofit-assistant.js",
+      "blob": "411da75ac607e6f7f94e9836d693664e65991393",
+      "sha256": "2610576dbbd0f2f92adebbef287055100234564f6386dab1813b22ac1520b0e4"
+    },
+    {
+      "path": "attendance/src/services/sincrofit-atacado-owner-service.js",
+      "blob": "7ddfcddb8f22618577329867e3e6c9313a09c18b",
+      "sha256": "d50192b2076ed9fc925f9362b1eef366632f5146f9749ba0ed90aced3c80d359"
+    },
+    {
       "path": "attendance/src/services/sincrofit-entry-patterns.js",
-      "blob": "0db0942ebcf186eff1930441fedad2e07a962add",
-      "sha256": "1b9af040c38628a32d8aed98bb04bd1d94a2a23781f5503744d8958696cb8858"
+      "blob": "a558d0f86a4e93464ef21d794b6add3423b94e31",
+      "sha256": "fb31360657651767084af40ec011d177b91303a6bb18e3635eb63b584101b53a"
     },
     {
       "path": "attendance/src/services/sincrofit-entry-report-service.js",
@@ -2403,8 +2546,8 @@
     },
     {
       "path": "attendance/src/services/team-message-formatter.js",
-      "blob": "e28d48457821fff38b41c8cf62a90ec80aa9f9d4",
-      "sha256": "28759f950058c02fdcca8d6372337bf7cbd6c6c09263817f9438f7b9ba1ea665"
+      "blob": "ee19d4742679a18877ef54457407b634f4ff96ae",
+      "sha256": "47e2c85255bb17317c9518b0ec811b07df64fd70898b7ecf08073528126895f6"
     },
     {
       "path": "attendance/src/services/technical-assistance-intake.js",
@@ -2438,8 +2581,13 @@
     },
     {
       "path": "attendance/src/services/user-management-service.js",
-      "blob": "37cdac11c27f1a6504f363efd3fda4ee473f5477",
-      "sha256": "2dfa4c41bf11b7531f604e5cef0e2e3e247639b02229c5abc8244c89f7897e72"
+      "blob": "d2ff04676c3e37ae9eed4ab312bbaf55e85665cc",
+      "sha256": "fa3af5c68c2e1c93490fe26084d4e424b4aa1359962afbebe4c7c65b33c09b77"
+    },
+    {
+      "path": "attendance/src/services/webp-info.js",
+      "blob": "99643aaef4713b6ba64049c262f7ac53b8565e32",
+      "sha256": "0c73b4b630e1f214a98af4d709557fba8d4a6dd760b9ff87b69beb804dc46fa1"
     },
     {
       "path": "attendance/src/services/whatsapp-account-service.js",
@@ -2965,6 +3113,11 @@
       "path": "attendance/test/media-storage-internal-file.test.js",
       "blob": "65449db43889c578c630132c861e4120f4503294",
       "sha256": "8818bc2b6ebd822fcab28c0a99ff270fc5c7136b0021b9e645437a14e26a1215"
+    },
+    {
+      "path": "attendance/test/meta-ads.test.js",
+      "blob": "e7411aaa3b769c92001013681784f3ef6fd2c2f3",
+      "sha256": "484a2d8e3f6902b913df31dabb05896cb7d5864d39b584d1f1c10369dec0ad0a"
     },
     {
       "path": "attendance/test/meta-channel.test.js",
@@ -6896,6 +7049,5 @@
       "blob": "75e6fd830666313e35cf7f31c93a0ea3227247bd",
       "sha256": "8313b20d0e1fc481147cad956459b89b0709286b2b1fd5b31a4bc2797a153277"
     }
-  ],
-  "hashBasis": "Committed Git blob contents; manifest excludes itself"
+  ]
 }

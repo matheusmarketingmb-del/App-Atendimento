@@ -144,6 +144,7 @@ class MetaCloudChannel {
           text: message.type === "text" ? message.text?.body
             : reaction ? reaction.emoji || "" : interactiveReply?.title || media?.caption || `[${message.type}]`,
           interactiveReplyId: interactiveReply?.id || null,
+          replyToExternalId: message.context?.id || null,
           reactionToExternalId: reaction?.message_id || null,
           reactionEmoji: reaction?.emoji ?? null,
           mediaId: media?.id, mediaMimeType: media?.mime_type,
@@ -159,11 +160,16 @@ class MetaCloudChannel {
     return events;
   }
 
-  async sendText(to, text) {
+  // Citação oficial: wamid cru da mensagem respondida, nunca o ID interno.
+  contextFor(contextMessageId) {
+    return contextMessageId ? { context: { message_id: contextMessageId } } : {};
+  }
+
+  async sendText(to, text, { contextMessageId } = {}) {
     this.assertConfigured();
     try {
       const response = await axios.post(this.apiUrl(`${this.phoneNumberId}/messages`), {
-        messaging_product: "whatsapp", recipient_type: "individual", to, type: "text", text: { body: text },
+        messaging_product: "whatsapp", recipient_type: "individual", to, ...this.contextFor(contextMessageId), type: "text", text: { body: text },
       }, { headers: { ...this.authHeaders(), "Content-Type": "application/json" } });
       return { externalId: response.data?.messages?.[0]?.id, data: response.data };
     } catch (error) {
@@ -313,7 +319,40 @@ class MetaCloudChannel {
     }
   }
 
-  async sendImage(to, { buffer, mimeType, fileName, caption }) {
+  // Emoji vazio remove a reação. Reação nunca leva context.
+  async sendReaction(to, { messageId, emoji }) {
+    this.assertConfigured();
+    try {
+      const response = await axios.post(this.apiUrl(`${this.phoneNumberId}/messages`), {
+        messaging_product: "whatsapp", recipient_type: "individual", to, type: "reaction",
+        reaction: { message_id: messageId, emoji },
+      }, { headers: { ...this.authHeaders(), "Content-Type": "application/json" } });
+      return { externalId: response.data?.messages?.[0]?.id, data: response.data };
+    } catch (error) {
+      throw this.providerFailure(error, "A Meta não aceitou a reação.");
+    }
+  }
+
+  async sendSticker(to, { buffer, mimeType, fileName, contextMessageId }) {
+    this.assertConfigured();
+    try {
+      const form = new FormData();
+      form.append("messaging_product", "whatsapp");
+      form.append("file", new Blob([buffer], { type: mimeType }), fileName);
+      const upload = await axios.post(this.apiUrl(`${this.phoneNumberId}/media`), form, {
+        headers: this.authHeaders(), maxBodyLength: 1024 * 1024,
+      });
+      const response = await axios.post(this.apiUrl(`${this.phoneNumberId}/messages`), {
+        messaging_product: "whatsapp", recipient_type: "individual", to, ...this.contextFor(contextMessageId), type: "sticker",
+        sticker: { id: upload.data.id },
+      }, { headers: { ...this.authHeaders(), "Content-Type": "application/json" } });
+      return { externalId: response.data?.messages?.[0]?.id, mediaId: upload.data.id, data: response.data };
+    } catch (error) {
+      throw this.providerFailure(error, "A Meta não aceitou o envio da figurinha.");
+    }
+  }
+
+  async sendImage(to, { buffer, mimeType, fileName, caption, contextMessageId }) {
     this.assertConfigured();
     try {
       const form = new FormData();
@@ -323,7 +362,7 @@ class MetaCloudChannel {
         headers: this.authHeaders(), maxBodyLength: 5 * 1024 * 1024,
       });
       const response = await axios.post(this.apiUrl(`${this.phoneNumberId}/messages`), {
-        messaging_product: "whatsapp", recipient_type: "individual", to, type: "image",
+        messaging_product: "whatsapp", recipient_type: "individual", to, ...this.contextFor(contextMessageId), type: "image",
         image: { id: upload.data.id, ...(caption ? { caption } : {}) },
       }, { headers: { ...this.authHeaders(), "Content-Type": "application/json" } });
       return { externalId: response.data?.messages?.[0]?.id, mediaId: upload.data.id, data: response.data };
@@ -332,7 +371,7 @@ class MetaCloudChannel {
     }
   }
 
-  async sendVideo(to, { buffer, mimeType, fileName, caption }) {
+  async sendVideo(to, { buffer, mimeType, fileName, caption, contextMessageId }) {
     this.assertConfigured();
     try {
       const form = new FormData();
@@ -342,7 +381,7 @@ class MetaCloudChannel {
         headers: this.authHeaders(), maxBodyLength: 17 * 1024 * 1024,
       });
       const response = await axios.post(this.apiUrl(`${this.phoneNumberId}/messages`), {
-        messaging_product: "whatsapp", recipient_type: "individual", to, type: "video",
+        messaging_product: "whatsapp", recipient_type: "individual", to, ...this.contextFor(contextMessageId), type: "video",
         video: { id: upload.data.id, ...(caption ? { caption } : {}) },
       }, { headers: { ...this.authHeaders(), "Content-Type": "application/json" } });
       return { externalId: response.data?.messages?.[0]?.id, mediaId: upload.data.id, data: response.data };
@@ -354,7 +393,7 @@ class MetaCloudChannel {
   // Áudio não aceita legenda na Cloud API. Formatos aceitos: AAC, AMR, MP3,
   // MP4 e OGG (somente Opus) — a normalização acontece antes, em
   // audio-normalization-service.js.
-  async sendAudio(to, { buffer, mimeType, fileName }) {
+  async sendAudio(to, { buffer, mimeType, fileName, contextMessageId }) {
     this.assertConfigured();
     try {
       const form = new FormData();
@@ -364,7 +403,7 @@ class MetaCloudChannel {
         headers: this.authHeaders(), maxBodyLength: 17 * 1024 * 1024,
       });
       const response = await axios.post(this.apiUrl(`${this.phoneNumberId}/messages`), {
-        messaging_product: "whatsapp", recipient_type: "individual", to, type: "audio",
+        messaging_product: "whatsapp", recipient_type: "individual", to, ...this.contextFor(contextMessageId), type: "audio",
         audio: { id: upload.data.id },
       }, { headers: { ...this.authHeaders(), "Content-Type": "application/json" } });
       return { externalId: response.data?.messages?.[0]?.id, mediaId: upload.data.id, data: response.data };
@@ -373,7 +412,7 @@ class MetaCloudChannel {
     }
   }
 
-  async sendDocument(to, { buffer, mimeType, fileName, caption }) {
+  async sendDocument(to, { buffer, mimeType, fileName, caption, contextMessageId }) {
     this.assertConfigured();
     try {
       const form = new FormData();
@@ -383,7 +422,7 @@ class MetaCloudChannel {
         headers: this.authHeaders(), maxBodyLength: 101 * 1024 * 1024,
       });
       const response = await axios.post(this.apiUrl(`${this.phoneNumberId}/messages`), {
-        messaging_product: "whatsapp", recipient_type: "individual", to, type: "document",
+        messaging_product: "whatsapp", recipient_type: "individual", to, ...this.contextFor(contextMessageId), type: "document",
         document: { id: upload.data.id, filename: fileName, ...(caption ? { caption } : {}) },
       }, { headers: { ...this.authHeaders(), "Content-Type": "application/json" } });
       return { externalId: response.data?.messages?.[0]?.id, mediaId: upload.data.id, data: response.data };

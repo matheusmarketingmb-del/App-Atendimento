@@ -7,33 +7,39 @@ async function finalizeInactiveConversations({
   now = new Date(), inactivityMinutes = defaultInactivityMinutes, client = prisma, scope = {},
 } = {}) {
   const cutoff = new Date(now.getTime() - inactivityMinutes * 60 * 1000);
+  const humanMessage = { direction: "ENVIADA", sentByUserId: { not: null }, sentByUser: { is: { role: { not: "BOT" } } }, status: { in: ["ENVIADA", "ENTREGUE", "LIDA"] } };
+  const meaningfulMessage = { type: { not: "reaction" }, OR: [{ direction: "RECEBIDA" }, humanMessage] };
   const candidates = await client.conversation.findMany({
-    where: { ...scope, archivedAt:null, status: { not: "FINALIZADO" }, lastMessageAt: { lte: cutoff } },
+    where: { ...scope, archivedAt:null, status: { notIn: ["FINALIZADO", "NOVO", "BOT", "HANDOFF_BOT", "AGUARDANDO_EQUIPE"] }, lastMessageAt: { lte: cutoff }, assignedUserId: { not: null }, assignedUser: { is: { active: true, role: { not: "BOT" } } } },
     select: {
-      id: true,
+      id: true, assignedUserId: true, status: true, lastMessageAt: true,
       messages: {
-        orderBy: [{ occurredAt: "desc" }, { createdAt: "desc" }], take: 5,
-        select: { direction: true, rawPayload: true },
+        where: meaningfulMessage,
+        orderBy: [{ occurredAt: "desc" }, { createdAt: "desc" }, { id: "desc" }], take: 1,
+        select: { direction: true, rawPayload: true, occurredAt: true, createdAt: true },
       },
     },
   });
   let finalized = 0;
   for (const conversation of candidates) {
-    // Lembrete fora do expediente é transparente aqui (ver acima).
-    const lastMessage = conversation.messages.find((message) => message.rawPayload?.system !== "after_hours_reminder") || conversation.messages[0];
-    // A inatividade encerra a conversa independentemente de quem enviou a
-    // última mensagem. Assim, um cliente que não recebeu nova interação no
-    // prazo configurado também sai da fila antiga e volta pela triagem quando
-    // escrever novamente.
-    if (!lastMessage) continue;
-    if (lastMessage.rawPayload?.system === "triage_confirmation" || lastMessage.rawPayload?.flowHandoff) continue;
+    // Só expira o silêncio do cliente após uma resposta humana.
+    // Bot e triagem não transformam uma espera por atendimento em conclusão.
+    const lastMessage = conversation.messages[0];
+    if (!lastMessage || lastMessage.direction !== "ENVIADA") continue;
+    if (lastMessage.rawPayload?.system || lastMessage.rawPayload?.flowHandoff) continue;
     await client.$transaction(async (transaction) => {
       const updated = await transaction.conversation.updateMany({
-        where: { id: conversation.id, archivedAt:null, status: { not: "FINALIZADO" }, lastMessageAt: { lte: cutoff } },
-        // Mantém categoria e último responsável: a conversa finalizada segue
-        // na categoria, visível só a quem atendeu por último (e ao Master).
-        // Se o cliente voltar a escrever, a reabertura (message-service)
-        // limpa categoria/responsável para a triagem escolher de novo.
+        where: {
+          id: conversation.id, archivedAt: null, assignedUserId: conversation.assignedUserId,
+          status: conversation.status, lastMessageAt: conversation.lastMessageAt,
+          assignedUser: { is: { active: true, role: { not: "BOT" } } },
+          messages: { none: { type: { not: "reaction" }, direction: "RECEBIDA", OR: [
+            { occurredAt: { gt: lastMessage.occurredAt } },
+            { occurredAt: lastMessage.occurredAt, createdAt: { gte: lastMessage.createdAt } },
+          ] } },
+        },
+        // Mantém categoria, responsável e histórico; as regras de acesso
+        // continuam sendo aplicadas pelo serviço de autorização.
         data: {
           status: "FINALIZADO", unreadCount: 0, finalizedAt: now,
         },

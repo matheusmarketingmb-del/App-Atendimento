@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="pt-BR"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#16171a"><title>Campanhas Meta · Central</title><link rel="icon" href="/assets/central-favicon.svg"><link rel="stylesheet" href="/css/skeleton.css"><link rel="stylesheet" href="/css/bots.css"><link rel="stylesheet" href="/css/meta-ads.css?v=20261109-performance">  <link rel="stylesheet" href="/css/metrics-tabs.css?v=20261105">
+</head>
+<body><header class="topbar"><a class="brand" href="/"><img src="/assets/central-mark.svg" alt="Central"><small>Campanhas Meta</small></a><a class="back-link" href="/custos-meta">Custos WhatsApp</a><a class="back-link" href="/">Voltar à Central</a></header>
+<main class="ads-main"><p class="ads-eyebrow">MARKETING · META ADS</p><h1>Campanhas e contatos</h1><p class="ads-muted">Resultados dos anúncios e entradas identificadas no WhatsApp, por empresa.</p>
+<form id="filters" class="ads-filters"><label>Empresa<select id="company" required><option value="">Carregando…</option></select></label><label>Conta de anúncios<select id="account" required disabled><option value="">Selecione a empresa</option></select></label><label>De<input id="from" type="date" required></label><label>Até<input id="to" type="date" required></label><button id="load" type="submit">Consultar</button></form>
+<p id="status" role="status" aria-live="polite"></p><div id="warnings" role="status"></div><section id="results" hidden>
+<div class="ads-toolbar"><label>Campanha<select id="campaign"><option value="">Todas as campanhas</option></select></label><label>Buscar<input id="search" type="search" placeholder="Campanha, conjunto ou anúncio"></label><label>Agrupar por<select id="level"><option value="campaign">Campanhas</option><option value="adset">Conjuntos</option><option value="ad">Anúncios</option></select></label><label>Comparar por<select id="metric"><option value="spend">Investimento</option><option value="clicks">Cliques totais</option><option value="linkClicks">Cliques no link</option><option value="linkCtr">CTR de link</option><option value="conversion">Conversão em conversas (Meta)</option><option value="conversationCost">Custo por conversa (Meta)</option><option value="contacts">Contatos vinculados</option></select></label></div>
+<div id="summary" class="ads-kpis"></div>
+<details class="ads-method ads-panel"><summary>Como os indicadores são calculados</summary><ul>
+<li>CTR é o número de cliques dividido pelas impressões. O CTR de link considera apenas os cliques no link do anúncio.</li>
+<li>CPM é o investimento por mil impressões. CPC é o investimento dividido pelo número de cliques.</li>
+<li>Conversão em conversas compara as conversas atribuídas pela Meta com os cliques no link. A Meta também pode atribuir conversas após uma impressão, conforme a configuração da campanha.</li>
+<li>A conversão local usa os contatos únicos vinculados ao anúncio no WhatsApp e os cliques no link dos anúncios exibidos. Conversas da Meta e contatos locais são fontes separadas. Vendas não entram nesses indicadores.</li>
+<li id="reach-note"></li><li>Um traço indica que a métrica está indisponível ou que falta uma base para o cálculo.</li>
+</ul></details>
+<section class="ads-panel"><h2>Comparação de desempenho</h2><div id="chart" class="ads-chart"></div></section><section class="ads-panel"><h2>Detalhamento e contatos</h2><p class="ads-muted">Abra “Contatos” para ver as entradas identificadas. Uma pessoa conta uma vez, pelo primeiro anúncio identificado no período.</p><div id="ads"></div></section>
+<section id="unmatched-panel" class="ads-panel" hidden><h2>Origem identificada, campanha não confirmada</h2><p class="ads-muted">Esses contatos têm indicação de anúncio no webhook, mas o anúncio não apareceu na conta/período consultados. Não entram nos totais de nenhuma campanha.</p><div id="unmatched"></div></section><p id="footnote" class="ads-muted"></p></section></main>
+<script src="/js/meta-ads.js?v=20261109-performance"></script>  <script src="/js/metrics-nav.js?v=20261105"></script>
+</body></html>

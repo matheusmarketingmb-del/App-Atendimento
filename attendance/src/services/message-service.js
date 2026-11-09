@@ -17,6 +17,8 @@ const STATUS_FROM = {
   LIDA: ["PENDENTE", "ENVIADA", "ENTREGUE", "LIDA", "FALHOU"],
   FALHOU: ["PENDENTE", "ENVIADA", "FALHOU"],
 };
+const chatMessages = () => require("./chat-message-service");
+const replyContext = (replyTo) => (replyTo ? { contextMessageId: replyTo.wamid } : {});
 const closingMessage = "Agradecemos pelo seu contato. Se precisar de qualquer ajuda, estamos à disposição. Você pode voltar a falar conosco quando quiser.";
 
 // `account` = ChannelAccount (número) que recebeu — define a empresa.
@@ -28,7 +30,7 @@ async function saveIncoming(event, account = null) {
     account = account || (event.channelAccountId ? await prisma.channelAccount.findUnique({ where: { id: event.channelAccountId } }) : await whatsappAccounts.getLegacyAccount());
     const companyId = account?.companyId || null;
     const settings = await getConversationSettings(prisma, companyId);
-    return await prisma.$transaction(async (tx) => {
+    const saved = await prisma.$transaction(async (tx) => {
       const existing = await tx.message.findUnique({ where: { externalId: event.externalId } });
       if (existing) return { message: existing, duplicate: true };
       const { contact, conversation } = await findOrCreateMetaConversation(event, tx, account);
@@ -37,9 +39,10 @@ async function saveIncoming(event, account = null) {
         buffer: event.mediaBuffer, mimeType: event.mediaMimeType,
         fileName: event.mediaFileName, stableId: event.externalId,
       }) : null;
+      const replyFields = await chatMessages().inboundReplyFields(tx, { replyToExternalId: event.replyToExternalId, contactId: contact.id, channelAccountId: event.channelAccountId || null });
       const message = await tx.message.create({ data: {
         conversationId: conversation.id, externalId: event.externalId, channel: "META", channelAccountId: event.channelAccountId || null,
-        direction: "RECEBIDA", status: "RECEBIDA", type: event.type, text: event.text,
+        direction: "RECEBIDA", status: "RECEBIDA", type: event.type, text: event.text, ...replyFields,
         mediaStorageKey: media?.storageKey, mediaMimeType: media?.mimeType,
         mediaFileName: media?.fileName, mediaSize: media?.size,
         occurredAt: event.occurredAt, rawPayload: event.rawPayload,
@@ -86,6 +89,12 @@ async function saveIncoming(event, account = null) {
       }
       return { message, duplicate: false, archived:Boolean(conversation.archivedAt) };
     });
+    // Falha aqui não pode perder o evento: a mensagem bruta já está salva.
+    if (!saved.duplicate && event.type === "reaction") {
+      await chatMessages().applyInboundReaction({ event, conversationId: saved.message.conversationId })
+        .catch((reactionError) => console.error("[REACTION] falha ao registrar reação recebida:", reactionError.message));
+    }
+    return saved;
   } catch (error) {
     if (error.code === "P2002" && event.externalId) {
       const message = await prisma.message.findUnique({ where: { externalId: event.externalId } });
@@ -124,6 +133,9 @@ async function updateConversationAfterSending({ conversationId, sentByUserId, oc
     const current = await transaction.conversation.findUnique({
       where: { id: conversationId },
       select: {
+        categoryId: true,
+        archivedAt: true,
+        status: true,
         assignedUserId: true,
         assignedUser: {
           select: {
@@ -133,7 +145,7 @@ async function updateConversationAfterSending({ conversationId, sentByUserId, oc
       },
     });
 
-    await transaction.conversation.update({
+    const updated = await transaction.conversation.update({
       where: { id: conversationId },
       data: {
         lastMessageAt: occurredAt,
@@ -153,6 +165,9 @@ async function updateConversationAfterSending({ conversationId, sentByUserId, oc
     });
 
     if (!sentByUserId || keepAssignee) return false;
+    if (current) await require("./sincrofit-atacado-owner-service").setOwnerOnReply(transaction, {
+      before: current, after: updated, actorId: sentByUserId,
+    });
 
     // Período de responsabilidade de quem enviou (idempotente: se já está em
     // aberto, nada muda). Cobre também a conversa criada já atribuída
@@ -220,10 +235,13 @@ async function emailReplyContext(conversation) {
   };
 }
 
-async function sendMetaForConversation(conversation, legacyChannel, method, payload) {
-  if (!conversation.channelAccountId) return legacyChannel[method](conversation.contact.phone, payload);
+async function sendMetaForConversation(conversation, legacyChannel, method, payload, options) {
+  if (!conversation.channelAccountId) return options ? legacyChannel[method](conversation.contact.phone, payload, options) : legacyChannel[method](conversation.contact.phone, payload);
   if (method === "sendText") {
-    return channelMessageService.send({ channel: "META", channelAccountId: conversation.channelAccountId, kind: "text", to: conversation.contact.phone, text: payload });
+    return channelMessageService.send({ channel: "META", channelAccountId: conversation.channelAccountId, kind: "text", to: conversation.contact.phone, text: payload, ...(options || {}) });
+  }
+  if (method === "sendSticker") {
+    return channelMessageService.send({ channel: "META", channelAccountId: conversation.channelAccountId, kind: "sticker", to: conversation.contact.phone, ...payload });
   }
   const type = { sendImage: "image", sendVideo: "video", sendDocument: "document", sendAudio: "audio" }[method];
   return channelMessageService.send({ channel: "META", channelAccountId: conversation.channelAccountId, kind: "media", type, to: conversation.contact.phone, ...payload });
@@ -304,7 +322,7 @@ async function metaSender(channel, conversation) {
   return whatsappAccounts.senderFor(channel, await whatsappAccounts.accountForConversation(conversation));
 }
 
-async function sendText({ conversationId, text, sentByUserId, channel, keepAssignee = false, crmProposal = null, beforeProviderSend = async () => {} }) {
+async function sendText({ conversationId, text, sentByUserId, channel, keepAssignee = false, crmProposal = null, beforeProviderSend = async () => {}, replyTo = null, forwardedFromMessageId = null }) {
   const conversation = await prisma.conversation.findUnique({ where: { id: conversationId }, include: { contact: true, channelAccount: true, category: { include: { parent: true } } } });
   if (!conversation) throw Object.assign(new Error("Conversa não encontrada."), { statusCode: 404 });
   if(conversation.archivedAt)throw Object.assign(new Error('Recupere a conversa arquivada antes de enviar mensagens.'),{statusCode:409,code:'CONVERSATION_ARCHIVED'});
@@ -320,6 +338,7 @@ async function sendText({ conversationId, text, sentByUserId, channel, keepAssig
     });
   } else if (conversation.channel === "META") {
     await whatsappInbox.applySender(conversation, sentByUserId);
+    await chatMessages().assertReplySender(replyTo, conversation);
     if(crmProposal?.originConversationId && (crmProposal.originConversationId!==conversationId || crmProposal.originChannelAccountId!==(conversation.channelAccountId||null))) {
       throw Object.assign(new Error('O número de origem da proposta mudou. Volte ao CRM e prepare o envio novamente.'),{statusCode:409});
     }
@@ -329,7 +348,7 @@ async function sendText({ conversationId, text, sentByUserId, channel, keepAssig
       throw Object.assign(new Error("A mensagem ficou acima do limite após adicionar o nome da equipe."), { statusCode: 400 });
     }
     await beforeProviderSend();
-    result = await sendMetaForConversation(conversation, channel, "sendText", providerText);
+    result = await sendMetaForConversation(conversation, channel, "sendText", providerText, replyTo ? replyContext(replyTo) : undefined);
   } else if (SOCIAL_CHANNELS.includes(conversation.channel)) {
     const socialContext = await socialReplyContext(conversation);
     await beforeProviderSend();
@@ -350,6 +369,7 @@ async function sendText({ conversationId, text, sentByUserId, channel, keepAssig
     conversationId, externalId: providerExternalId, channel: conversation.channel,
     channelAccountId: conversation.channelAccountId || null, direction: "ENVIADA",
     status: "ENVIADA", type: "text", text, occurredAt, sentByUserId: sentByUserId || null,
+    ...chatMessages().replyFields(replyTo), ...(forwardedFromMessageId ? { forwardedFromMessageId } : {}),
     rawPayload: conversation.channel === "EMAIL"
       ? { providerMessage: result.data || null, subject: emailContext.subject, threadId: result.data?.threadId || emailContext.threadId }
       : crmProposal ? {providerMessage:result.data||null,crmProposal} : result.data,
@@ -389,7 +409,7 @@ async function sendEmailMedia({ conversation, buffer, mimeType, fileName, captio
   await updateConversationAfterSending({ conversationId: conversation.id, sentByUserId, occurredAt });
   return { message, providerData: result.data };
 }
-async function sendImage({ conversationId, buffer, mimeType, fileName, caption, sentByUserId, channel }) {
+async function sendImage({ conversationId, buffer, mimeType, fileName, caption, sentByUserId, channel, replyTo = null, storedMedia = null, forwardedFromMessageId = null }) {
   const conversation = await prisma.conversation.findUnique({ where: { id: conversationId }, include: { contact: true, channelAccount: true, category: { include: { parent: true } } } });
   if (!conversation) throw Object.assign(new Error("Conversa não encontrada."), { statusCode: 404 });
   if(conversation.archivedAt)throw Object.assign(new Error('Recupere a conversa arquivada antes de enviar mensagens.'),{statusCode:409,code:'CONVERSATION_ARCHIVED'});
@@ -401,20 +421,21 @@ async function sendImage({ conversationId, buffer, mimeType, fileName, caption, 
   }
   if (conversation.channel !== "META") throw Object.assign(new Error("Este canal ainda não está liberado para anexos pela Central."), { statusCode: 409 });
   await whatsappInbox.applySender(conversation, sentByUserId);
+  await chatMessages().assertReplySender(replyTo, conversation);
   await require("./meta-template-service").assertFreeFormAllowed(conversationId, new Date(), conversation.channelAccountId);
   const cleanCaption = caption?.trim() || null;
   const providerCaption = formatTeamMessage(conversation.category, cleanCaption || "");
   if (providerCaption.length > 1024) {
     throw Object.assign(new Error("A legenda ficou acima do limite após adicionar o nome da equipe."), { statusCode: 400 });
   }
-  const media = await storeImage({ buffer, mimeType, fileName });
+  const media = storedMedia || await storeImage({ buffer, mimeType, fileName });
   let result;
   try {
     result = await sendMetaForConversation(conversation, channel, "sendImage", {
-      buffer, mimeType, fileName: media.fileName, caption: providerCaption || null,
+      buffer, mimeType, fileName: media.fileName, caption: providerCaption || null, ...replyContext(replyTo),
     });
   } catch (error) {
-    await removeImage(media.storageKey);
+    if (!storedMedia) await removeImage(media.storageKey);
     throw error;
   }
   const occurredAt = new Date();
@@ -425,12 +446,13 @@ async function sendImage({ conversationId, buffer, mimeType, fileName, caption, 
     mediaFileName: media.fileName, mediaSize: media.size,
     occurredAt, sentByUserId: sentByUserId || null,
     rawPayload: { message: result.data, mediaId: result.mediaId },
+    ...chatMessages().replyFields(replyTo), ...(forwardedFromMessageId ? { forwardedFromMessageId } : {}),
   } });
   await updateConversationAfterSending({ conversationId, sentByUserId, occurredAt });
   return { message, providerData: result.data };
 }
 
-async function sendVideo({ conversationId, buffer, mimeType, fileName, caption, sentByUserId, channel }) {
+async function sendVideo({ conversationId, buffer, mimeType, fileName, caption, sentByUserId, channel, replyTo = null, storedMedia = null, forwardedFromMessageId = null, beforeProviderSend }) {
   const conversation = await prisma.conversation.findUnique({ where: { id: conversationId }, include: { contact: true, channelAccount: true, category: { include: { parent: true } } } });
   if (!conversation) throw Object.assign(new Error("Conversa não encontrada."), { statusCode: 404 });
   if(conversation.archivedAt)throw Object.assign(new Error('Recupere a conversa arquivada antes de enviar mensagens.'),{statusCode:409,code:'CONVERSATION_ARCHIVED'});
@@ -442,20 +464,22 @@ async function sendVideo({ conversationId, buffer, mimeType, fileName, caption, 
   }
   if (conversation.channel !== "META") throw Object.assign(new Error("Este canal ainda não está liberado para anexos pela Central."), { statusCode: 409 });
   await whatsappInbox.applySender(conversation, sentByUserId);
+  await chatMessages().assertReplySender(replyTo, conversation);
   await require("./meta-template-service").assertFreeFormAllowed(conversationId, new Date(), conversation.channelAccountId);
   const cleanCaption = caption?.trim() || null;
   const providerCaption = formatTeamMessage(conversation.category, cleanCaption || "");
   if (providerCaption.length > 1024) {
     throw Object.assign(new Error("A legenda ficou acima do limite após adicionar o nome da equipe."), { statusCode: 400 });
   }
-  const media = await storeVideo({ buffer, mimeType, fileName });
+  const media = storedMedia || await storeVideo({ buffer, mimeType, fileName });
   let result;
   try {
+    await beforeProviderSend?.();
     result = await sendMetaForConversation(conversation, channel, "sendVideo", {
-      buffer, mimeType: media.mimeType, fileName: media.fileName, caption: providerCaption || null,
+      buffer, mimeType: media.mimeType, fileName: media.fileName, caption: providerCaption || null, ...replyContext(replyTo),
     });
   } catch (error) {
-    await removeImage(media.storageKey);
+    if (!storedMedia) await removeImage(media.storageKey);
     throw error;
   }
   const occurredAt = new Date();
@@ -466,12 +490,13 @@ async function sendVideo({ conversationId, buffer, mimeType, fileName, caption, 
     mediaFileName: media.fileName, mediaSize: media.size,
     occurredAt, sentByUserId: sentByUserId || null,
     rawPayload: { message: result.data, mediaId: result.mediaId },
+    ...chatMessages().replyFields(replyTo), ...(forwardedFromMessageId ? { forwardedFromMessageId } : {}),
   } });
   await updateConversationAfterSending({ conversationId, sentByUserId, occurredAt });
   return { message, providerData: result.data };
 }
 
-async function sendDocument({ conversationId, buffer, mimeType, fileName, caption, sentByUserId, channel }) {
+async function sendDocument({ conversationId, buffer, mimeType, fileName, caption, sentByUserId, channel, replyTo = null, storedMedia = null, forwardedFromMessageId = null }) {
   const conversation = await prisma.conversation.findUnique({ where: { id: conversationId }, include: { contact: true, channelAccount: true, category: { include: { parent: true } } } });
   if (!conversation) throw Object.assign(new Error("Conversa não encontrada."), { statusCode: 404 });
   if(conversation.archivedAt)throw Object.assign(new Error('Recupere a conversa arquivada antes de enviar mensagens.'),{statusCode:409,code:'CONVERSATION_ARCHIVED'});
@@ -483,20 +508,21 @@ async function sendDocument({ conversationId, buffer, mimeType, fileName, captio
   }
   if (conversation.channel !== "META") throw Object.assign(new Error("Este canal ainda não está liberado para anexos pela Central."), { statusCode: 409 });
   await whatsappInbox.applySender(conversation, sentByUserId);
+  await chatMessages().assertReplySender(replyTo, conversation);
   await require("./meta-template-service").assertFreeFormAllowed(conversationId, new Date(), conversation.channelAccountId);
   const cleanCaption = caption?.trim() || null;
   const providerCaption = formatTeamMessage(conversation.category, cleanCaption || "");
   if (providerCaption.length > 1024) {
     throw Object.assign(new Error("A legenda ficou acima do limite após adicionar o nome da equipe."), { statusCode: 400 });
   }
-  const media = await storeDocument({ buffer, mimeType, fileName });
+  const media = storedMedia || await storeDocument({ buffer, mimeType, fileName });
   let result;
   try {
     result = await sendMetaForConversation(conversation, channel, "sendDocument", {
-      buffer, mimeType: media.mimeType, fileName: media.fileName, caption: providerCaption || null,
+      buffer, mimeType: media.mimeType, fileName: media.fileName, caption: providerCaption || null, ...replyContext(replyTo),
     });
   } catch (error) {
-    await removeImage(media.storageKey);
+    if (!storedMedia) await removeImage(media.storageKey);
     throw error;
   }
   const occurredAt = new Date();
@@ -507,6 +533,7 @@ async function sendDocument({ conversationId, buffer, mimeType, fileName, captio
     mediaFileName: media.fileName, mediaSize: media.size,
     occurredAt, sentByUserId: sentByUserId || null,
     rawPayload: { message: result.data, mediaId: result.mediaId },
+    ...chatMessages().replyFields(replyTo), ...(forwardedFromMessageId ? { forwardedFromMessageId } : {}),
   } });
   await updateConversationAfterSending({ conversationId, sentByUserId, occurredAt });
   return { message, providerData: result.data };
@@ -515,7 +542,7 @@ async function sendDocument({ conversationId, buffer, mimeType, fileName, captio
 // Áudio: nesta versão só WhatsApp (META). O conteúdo é normalizado antes
 // (WebM do Chrome vira Ogg/Opus; tipo real decidido pela assinatura binária)
 // e salvo no storage de mídia existente — no banco só referência/metadados.
-async function sendAudio({ conversationId, buffer, fileName, durationMs, sentByUserId, channel }) {
+async function sendAudio({ conversationId, buffer, fileName, durationMs, sentByUserId, channel, replyTo = null, storedMedia = null, forwardedFromMessageId = null }) {
   const conversation = await prisma.conversation.findUnique({ where: { id: conversationId }, include: { contact: true, channelAccount: true } });
   if (!conversation) throw Object.assign(new Error("Conversa não encontrada."), { statusCode: 404 });
   if(conversation.archivedAt)throw Object.assign(new Error('Recupere a conversa arquivada antes de enviar mensagens.'),{statusCode:409,code:'CONVERSATION_ARCHIVED'});
@@ -523,16 +550,17 @@ async function sendAudio({ conversationId, buffer, fileName, durationMs, sentByU
     throw Object.assign(new Error("Este canal ainda não suporta envio de áudio pela Central."), { statusCode: 409 });
   }
   await whatsappInbox.applySender(conversation, sentByUserId);
+  await chatMessages().assertReplySender(replyTo, conversation);
   await require("./meta-template-service").assertFreeFormAllowed(conversationId, new Date(), conversation.channelAccountId);
   const audio = normalizeOutgoingAudio({ buffer, fileName, declaredDurationMs: durationMs });
-  const media = await storeAudio({ buffer: audio.buffer, mimeType: audio.mimeType, fileName: audio.fileName });
+  const media = storedMedia || await storeAudio({ buffer: audio.buffer, mimeType: audio.mimeType, fileName: audio.fileName });
   let result;
   try {
     result = await sendMetaForConversation(conversation, channel, "sendAudio", {
-      buffer: audio.buffer, mimeType: media.mimeType, fileName: media.fileName,
+      buffer: audio.buffer, mimeType: media.mimeType, fileName: media.fileName, ...replyContext(replyTo),
     });
   } catch (error) {
-    await removeImage(media.storageKey);
+    if (!storedMedia) await removeImage(media.storageKey);
     throw error;
   }
   const occurredAt = new Date();
@@ -544,6 +572,38 @@ async function sendAudio({ conversationId, buffer, fileName, durationMs, sentByU
     mediaFileName: media.fileName, mediaSize: media.size, mediaDurationMs: audio.durationMs,
     occurredAt, sentByUserId: sentByUserId || null,
     rawPayload: { message: result.data, mediaId: result.mediaId },
+    ...chatMessages().replyFields(replyTo), ...(forwardedFromMessageId ? { forwardedFromMessageId } : {}),
+  } });
+  await updateConversationAfterSending({ conversationId, sentByUserId, occurredAt });
+  return { message, providerData: result.data };
+}
+
+// Figurinha: só WhatsApp, pelo tipo oficial `sticker`. Nunca vira imagem nem
+// documento. Da biblioteca, reaproveita o arquivo já guardado.
+async function sendSticker({ conversationId, buffer, mimeType, fileName, sentByUserId, channel, replyTo = null, storedMedia = null, forwardedFromMessageId = null, beforeProviderSend }) {
+  const conversation = await prisma.conversation.findUnique({ where: { id: conversationId }, include: { contact: true, channelAccount: true } });
+  if (!conversation) throw Object.assign(new Error("Conversa não encontrada."), { statusCode: 404 });
+  if (conversation.archivedAt) throw Object.assign(new Error("Recupere a conversa arquivada antes de enviar mensagens."), { statusCode: 409, code: "CONVERSATION_ARCHIVED" });
+  if (conversation.channel !== "META") throw Object.assign(new Error("Figurinhas estão disponíveis apenas no WhatsApp."), { statusCode: 409 });
+  await whatsappInbox.applySender(conversation, sentByUserId);
+  await chatMessages().assertReplySender(replyTo, conversation);
+  await require("./meta-template-service").assertFreeFormAllowed(conversationId, new Date(), conversation.channelAccountId);
+  const media = storedMedia || await storeSticker({ buffer, mimeType, fileName });
+  let result;
+  try {
+    await beforeProviderSend?.();
+    result = await sendMetaForConversation(conversation, channel, "sendSticker", { buffer, mimeType: media.mimeType, fileName: media.fileName, ...replyContext(replyTo) });
+  } catch (error) {
+    if (!storedMedia) await removeImage(media.storageKey);
+    throw error;
+  }
+  const occurredAt = new Date();
+  const message = await prisma.message.create({ data: {
+    conversationId, externalId: result.externalId, channel: conversation.channel, channelAccountId: conversation.channelAccountId || null,
+    direction: "ENVIADA", status: "ENVIADA", type: "sticker", text: null,
+    mediaStorageKey: media.storageKey, mediaMimeType: media.mimeType, mediaFileName: media.fileName, mediaSize: media.size,
+    occurredAt, sentByUserId: sentByUserId || null, rawPayload: { message: result.data, mediaId: result.mediaId },
+    ...chatMessages().replyFields(replyTo), ...(forwardedFromMessageId ? { forwardedFromMessageId } : {}),
   } });
   await updateConversationAfterSending({ conversationId, sentByUserId, occurredAt });
   return { message, providerData: result.data };
@@ -581,4 +641,4 @@ async function sendTextToPhone({ phone, text, channel, account = null }) {
   return sendText({ conversationId: conversation.id, text, channel });
 }
 
-module.exports = { closingMessage, finalizeConversation, saveIncoming, sendAudio, sendDocument, sendImage, sendVideo, updateConversationAfterSending, updateStatus, sendText, sendTextToPhone };
+module.exports = { closingMessage, finalizeConversation, saveIncoming, sendAudio, sendDocument, sendImage, sendSticker, sendVideo, updateConversationAfterSending, updateStatus, sendText, sendTextToPhone };

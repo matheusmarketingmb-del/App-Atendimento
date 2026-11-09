@@ -1,6 +1,6 @@
 // Keyset pagination: stable ordering even when several messages share a time.
 // Membership and workspace checks are performed by internal-chat-service first.
-const include={senderUser:{select:{id:true,name:true,email:true}}};
+const include={senderUser:{select:{id:true,name:true,email:true}},reactions:{select:{userId:true,emoji:true,user:{select:{name:true}}}}};
 const ascending=[{createdAt:'asc'},{id:'asc'}],descending=[{createdAt:'desc'},{id:'desc'}];
 function boundary(anchor,direction){const op=direction==='before'?'lt':'gt';return {OR:[{createdAt:{[op]:anchor.createdAt}},{createdAt:anchor.createdAt,id:{[op]:anchor.id}}]};}
 async function listPage(db,chatId,{before,after,around,limit=60}={}){

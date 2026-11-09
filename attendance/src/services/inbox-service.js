@@ -483,16 +483,19 @@ function alertSince(value) {
   return parsed < minimum ? minimum : parsed;
 }
 
-async function getUserAlerts({ since, company }, viewer) {
+async function getUserAlerts({ since, company, allCompanies }, viewer) {
   const checkedAt = new Date();
   const occurredAfter = alertSince(since);
-  // Avisos (toasts) só do workspace ativo; as outras empresas aparecem como
-  // contador/pulsação na aba delas (getWorkspaceUnread), nunca misturadas.
-  const scope = { AND: [await authorization.operationalScope(viewer), {archivedAt:null}, { companyId: await companyService.resolveWorkspace(viewer, company) }] };
+  const acrossWorkspaces = allCompanies === "true";
+  const scope = await authorization.operationalScope(viewer);
   const master = authorization.isMaster(viewer);
-  const alertScope = { AND: [scope, notManualSpam] };
+  const alertScope = { AND: [scope, { archivedAt: null }, notManualSpam,
+    ...(acrossWorkspaces ? [] : [{ companyId: await companyService.resolveWorkspace(viewer, company) }])] };
+  const readable = await privateSegments.readableWhereFor(viewer);
+  const accountScope = await whatsappInbox.messageAccountScope(viewer);
+  const companySelect = { select: { id: true, displayName: true, slug: true } };
   const waitingForViewer = {
-    AND: [alertScope, { status: "AGUARDANDO_EQUIPE" }, {
+    AND: [alertScope, { status: acrossWorkspaces ? { in: activeManagedStatuses } : "AGUARDANDO_EQUIPE" }, {
       OR: [{ assignedUserId: null }, { assignedUserId: viewer.id }],
     }],
   };
@@ -500,11 +503,12 @@ async function getUserAlerts({ since, company }, viewer) {
     prisma.message.findMany({
       where: {
         createdAt: { gt: occurredAfter, lte: checkedAt }, direction: "RECEBIDA", type: { not: "reaction" },
+        AND: [readable, accountScope],
         conversation: { is: waitingForViewer },
       },
       include: { conversation: { include: {
         contact: true,
-        category: { include: { parent: true } },
+        company: companySelect,
         ...(master ? { masterReads: {
           where: { userId: viewer.id }, select: { readAt: true }, take: 1,
         } } : {}),
@@ -514,14 +518,17 @@ async function getUserAlerts({ since, company }, viewer) {
     prisma.conversationActivity.findMany({
       where: {
         createdAt: { gt: occurredAfter, lte: checkedAt },
-        action: { in: ["CATEGORY_CHANGED", "CONVERSATION_TRANSFERRED"] },
+        action: { in: ["CATEGORY_CHANGED", "CONVERSATION_TRANSFERRED", "BOT_FLOW_TRANSFERRED", "BOT_FLOW_HANDOFF",
+          "BOT_TRIAGE_COMPLETED", "INBOUND_CATEGORY_ASSIGNED"] },
+        AND: [readable],
         conversation: { is: alertScope },
       },
-      include: { conversation: { include: { contact: true, category: { include: { parent: true } } } } },
+      include: { conversation: { include: { contact: true, company: companySelect, category: { include: { parent: true } } } } },
       orderBy: { createdAt: "asc" }, take: 30,
     }),
   ]);
 
+const companyLabel = (conversation) => (conversation.company?.displayName || conversation.company?.slug || "Central").toLocaleUpperCase("pt-BR");
 const incoming = messages.filter((message) => {
   if (!master) return message.conversation.unreadCount > 0;
   const readAt = message.conversation.masterReads?.[0]?.readAt;
@@ -538,19 +545,31 @@ const incoming = messages.filter((message) => {
   return {
     id: `message:${message.id}`,
     conversationId: message.conversationId,
-    title: `${contactName} mandou uma mensagem`,
+    title: `${contactName || "Cliente"} mandou uma mensagem na ${companyLabel(message.conversation)}`,
+    companyId: message.conversation.company?.id,
+    company: message.conversation.company?.slug,
     text: "",
     createdAt: message.occurredAt,
   };
 });
 
   const changes = activities.filter((activity) => {
-    if (activity.actorUserId === viewer.id) return false;
+    if (activity.actorUserId === viewer.id || activity.conversation.status === "FINALIZADO") return false;
     if (activity.action === "CONVERSATION_TRANSFERRED") return activity.details?.toUserId === viewer.id;
-    return true;
+    const details = activity.details || {};
+    if (activity.action === "CATEGORY_CHANGED") {
+      return Object.hasOwn(details, "toCategoryId") && details.toCategoryId === activity.conversation.categoryId;
+    }
+    if (activity.action === "BOT_FLOW_HANDOFF" && !Object.hasOwn(details, "previousCategoryId")) return false;
+    if (Object.hasOwn(details, "previousCategoryId") && details.previousCategoryId === details.categoryId) return false;
+    return Boolean(details.categoryId && details.categoryId === activity.conversation.categoryId);
   }).map((activity) => ({
     id: `activity:${activity.id}`, conversationId: activity.conversationId,
-    title: activity.action === "CONVERSATION_TRANSFERRED" ? "Conversa transferida para você" : "Nova conversa na sua área",
+    title: activity.action === "CONVERSATION_TRANSFERRED"
+      ? `Conversa transferida para você na ${companyLabel(activity.conversation)}`
+      : `Novo atendimento na sua caixa na ${companyLabel(activity.conversation)}`,
+    companyId: activity.conversation.company?.id,
+    company: activity.conversation.company?.slug,
     text: `${contactDisplayName(activity.conversation.contact)} • ${categoryLabelForHistory(activity.conversation.category) || "Sem categoria"}`,
     createdAt: activity.createdAt,
   }));
@@ -744,7 +763,40 @@ async function privateCategoryNames(ids) {
   return new Map(categories.map(({ id, name }) => [id, name]));
 }
 
+// Mesmas regras de getConversation, como filtro reutilizável: busca, favoritos,
+// fixadas e citações nunca alcançam o que a linha do tempo esconderia.
+async function readableMessageScope(id, viewer) {
+  const requested = await prisma.conversation.findUnique({ where: { id }, select: { channel: true, contactId: true } });
+  const root = requested?.channel === "META" ? await whatsappInbox.findInbox(requested.contactId) : null;
+  const rootId = root?.id || id;
+  const scope = await authorization.conversationScope(viewer);
+  const conversation = await prisma.conversation.findFirst({
+    where: { AND: [{ id: rootId }, scope] },
+    select: { id: true, companyId: true, categoryId: true, assignedUserId: true, contactId: true, channel: true },
+  });
+  if (!conversation) throw await authorization.conversationAccessError(viewer, id);
+  const visibility = await readVisibility(conversation, viewer);
+  const readablePrivateIds = await privateSegments.readablePrivateCategoryIds(viewer);
+  const window = periods.windowsWhere(visibility.windows, "occurredAt");
+  const rootWindow = window && visibility.mode !== "SUPERVISION" && readablePrivateIds?.length
+    ? { OR: [window, { privateCategoryId: { in: readablePrivateIds } }] } : window;
+  const branches = [{ AND: [{ conversationId: conversation.id }, rootWindow || {}] }];
+  if (root) {
+    const siblings = await prisma.conversation.findMany({ where: { AND: [{ contactId: conversation.contactId, channel: "META", id: { not: conversation.id } }, scope] } });
+    for (const sibling of siblings) {
+      const siblingVisibility = await readVisibility(sibling, viewer);
+      branches.push({ AND: [{ conversationId: sibling.id }, window || {}, periods.windowsWhere(siblingVisibility.windows, "occurredAt") || {}] });
+    }
+  }
+  return {
+    conversation,
+    where: { AND: [{ OR: branches }, await whatsappInbox.messageAccountScope(viewer), privateSegments.readableWhere(readablePrivateIds)] },
+  };
+}
+
 async function getConversation(id, viewer, history={}) {
+  const { adOriginFromMessage } = require("./ad-origin-service");
+  const { ASSISTANT_INTAKE_BOTS, visibleAssistantIntake } = require("./assistant-intake");
   const requested = await prisma.conversation.findUnique({ where: { id }, select: { channel: true, contactId: true, unreadCount: true } });
   if (requested?.channel === "META") {
     const root = await whatsappInbox.findInbox(requested.contactId);
@@ -779,6 +831,9 @@ async function getConversation(id, viewer, history={}) {
     where: withinWindow("occurredAt"),
     limited: visibility.limited,
   };
+  const accountScope = await whatsappInbox.messageAccountScope(viewer);
+  const originScopes = [{ AND: [{ conversationId: id }, messageVisibility.where || {}] }];
+  const siblingVisibilityScope = [];
   const currentHandoff = await currentHandoffFor(access, viewer);
   return prisma.conversation.findFirst({
     where: { AND: [{ id }, scope] },
@@ -788,7 +843,7 @@ async function getConversation(id, viewer, history={}) {
       channelAccount: { select: { ...CHANNEL_ACCOUNT_SELECT, externalAccountId: true, providerMetadata: true } },
       assignedUser: { select: { id: true, name: true, email: true } },
       messages: {
-        where: { AND: [messageVisibility.where || {}, await whatsappInbox.messageAccountScope(viewer),paging.historyWhere(history),paging.sharedWhere(history)] },
+        where: { AND: [messageVisibility.where || {}, accountScope,paging.historyWhere(history),paging.sharedWhere(history)] },
         include: { sentByUser: { select: { id: true, name: true } } },
         orderBy: history.limit?[{occurredAt:'desc'},{id:'desc'}]:{occurredAt:'asc'},
         ...(history.limit&&!history.from?{take:history.limit+1}:{}),
@@ -806,6 +861,12 @@ async function getConversation(id, viewer, history={}) {
       },
       pins: { where: { userId: viewer.id }, select: { createdAt: true }, take: 1 },
       botState: { select: { humanPausedAt: true } },
+      botFlowExecutions: requested?.channel === "META" && !history.sharedOnly ? {
+        where: { botId: { in: ASSISTANT_INTAKE_BOTS } },
+        orderBy: [{ startedAt: "desc" }, { id: "desc" }],
+        take: 1,
+        select: { status: true, context: true, finishedAt: true },
+      } : false,
       activities: canViewHistory ? {
         // O histórico de eventos segue o mesmo recorte das mensagens: quem
         // recebeu sem histórico não vê notas/eventos da etapa anterior.
@@ -821,11 +882,16 @@ async function getConversation(id, viewer, history={}) {
       const siblings = await prisma.conversation.findMany({ where: { AND: [{ contactId: conversation.contactId, channel: "META", id: { not: id } }, scope] } });
       for (const sibling of siblings) {
         const siblingVisibility = await readVisibility(sibling, viewer);
+        siblingVisibilityScope.push([sibling.id, siblingVisibility]);
         // Both the current transfer restriction and the original conversation's
         // permissions apply. Unification must never reopen hidden history.
-        const messages = await prisma.message.findMany({ where: { AND: [
+        const siblingScope = { AND: [
           { conversationId: sibling.id }, periods.windowsWhere(visibility.windows, "occurredAt") || {},
-          periods.windowsWhere(siblingVisibility.windows, "occurredAt") || {}, await whatsappInbox.messageAccountScope(viewer),paging.historyWhere(history),paging.sharedWhere(history),
+          periods.windowsWhere(siblingVisibility.windows, "occurredAt") || {},
+        ] };
+        if (history.adOrigin) originScopes.push(siblingScope);
+        const messages = await prisma.message.findMany({ where: { AND: [
+          siblingScope, accountScope,paging.historyWhere(history),paging.sharedWhere(history),
         ] }, include: { sentByUser: { select: { id: true, name: true } } },orderBy:[{occurredAt:'desc'},{id:'desc'}],...(history.limit&&!history.from?{take:history.limit+1}:{}) });
         conversation.messages.push(...messages);
       }
@@ -838,19 +904,42 @@ async function getConversation(id, viewer, history={}) {
       if(!history.from)conversation.messages=conversation.messages.slice(-history.limit);
       historyPage={hasMore,nextCursor:paging.encodeCursor(conversation.messages[0])};
     }
-    const historyScope=require('node:crypto').createHash('sha256').update(JSON.stringify([visibility,readablePrivateIds,await whatsappInbox.messageAccountScope(viewer)])).digest('hex');
-    const { pins, botState, ...result } = conversation;
+    siblingVisibilityScope.sort(([left], [right]) => left.localeCompare(right));
+    const historyScope=require('node:crypto').createHash('sha256').update(JSON.stringify([visibility,readablePrivateIds,accountScope,siblingVisibilityScope])).digest('hex');
+    const { pins, botState, botFlowExecutions, ...result } = conversation;
     const latestInboundEmail = conversation.channel === 'EMAIL' ? {rawPayload:{gmailMailbox:(await emailMailboxes(prisma,[conversation.id])).get(conversation.id)}} : null;
     const hiddenIds = result.messages.filter((message) => !privateSegments.canRead(readablePrivateIds, message.privateCategoryId))
       .map(({ privateCategoryId }) => privateCategoryId);
     const messages = hiddenIds.length
       ? privateSegments.collapseRestricted(result.messages, readablePrivateIds, await privateCategoryNames(hiddenIds))
       : result.messages;
+    const assistantIntake = await visibleAssistantIntake(botFlowExecutions?.[0], messages, ids => prisma.message.findMany({
+      where: { id: { in: ids }, conversationId: id, direction: "RECEBIDA",
+        AND: [messageVisibility.where || {}, accountScope, privateSegments.readableWhere(readablePrivateIds)] },
+      select: { id: true, direction: true, text: true },
+    }));
+    let adOrigin = null;
+    if (conversation.channel === "META" && !history.sharedOnly) {
+      for (let index = messages.length - 1; index >= 0 && !adOrigin; index--) {
+        adOrigin = adOriginFromMessage(messages[index]);
+      }
+      if (history.adOrigin && !adOrigin && (historyPage?.hasMore || history.from || history.before)) {
+        const source = await prisma.message.findFirst({
+          where: { channel: "META", direction: "RECEBIDA", rawPayload: { path: ["referral", "source_type"], equals: "ad" },
+            AND: [{ OR: originScopes }, accountScope, privateSegments.readableWhere(readablePrivateIds)] },
+          select: { id: true, occurredAt: true, channel: true, direction: true, rawPayload: true },
+          orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
+        });
+        adOrigin = adOriginFromMessage(source);
+      }
+    }
     const activities = Array.isArray(result.activities)
       ? privateSegments.sanitizeActivities(result.activities, readablePrivateIds) : result.activities;
+    await require("./chat-message-service").attachChatData(messages, viewer, conversation.id);
     const remaining=computeSlaMinutesRemaining(conversation,slaConfig.get(slaCompany),slaAt);
     return {
-      ...result, messages, activities, ...(historyPage?{messagePage:{...historyPage,scope:historyScope}}:{}),
+      ...result, messages, activities, ...(assistantIntake ? { assistantIntake } : {}), ...(historyPage?{messagePage:{...historyPage,scope:historyScope}}:{}),
+      ...(adOrigin || history.adOrigin ? { adOrigin } : {}),
       slaMinutesRemaining:remaining,
       firstResponseSlaBreached:conversation.status==='NOVO'&&remaining!==null&&remaining<0,
       responseSlaBreached:['AGUARDANDO_EQUIPE','HANDOFF_BOT'].includes(conversation.status)&&remaining!==null&&remaining<0,
@@ -866,8 +955,11 @@ async function getConversation(id, viewer, history={}) {
 }
 
 async function getSidebarSummary(viewer,{company,excludeMarketplaces}={}){
-  const scope={AND:[await authorization.conversationScope(viewer),{archivedAt:null},{companyId:await companyService.resolveWorkspace(viewer,company)},whatsappInbox.canonicalScope]};
+  const companyId = await companyService.resolveWorkspace(viewer, company);
+  const scope={AND:[await authorization.conversationScope(viewer),{archivedAt:null},{companyId},whatsappInbox.canonicalScope]};
   const master=authorization.isMaster(viewer);
+  const sidebarCategoryIds = master ? null : new Set(await authorization.allowedCategoryIds(viewer));
+  const canCountUncategorized = master || Boolean((await companyService.userForCompany(viewer, companyId))?.canViewUncategorized);
   let rows=await prisma.conversation.findMany({where:scope,select:{id:true,companyId:true,channel:true,emailMailboxOverride:true,categoryId:true,status:true,priority:true,assignedUserId:true,unreadCount:true,lastMessageAt:true,createdAt:true,...(master?{masterReads:{where:{userId:viewer.id},select:{readAt:true},take:1}}:{})}});
   const mailboxes=await emailMailboxes(prisma,rows.filter(row=>row.channel==='EMAIL').map(row=>row.id));
   rows=rows.filter(row=>(excludeMarketplaces!=='true'||!['MERCADO_LIVRE','TIKTOK_SHOP','AMAZON_MARKETPLACE','SHOPEE','SHEIN_MARKETPLACE'].includes(row.channel))&&(row.channel!=='EMAIL'||(row.emailMailboxOverride||mailboxes.get(row.id)||'GENERAL')!=='SPAM'));
@@ -878,7 +970,18 @@ async function getSidebarSummary(viewer,{company,excludeMarketplaces}={}){
   const result={total:rows.length,statuses:{EM_ATENDIMENTO:0},categories:{},overdue:0,urgent:0,unassigned:0,attentionWaiting:0,openByCompany:{}};
   const now=new Date();
   await require('./service-hours-sla').attachSlaCalendars(settings,prisma,now);
-  for(const row of rows){result.statuses[row.status]=(result.statuses[row.status]||0)+1;if(row.assignedUserId&&!['NOVO','FINALIZADO','EM_ATENDIMENTO'].includes(row.status))result.statuses.EM_ATENDIMENTO++;if(row.priority==='URGENTE')result.urgent++;if(!row.assignedUserId&&row.status!=='FINALIZADO')result.unassigned++;if(computeSlaMinutesRemaining(row,settings.get(row.companyId),now)<0)result.overdue++;const key=row.categoryId||'null';result.categories[key]=(result.categories[key]||0)+1;if(row.status==='AGUARDANDO_EQUIPE'&&counts.get(row.id)>0)result.attentionWaiting++;if(row.status!=='FINALIZADO')result.openByCompany[row.companyId]=(result.openByCompany[row.companyId]||0)+1;}
+  for (const row of rows) {
+    result.statuses[row.status] = (result.statuses[row.status] || 0) + 1;
+    if (row.priority === "URGENTE") result.urgent++;
+    if (!row.assignedUserId && row.status !== "FINALIZADO") result.unassigned++;
+    if (computeSlaMinutesRemaining(row, settings.get(row.companyId), now) < 0) result.overdue++;
+    if (row.categoryId ? !sidebarCategoryIds || sidebarCategoryIds.has(row.categoryId) : canCountUncategorized) {
+      const key = row.categoryId || "null";
+      result.categories[key] = (result.categories[key] || 0) + 1;
+    }
+    if (row.status === "AGUARDANDO_EQUIPE" && counts.get(row.id) > 0) result.attentionWaiting++;
+    if (row.status !== "FINALIZADO") result.openByCompany[row.companyId] = (result.openByCompany[row.companyId] || 0) + 1;
+  }
   result.statuses.EM_ATENDIMENTO=rows.filter(row=>row.assignedUserId&&!['NOVO','FINALIZADO'].includes(row.status)).length;
   return result;
 }
@@ -1101,7 +1204,13 @@ async function deleteConversation(id, viewer) {
     await transaction.conversation.delete({ where: { id } });
   });
   const mediaKeys = [...new Set(conversation.messages.map(({ mediaStorageKey }) => mediaStorageKey).filter(Boolean))];
-  await Promise.allSettled(mediaKeys.map((storageKey) => removeImage(storageKey)));
+  // Figurinhas/GIFs da biblioteca e mensagens encaminhadas dividem o arquivo.
+  const [stillInMessages, stillInLibrary] = await Promise.all([
+    prisma.message.findMany({ where: { mediaStorageKey: { in: mediaKeys } }, select: { mediaStorageKey: true }, distinct: ["mediaStorageKey"] }),
+    prisma.mediaAsset.findMany({ where: { storageKey: { in: mediaKeys } }, select: { storageKey: true }, distinct: ["storageKey"] }),
+  ]);
+  const shared = new Set([...stillInMessages.map((row) => row.mediaStorageKey), ...stillInLibrary.map((row) => row.storageKey)]);
+  await Promise.allSettled(mediaKeys.filter((storageKey) => !shared.has(storageKey)).map((storageKey) => removeImage(storageKey)));
   return { deleted: true, id };
 }
 
@@ -1278,6 +1387,9 @@ async function updateConversation(id, {
       if((categoryId!==undefined&&currentSnapshot.categoryId!==updated.categoryId)||(assignedUserId&&currentSnapshot.assignedUserId!==updated.assignedUserId)){
         const fixedOwner=await require('./commercial-template-owner-service').clearOwnerOnCategoryTransfer(transaction,{before:currentSnapshot,after:updated,actor:viewer});
         if(fixedOwner.cleared)Object.assign(updated.contact,fixedOwner.contactPatch);
+      }
+      if (assignedUserId === viewer.id) {
+        await require("./sincrofit-atacado-owner-service").setOwnerOnClaim(transaction, { before: currentSnapshot, after: updated, actor: viewer });
       }
       const activities = [];
       // Setor privado: os eventos desta alteração recebem o carimbo do
@@ -1677,15 +1789,26 @@ async function listTransferCategories(conversationId, viewer) {
     .map((category) => ({ ...category, selectable: allowed.has(category.id) || allowed.has(category.parentId) }));
 }
 
-async function getCategoryVisibility(viewer) {
-  const preferences = await prisma.user.findUnique({
+async function getCategoryVisibility(viewer, client = prisma) {
+  const preferences = await client.user.findUnique({
     where: { id: viewer.id },
     select: { hideUncategorized: true, hiddenCategories: { select: { categoryId: true } } },
   });
   return { hideUncategorized: Boolean(preferences?.hideUncategorized), hiddenCategoryIds: preferences?.hiddenCategories.map(({ categoryId }) => categoryId) || [] };
 }
 
-async function setCategoryVisibility({ categoryId, hidden }, viewer) {
+async function setCategoryVisibility({ categoryId, hidden, reset, company }, viewer) {
+  if (reset === true) {
+    const companyId = await companyService.resolveWorkspace(viewer, company);
+    const scopedViewer = await authorization.forCompany(viewer, companyId);
+    return prisma.$transaction(async (tx) => {
+      await tx.userHiddenCategory.deleteMany({ where: { userId: viewer.id, category: { is: { companyId } } } });
+      if (scopedViewer.canViewUncategorized || authorization.isMaster(scopedViewer)) {
+        await tx.user.updateMany({ where: { id: viewer.id, hideUncategorized: true }, data: { hideUncategorized: false } });
+      }
+      return getCategoryVisibility(viewer, tx);
+    });
+  }
   if (typeof hidden !== "boolean") throw Object.assign(new Error("Informe se a categoria deve ficar oculta."), { statusCode: 400 });
   if (categoryId === null || categoryId === "UNCATEGORIZED") {
     if (!authorization.isMaster(viewer) && !viewer.canViewUncategorized) throw authorization.forbidden("Você não possui acesso a Sem categoria.");
@@ -1882,6 +2005,7 @@ async function listUsers(viewer) {
 }
 
 module.exports = {
+  readableMessageScope,
   addContactNote, assertCanViewMessage, readVisibility, conversationPriorities, conversationStatuses, createCategory, deleteContactNote, deleteConversation,
   getConversation, getConversationSummary, getSidebarSummary, getUserAlerts, listCategories, listTransferCategories,
   resolveHistoryStart,

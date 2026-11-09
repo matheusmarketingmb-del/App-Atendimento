@@ -1,6 +1,9 @@
 const prisma = require("../database/prisma");
 const { conversionFormat, convertOutgoingMedia } = require('../services/media-conversion-service');
 
+const chatMessages = require('../services/chat-message-service');
+const replyTarget = (req) => chatMessages.resolveReplyTarget(req.user, req.params.id, req.body?.replyToMessageId);
+
 async function prepareTeamAttachment(req, kind) {
   await authorization.assertCanActOnConversation(req.user, req.params.id);
   const media = { buffer: req.file.buffer, mimeType: req.file.mimetype, fileName: req.file.originalname };
@@ -95,7 +98,8 @@ function createInboxController(channel) {
         const whatsappSender = sender ? { selectedId: sender.selectedId, options: sender.options, reason: sender.reason } : null;
         if (sender && !sender.account) customerServiceWindow.state = "SENDER_UNAVAILABLE";
         customerServiceWindow.senderName = sender?.options.find(option => option.id === sender.selectedId)?.name || conversation.channelAccount?.name || "WhatsApp principal";
-        return res.json({ ...conversation, whatsappSender, customerServiceWindow, mergedDestinations, channelCapabilities: channelCaps, postContext, transferCategories, preferredAssignee });
+        const pinnedMessages = await chatMessages.pinsForConversation(conversation.id, req.user);
+        return res.json({ ...conversation, whatsappSender, customerServiceWindow, mergedDestinations, channelCapabilities: channelCaps, postContext, transferCategories, preferredAssignee, pinnedMessages });
       } catch (error) { return next(error); }
     },
     async mergeCandidates(req, res, next) {
@@ -297,10 +301,11 @@ async signalTransfer(req, res, next) {
       try {
         await authorization.assertCanActOnConversation(req.user, req.params.id);
         const crmProposal=req.body.crmProposalDraft?await require('../services/crm-proposal-service').validateForMessage(req.user,req.body.crmProposalDraft,req.params.id):null;
+        const replyTo = await replyTarget(req);
         const result = await require('../services/outbound-text-request-service').sendOnce({
           client: prisma, userId: req.user.id, conversationId: req.params.id,
-          requestId: req.body.clientRequestId, text, crmProposal,
-          send: beforeProviderSend => sendText({ conversationId: req.params.id, text, sentByUserId: req.user.id, channel, beforeProviderSend,...(crmProposal?{crmProposal}:{}) }),
+          requestId: req.body.clientRequestId, text, crmProposal, replyToMessageId: replyTo?.id,
+          send: beforeProviderSend => sendText({ conversationId: req.params.id, text, sentByUserId: req.user.id, channel, beforeProviderSend,replyTo,...(crmProposal?{crmProposal}:{}) }),
         });
         inboxEvents.publishForConversation(req.params.id);
         return res.status(201).json(result.message);
@@ -310,8 +315,9 @@ async signalTransfer(req, res, next) {
       if (!req.file) return res.status(400).json({ error: "Selecione uma imagem JPG ou PNG." });
       try {
         const media = await prepareTeamAttachment(req, 'image');
+        const replyTo = await replyTarget(req);
         const result = await (media.mimeType==='video/mp4'?sendVideo:sendImage)({
-          conversationId: req.params.id, ...media,
+          conversationId: req.params.id, ...media, replyTo,
           caption: req.body.caption, sentByUserId: req.user.id, channel,
         });
         inboxEvents.publishForConversation(req.params.id);
@@ -322,8 +328,9 @@ async signalTransfer(req, res, next) {
       if (!req.file) return res.status(400).json({ error: "Selecione um vídeo MP4 ou 3GP." });
       try {
         const media = await prepareTeamAttachment(req, 'video');
+        const replyTo = await replyTarget(req);
         const result = await sendVideo({
-          conversationId: req.params.id, ...media,
+          conversationId: req.params.id, ...media, replyTo,
           caption: req.body.caption, sentByUserId: req.user.id, channel,
         });
         inboxEvents.publishForConversation(req.params.id);
@@ -334,8 +341,9 @@ async signalTransfer(req, res, next) {
       if (!req.file) return res.status(400).json({ error: "Selecione ou grave um áudio." });
       try {
         const media = await prepareTeamAttachment(req, 'audio');
+        const replyTo = await replyTarget(req);
         const result = await sendAudio({
-          conversationId: req.params.id, ...media,
+          conversationId: req.params.id, ...media, replyTo,
           durationMs: req.body.durationMs, sentByUserId: req.user.id, channel,
         });
         inboxEvents.publishForConversation(req.params.id);
@@ -346,8 +354,9 @@ async signalTransfer(req, res, next) {
       if (!req.file) return res.status(400).json({ error: "Selecione um documento." });
       try {
         const media=await prepareTeamAttachment(req,'document');
+        const replyTo = await replyTarget(req);
         const result = await sendDocument({
-          conversationId: req.params.id, ...media,
+          conversationId: req.params.id, ...media, replyTo,
           caption: req.body.caption, sentByUserId: req.user.id, channel,
         });
         inboxEvents.publishForConversation(req.params.id);

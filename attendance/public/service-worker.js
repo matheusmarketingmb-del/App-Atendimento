@@ -1,7 +1,7 @@
 // Versão do cache da aplicação.
 // Altere somente APP_VERSION a cada nova publicação.
-const APP_VERSION = "0.37.12";
-const CACHE_REVISION = "release-03712-assistant-20261027";
+const APP_VERSION = "0.38.6";
+const CACHE_REVISION = "release-0.38.6-meta-ads-20261109";
 const CACHE_NAME = `mibro-shell-v${APP_VERSION}-r${CACHE_REVISION}`;
 
 const STATIC_ASSETS = [
@@ -23,8 +23,16 @@ const STATIC_ASSETS = [
   "/css/agenda.css",
   "/css/follow-ups.css",
 
+  "/css/chat-features.css",
+  "/css/ad-origin.css",
+  "/js/emoji-data.js",
+  "/js/chat-features.js",
+  "/js/ad-origin.js",
   "/js/feature-flags.js",
   "/js/app.js",
+  "/js/conversation-archive.js",
+  "/js/composer-send-guard.js",
+  "/js/crm-proposal-draft.js",
   "/js/bots.js",
   "/js/login.js",
   "/js/release-loader.js",

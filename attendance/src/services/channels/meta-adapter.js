@@ -27,6 +27,8 @@ class MetaAdapter extends ChannelAdapter {
       canReceiveMedia: true,
       canSendMedia: true,
       canMarkRead: true,
+      canSendReactions: true,
+      canSendStickers: true,
       supportsPublicQuestions: false,
       supportsReviews: false,
       supportsOAuth: false,
@@ -39,14 +41,22 @@ class MetaAdapter extends ChannelAdapter {
   async inspectAccessTokenScopes() { return this.channel.inspectAccessTokenScopes(); }
   async sendTemplate({ to, name, language, components }) { return this.channel.sendTemplate(to, { name, language, components }); }
 
-  async sendMessage({ to, text }) {
-    return this.channel.sendText(to, text);
+  async sendMessage({ to, text, contextMessageId }) {
+    return this.channel.sendText(to, text, contextMessageId ? { contextMessageId } : undefined);
   }
 
-  async sendMedia({ to, type, buffer, mimeType, fileName, caption }) {
+  async sendReaction({ to, messageId, emoji }) {
+    return this.channel.sendReaction(to, { messageId, emoji });
+  }
+
+  async sendSticker({ to, buffer, mimeType, fileName, contextMessageId }) {
+    return this.channel.sendSticker(to, { buffer, mimeType, fileName, contextMessageId });
+  }
+
+  async sendMedia({ to, type, buffer, mimeType, fileName, caption, contextMessageId }) {
     const method = { image: "sendImage", video: "sendVideo", document: "sendDocument", audio: "sendAudio" }[type];
     if (!method) throw new Error(`Tipo de mídia não suportado pelo WhatsApp: ${type}`);
-    return this.channel[method](to, { buffer, mimeType, fileName, caption });
+    return this.channel[method](to, { buffer, mimeType, fileName, caption, ...(contextMessageId ? { contextMessageId } : {}) });
   }
 
   async markAsRead({ externalMessageId }) {

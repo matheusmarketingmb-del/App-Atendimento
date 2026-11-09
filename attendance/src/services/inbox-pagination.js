@@ -8,7 +8,7 @@ function encodeCursor(row,pinned=false){return row?Buffer.from(JSON.stringify({i
 function historyOptions(query={}){
   if(query.sharedContent==='true')return {sharedOnly:true};
   if(query.historyPage!=='true')return {};
-  return {limit:80,before:decodeCursor(query.historyBefore),from:decodeCursor(query.historyFrom)};
+  return {limit:80,before:decodeCursor(query.historyBefore),from:decodeCursor(query.historyFrom),adOrigin:query.adOrigin==='true'};
 }
 function sharedWhere(options){return options.sharedOnly?{OR:[{type:{in:['image','video','document']},mediaStorageKey:{not:null}},{text:{contains:'http',mode:'insensitive'}},{text:{contains:'www.',mode:'insensitive'}}]}:{};}
 function historyWhere(options){

@@ -370,6 +370,33 @@
   `;
   }
 
+  // Reações locais do chat interno: nunca passam pela Meta.
+  function internalReactionsMarkup(message) {
+    if (!window.ChatFeatures?.flags().internalReactions || message.type !== "USER") return "";
+    const groups = new Map();
+    for (const reaction of message.reactions || []) {
+      if (!groups.has(reaction.emoji)) groups.set(reaction.emoji, []);
+      groups.get(reaction.emoji).push(reaction);
+    }
+    const me = state.currentUser?.id;
+    const chips = [...groups].map(([emoji, rows]) => {
+      const mine = rows.some((row) => row.userId === me);
+      return `<button type="button" class="${mine ? "mine" : ""}" data-internal-react="${escapeHtml(mine ? "" : emoji)}" title="${escapeHtml(rows.map((row) => row.user?.name).filter(Boolean).join(", "))}">${escapeHtml(emoji)} ${rows.length}</button>`;
+    }).join("");
+    return `<div class="internal-reactions" data-internal-reactions="${escapeHtml(JSON.stringify(message.reactions || []))}">${chips}<button type="button" data-internal-react-more aria-label="Reagir">＋</button></div>`;
+  }
+
+  function syncInternalReactions(row, message) {
+    const current = row.querySelector(".internal-reactions");
+    const next = internalReactionsMarkup(message);
+    if (!next) return;
+    const template = document.createElement("template");
+    template.innerHTML = next;
+    const fresh = template.content.firstElementChild;
+    if (current?.dataset.internalReactions === fresh.dataset.internalReactions) return;
+    if (current) current.replaceWith(fresh); else row.querySelector(".internal-message-bubble")?.append(fresh);
+  }
+
   function renderMessages(messages, { forceScroll = false, highlightId = null, preservePosition = false } = {}) {
     const container = $("#internal-chat-messages");
     if (!container) return;
@@ -420,6 +447,7 @@
             ${attachment}
             ${message.text ? `<p>${escapeHtml(message.text)}</p>` : ""}
             <small>${formatTime(message.createdAt)}</small>
+            ${internalReactionsMarkup(message)}
           </div>
         </div>
       `;
@@ -428,7 +456,7 @@
     // entire transcript on every real-time event or history page.
     const nodes=messages.map((message,index)=>{
       const old=existing.get(message.id);
-      if(old){old.classList.toggle('highlight',message.id===highlightId);return old;}
+      if(old){old.classList.toggle('highlight',message.id===highlightId);syncInternalReactions(old,message);return old;}
       const template=document.createElement('template');template.innerHTML=markup[index];return template.content.firstElementChild;
     });
     if(state.hasOlder){
@@ -453,6 +481,24 @@
       });
     }
   }
+
+  async function refreshReactions(){
+    const chatId=state.currentChatId;
+    if(!chatId||!window.ChatFeatures?.flags().internalReactions)return;
+    const page=await messagePage(chatId,{limit:'100'});
+    if(chatId!==state.currentChatId)return;
+    mergeMessages(page.messages);renderMessages(state.messages,{preservePosition:true});
+  }
+  document.addEventListener("click",async(event)=>{
+    const more=event.target.closest?.("[data-internal-react-more]");
+    if(more){more.outerHTML=window.ChatFeatures.quickReactions.map((emoji)=>`<button type="button" data-internal-react="${emoji}" aria-label="Reagir com ${emoji}">${emoji}</button>`).join("");return;}
+    const button=event.target.closest?.("[data-internal-react]");
+    if(!button)return;
+    const id=button.closest("[data-message-id]")?.dataset.messageId;
+    if(!id)return;
+    try{await api(`/api/internal-chats/messages/${encodeURIComponent(id)}/reactions`,{method:"POST",body:JSON.stringify({emoji:button.dataset.internalReact})});await refreshReactions();}
+    catch(error){showError(error);}
+  });
 
   function mergeMessages(messages){
     const merged=new Map(state.messages.map(message=>[message.id,message]));
@@ -1306,6 +1352,10 @@
     const active = activeCompany()?.id;
     if (data.companyId && active && data.companyId !== active) {
       scheduleUnread(0);
+      return;
+    }
+    if (data.kind === "reaction") {
+      if (data.chatId === state.currentChatId) refreshReactions().catch(() => {});
       return;
     }
     if (data.kind === "removed" && data.chatId === state.currentChatId) {

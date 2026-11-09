@@ -13,15 +13,18 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/css/skeleton.css?v=0.37.12-assistant-20261027">
-  <link rel="stylesheet" href="/css/app.css?v=0.37.12-assistant-20261027">
-  <script src="/js/feature-flags.js?v=0.37.12-assistant-20261027"></script>
-  <link rel="stylesheet" href="/css/responsive.css?v=0.37.12-assistant-20261027">
-  <link rel="stylesheet" href="/css/whatsapp-send.css?v=0.37.12-assistant-20261027">
-  <link rel="stylesheet" href="/css/supervision.css?v=0.37.12-assistant-20261027">
-  <link rel="stylesheet" href="/css/layout-fit.css?v=0.37.12-assistant-20261027">
-  <link rel="stylesheet" href="/css/follow-ups.css?v=0.37.12-assistant-20261027">
-  <link rel="stylesheet" href="/css/category-manager.css?v=0.37.12-assistant-20261027">
+  <link rel="stylesheet" href="/css/skeleton.css?v=0.38.1-admin-ui-20261105">
+  <link rel="stylesheet" href="/css/app.css?v=0.38.1-ficha-bot">
+  <script src="/js/feature-flags.js?v=0.38.1-admin-ui-20261105"></script>
+  <link rel="stylesheet" href="/css/responsive.css?v=0.38.1-admin-ui-20261105">
+  <link rel="stylesheet" href="/css/whatsapp-send.css?v=0.38.1-admin-ui-20261105">
+  <link rel="stylesheet" href="/css/supervision.css?v=0.38.1-admin-ui-20261105">
+  <link rel="stylesheet" href="/css/layout-fit.css?v=0.38.1-admin-ui-20261105">
+  <link rel="stylesheet" href="/css/follow-ups.css?v=0.38.2-categorias-agenda">
+  <link rel="stylesheet" href="/css/category-manager.css?v=0.38.1-admin-ui-20261105">
+  <link rel="stylesheet" href="/css/chat-features.css?v=0.38.1-chat-fix-20261105">
+  <link rel="stylesheet" href="/css/ad-origin.css">
+  <link rel="stylesheet" href="/css/team-access.css?v=0.38.1-team-access-r2-20261105">
 </head>
 <body>
   <header class="topbar">
@@ -36,7 +39,7 @@
     <div class="app-version-actions">
   <button id="changelog-button" class="changelog-button" type="button" title="Ver novidades e histórico de versões">
     <span class="changelog-icon" aria-hidden="true">▤</span>
-          <span id="app-version-label">v0.37.7 · prévia local</span>
+          <span id="app-version-label">v0.38.6</span>
     <span id="changelog-unread-dot" class="changelog-unread-dot" hidden></span>
   </button>
 
@@ -57,9 +60,8 @@
         <div class="sidebar-group">
           <p class="sidebar-group-label">Atendimento</p>
           <button class="sidebar-item channel-workspace-item active" type="button" data-channel-view="" aria-current="page"><span class="sidebar-item-icon" aria-hidden="true">◉</span><span class="sidebar-item-label">Visão geral</span></button>
+          <button id="metrics-button" class="sidebar-item" type="button" hidden title="Métricas"><span class="sidebar-item-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="13" width="4" height="8" rx="1"/><rect x="10" y="8" width="4" height="13" rx="1"/><rect x="17" y="3" width="4" height="18" rx="1"/></svg></span><span class="sidebar-item-label">Métricas</span></button>
           <button id="agenda-button" class="sidebar-item" type="button" hidden title="Agenda e follow-ups"><span class="sidebar-item-icon" aria-hidden="true">📅</span><span class="sidebar-item-label">Agenda</span><span id="agenda-badge" class="agenda-badge" hidden></span></button>
-          <button id="operations-button" class="sidebar-item" type="button" hidden title="Central de Operação (Supervisor/Master)"><span class="sidebar-item-icon" aria-hidden="true">📊</span><span class="sidebar-item-label">Operação</span></button>
-          <button id="productivity-button" class="sidebar-item" type="button" hidden title="Produtividade e Qualidade"><span class="sidebar-item-icon" aria-hidden="true">📈</span><span class="sidebar-item-label">Produtividade</span></button>
           <button id="enable-notifications" class="sidebar-item" type="button" hidden title="Ativar notificações do atendimento"><span class="sidebar-item-icon" aria-hidden="true">🔔</span><span class="sidebar-item-label">Ativar alertas</span></button>
           <button id="manage-devices" class="sidebar-item" type="button" hidden title="Dispositivos com notificações"><span class="sidebar-item-icon" aria-hidden="true">📱</span><span class="sidebar-item-label">Dispositivos</span></button>
         </div>
@@ -78,7 +80,6 @@
         </div>
         <div class="sidebar-group">
           <p class="sidebar-group-label">Campanhas</p>
-          <button id="meta-costs-button" class="sidebar-item" type="button" hidden title="Custos estimados da Meta (Master)"><span class="sidebar-item-icon" aria-hidden="true">💲</span><span class="sidebar-item-label">Custos Meta</span></button>
           <button id="campaigns-button" class="sidebar-item" type="button" hidden><span class="sidebar-item-icon" aria-hidden="true">📣</span><span class="sidebar-item-label">Campanhas</span></button>
           <button id="templates-library-button" class="sidebar-item" type="button" hidden title="Templates do WhatsApp e destinos automáticos"><span class="sidebar-item-icon" aria-hidden="true">📚</span><span class="sidebar-item-label">Templates</span></button>
         </div>
@@ -146,7 +147,7 @@
     </aside>
 
     <section class="conversation-list-panel">
-      <div class="list-heading"><div><span id="workspace-channel-eyebrow" class="workspace-channel-eyebrow">TODOS OS CANAIS DA EMPRESA</span><h1><span id="workspace-channel-title">Conversas</span><span id="workspace-company-label" class="workspace-company-label" hidden></span></h1><p id="list-summary">Carregando...</p><div id="company-filter-mobile" class="workspace-switcher workspace-switcher-mobile" role="tablist" aria-label="Área de trabalho (empresa)" hidden></div></div><div class="list-heading-actions"><button id="toggle-filters-panel" type="button" title="Recolher filtros e categorias" aria-label="Recolher filtros e categorias" aria-controls="filters-panel" aria-expanded="true">&lsaquo;</button><button id="density-toggle" type="button" title="Alternar densidade da lista" aria-label="Alternar densidade da lista" aria-pressed="false">≡</button><button id="new-conversation" class="new-conversation" type="button" title="Iniciar nova conversa">+ Nova</button><button id="clear-team-filter" title="Remover filtro de atendente" hidden>×</button><button id="refresh" title="Atualizar">↻</button></div></div>
+      <div class="list-heading"><div><span id="workspace-channel-eyebrow" class="workspace-channel-eyebrow">TODOS OS CANAIS DA EMPRESA</span><h1><span id="workspace-channel-title">Conversas</span><span id="workspace-company-label" class="workspace-company-label" hidden></span></h1><p id="list-summary">Carregando...</p><div id="company-filter-mobile" class="workspace-switcher workspace-switcher-mobile" role="tablist" aria-label="Área de trabalho (empresa)" hidden></div></div><div class="list-heading-actions"><button id="toggle-filters-panel" type="button" title="Recolher filtros e categorias" aria-label="Recolher filtros e categorias" aria-controls="filters-panel" aria-expanded="true">&lsaquo;</button><button id="density-toggle" type="button" title="Alternar densidade da lista" aria-label="Alternar densidade da lista" aria-pressed="false">≡</button><button id="new-conversation" class="new-conversation" type="button" title="Iniciar nova conversa">+ Nova</button><button id="clear-team-filter" title="Remover filtro de atendente" hidden>×</button><button id="refresh" type="button" title="Limpar filtros e exibir categorias ocultas" aria-label="Limpar filtros e exibir categorias ocultas">↻</button></div></div>
       <div id="conversation-list" class="conversation-list"><div class="skeleton-list"><div class="skeleton skeleton-card"></div><div class="skeleton skeleton-card"></div><div class="skeleton skeleton-card"></div><div class="skeleton skeleton-card"></div><div class="skeleton skeleton-card"></div></div></div>
     </section>
 
@@ -200,8 +201,15 @@
           <label class="assignee-control"><span>Prioridade</span><select id="priority-select" aria-label="Prioridade da conversa"><option value="NORMAL">Normal</option><option value="ALTA">Alta</option><option value="URGENTE">Urgente</option></select></label>
           <button id="claim-conversation" class="claim-action" type="button">Assumir conversa</button>
           <label id="merged-channel-control" class="merged-channel-control" hidden><span>Enviar por</span><select id="merged-channel-select" aria-label="Canal de envio"></select></label>
+          <button id="chat-open-search" type="button" title="Pesquisar na conversa" aria-label="Pesquisar na conversa" hidden>🔍</button>
         </div>
+        <div id="chat-pins-bar" hidden></div>
+        <section id="chat-ad-origin" aria-label="Anúncio de origem" hidden></section>
         <div id="messages" class="messages"></div>
+        <aside id="chat-search-panel" aria-label="Pesquisar na conversa" hidden></aside>
+        <button id="chat-scroll-bottom" type="button" aria-label="Ir para a última mensagem" hidden>↓<span hidden></span></button>
+        <div id="chat-emoji-picker" role="dialog" aria-label="Emojis" hidden></div>
+        <div id="chat-media-picker" role="dialog" aria-label="Figurinhas e GIFs" hidden></div>
         <div id="service-window-notice" class="service-window-notice" hidden>
           <span><b id="service-window-title">Janela de 24 horas encerrada</b><small id="service-window-description">A Meta permite retomar este contato somente com um template aprovado.</small><div id="pinned-transfer-templates" class="pinned-transfer-templates"></div></span>
           <button id="open-required-template" type="button">Usar template</button>
@@ -213,6 +221,7 @@
         <div id="composer-sender" class="composer-sender" aria-live="polite" hidden></div>
         <div id="cross-company-contact-warning" class="cross-company-contact-warning" role="status" hidden></div>
         <div id="crm-proposal-draft-notice" class="cross-company-contact-warning" hidden>Resumo de proposta preparado para revisão. O vínculo é temporário. <button type="button" id="clear-crm-proposal-draft">Desvincular proposta</button></div>
+        <div id="chat-reply-preview" aria-live="polite" hidden></div>
         <form id="composer" class="composer">
           <div class="composer-tools">
             <div class="composer-attach">
@@ -221,11 +230,15 @@
                 <button id="choose-attachment" type="button"><span aria-hidden="true">📎</span>Enviar arquivo</button>
                 <button id="record-audio" type="button" title="Gravar áudio" aria-label="Gravar áudio"><span aria-hidden="true">🎙️</span>Gravar áudio</button>
                 <button id="choose-audio" type="button"><span aria-hidden="true">🎵</span>Enviar áudio</button>
+                <button id="chat-menu-emoji" class="chat-attach-item" type="button" hidden><span aria-hidden="true">😊</span>Emojis</button>
+                <button id="chat-menu-media" class="chat-attach-item" type="button" hidden><span aria-hidden="true">💟</span>Figurinhas e GIFs</button>
               </div>
               <input id="attachment-input" type="file" hidden accept=".heic,.heif,.heics,.tif,.tiff,image/heic,image/heif,image/tiff,image/jpeg,image/png,image/bmp,image/webp,image/gif,.bmp,.webp,.gif,.mov,.avi,video/quicktime,video/x-msvideo,video/mp4,video/3gpp,video/3gp,application/pdf,text/plain,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,audio/*,.ogg,.opus,.mp3,.m4a,.aac,.amr,.wav,.flac">
               <input id="audio-file-input" type="file" accept="audio/*,.ogg,.opus,.mp3,.m4a,.aac,.amr,.wav,.flac" hidden>
             </div>
             <input id="audio-capture-input" type="file" accept="audio/*" capture hidden>
+            <button id="chat-open-emoji" class="composer-emoji-button" type="button" title="Emojis" aria-label="Emojis" hidden>😊</button>
+            <button id="chat-open-media" class="composer-emoji-button" type="button" title="Figurinhas e GIFs" aria-label="Figurinhas e GIFs" hidden>💟</button>
             <button id="open-templates" class="template-shortcut" type="button" title="Enviar template aprovado pela Meta" hidden>Templates</button>
             <button id="open-quick-replies" class="quick-reply-shortcut" type="button" title="Respostas rápidas" aria-label="Respostas rápidas"><svg viewBox="0 0 32 32" aria-hidden="true" focusable="false"><defs><linearGradient id="quick-bolt-gradient" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset=".5" stop-color="#c9c9c9"/><stop offset="1" stop-color="#555b63"/></linearGradient></defs><path d="M18.5 2.5 7 17h8l-1.5 12.5L25 14h-8.2l1.7-11.5Z"/></svg></button>
           </div>
@@ -498,14 +511,24 @@
       </section>
       <form id="team-form" class="team-form">
         <div class="team-form-heading"><div><span id="team-form-eyebrow">NOVA CONTA</span><h3 id="team-form-title">Adicionar membro</h3></div></div>
-        <div class="team-fields">
+        <nav class="team-editor-tabs" aria-label="Editar pessoa">
+          <button type="button" data-team-tab="account" aria-pressed="true">Conta</button>
+          <button type="button" data-team-tab="access" aria-pressed="false">Acessos</button>
+          <button type="button" data-team-tab="permissions" aria-pressed="false">Permissões</button>
+          <button type="button" data-team-tab="links" aria-pressed="false">Equipe e CRM</button>
+        </nav>
+        <section data-team-pane="account">        <div class="team-fields">
           <label><span>Nome</span><input id="team-name" maxlength="100" required></label>
           <label><span>E-mail</span><input id="team-email" type="email" autocomplete="off" required></label>
           <label><span>Perfil</span><select id="team-role"><option value="ATENDENTE">Atendente</option><option value="SUPERVISOR">Supervisor</option><option value="ADMIN">Master</option></select></label>
           <label><span id="team-password-label">Senha inicial</span><input id="team-password" type="password" minlength="8" autocomplete="new-password" placeholder="Mínimo de 8 caracteres"></label>
         </div>
         <label id="team-active-field" class="team-check single" hidden><input id="team-active" type="checkbox" checked><span>Conta ativa</span></label>
-        <fieldset class="team-permissions"><legend>Permissões adicionais</legend>
+        </section>
+        <section data-team-pane="access" hidden><fieldset class="team-companies"><legend>Empresas e cargo por empresa</legend><p>Sem empresa marcada, a pessoa não vê nada dela. O cargo pode variar por empresa (ex.: Supervisor na Mibro, Atendente na Sincrofit). Master vê todas.</p><div id="team-company-access"></div></fieldset>
+          <fieldset class="team-companies team-numbers"><legend>Números de WhatsApp</legend><p>Marque os números que esta pessoa pode usar. Empresas e categorias continuam definindo quais conversas ela acessa.</p><div id="team-number-access" aria-live="polite">Carregando números…</div></fieldset>
+          <fieldset class="team-categories"><legend>Categorias liberadas</legend><p>“Sem categoria”, cada categoria e cada subcategoria devem ser liberadas separadamente.</p><div id="team-category-access"></div></fieldset></section>
+        <section data-team-pane="permissions" hidden><fieldset class="team-permissions"><legend>Permissões adicionais</legend>
           <label class="team-check"><input id="permission-categories" type="checkbox"><span><b>Gerenciar categorias</b><small>Criar, editar e desativar categorias.</small></span></label>
           <label class="team-check"><input id="permission-transfer" type="checkbox"><span><b>Alterar responsável</b><small>Transferir a conversa para outro atendente.</small></span></label>
           <label class="team-check"><input id="permission-history" type="checkbox"><span><b>Visualizar histórico</b><small>Consultar as ações registradas nas conversas permitidas.</small></span></label>
@@ -517,16 +540,13 @@
           <label class="team-check"><input id="permission-manage-campaigns" type="checkbox"><span><b>Campanhas e templates</b><small>Permite envio em massa pelo painel Nova conversa, acessar Campanhas e usar templates nas conversas.</small></span></label>
           <label class="team-check"><input id="permission-own-productivity" type="checkbox"><span><b>Ver minha produtividade</b><small>Libera ao Atendente o painel com os próprios números (nunca os de outras pessoas). Supervisor e Master já têm acesso pelo cargo.</small></span></label>
           <label class="team-check"><input id="permission-after-hours" type="checkbox"><span><b>Editar regras fora do expediente</b><small>Vale só para Supervisor: altera horário, feriados e lembretes da própria empresa. Regras globais continuam só com o Master.</small></span></label>
-        </fieldset>
-        <fieldset class="team-companies"><legend>Acompanhar conversas de outros atendentes</legend><p>Somente leitura. Escolha quem esta pessoa pode acompanhar, sem alterar seu cargo. Para responder a um chat assumido por outra pessoa, ela precisa receber a transferência. Empresas, categorias e números liberados continuam valendo.</p><button id="configure-conversation-observers" type="button" disabled>Escolher atendentes permitidos</button><small id="conversation-observers-help">Salve a conta primeiro. Os vínculos são salvos ao adicionar ou remover cada pessoa.</small></fieldset>
-        <fieldset class="team-companies"><legend>Empresas e cargo por empresa</legend><p>Sem empresa marcada, a pessoa não vê nada dela. O cargo pode variar por empresa (ex.: Supervisor na Mibro, Atendente na Sincrofit). Master vê todas.</p><div id="team-company-access"></div></fieldset>
-        <fieldset class="team-categories"><legend>Categorias liberadas</legend><p>“Sem categoria”, cada categoria e cada subcategoria devem ser liberadas separadamente.</p><div id="team-category-access"></div></fieldset>
-        <fieldset class="team-companies" id="team-crm-access"><legend>Acesso ao CRM</legend>
+        </fieldset></section>
+        <section data-team-pane="links" hidden><fieldset class="team-companies"><legend>Acompanhar conversas de outros atendentes</legend><p>Somente leitura. Escolha quem esta pessoa pode acompanhar, sem alterar seu cargo. Para responder a um chat assumido por outra pessoa, ela precisa receber a transferência. Empresas, categorias e números liberados continuam valendo.</p><button id="configure-conversation-observers" type="button" disabled>Escolher atendentes permitidos</button><small id="conversation-observers-help">Salve a conta primeiro. Os vínculos são salvos ao adicionar ou remover cada pessoa.</small></fieldset><fieldset class="team-companies" id="team-crm-access"><legend>Acesso ao CRM</legend>
           <p>A conta CRM mantém seu cargo e sua carteira. Ao vincular, o login passa a usar o e-mail e a senha do Atendimento nos dois sistemas. Representantes continuam somente no CRM.</p>
           <p id="team-crm-access-status" role="status" aria-live="polite">Salve a conta e selecione Editar para conferir o acesso.</p>
           <div class="team-form-actions"><button id="team-crm-access-refresh" type="button" disabled>Conferir vínculo</button><button id="team-crm-access-toggle" type="button" disabled>Permitir acesso ao CRM</button></div>
           <small>Este controle é salvo separadamente. Desativar bloqueia o acesso compartilhado e os logins do CRM dessa identidade vinculada; não apaga a conta nem recupera a senha antiga do CRM.</small>
-        </fieldset>
+        </fieldset></section>
         <div class="team-form-actions"><button id="cancel-team-edit" type="button">Limpar</button><button type="submit">Salvar conta</button></div>
       </form>
     </div>
@@ -573,7 +593,7 @@
   <div class="changelog-current">
     <div>
       <small>VERSÃO ATUAL</small>
-      <strong id="changelog-current-version">v0.37.7</strong>
+      <strong id="changelog-current-version">v0.38.6</strong>
     </div>
     <span id="changelog-current-date"></span>
   </div>
@@ -705,22 +725,27 @@
 </dialog>
   <aside id="update-banner" class="update-banner" hidden><span><b>Nova versão disponível</b><small>Atualize para receber as melhorias do atendimento.</small></span><button id="update-later" type="button">Depois</button><button id="apply-update" type="button">Atualizar agora</button></aside>
   <div id="toast" class="toast" role="status"></div>
-  <script src="/js/optional-panels.js?v=0.37.12-assistant-20261027"></script>
-  <script src="/js/central-session-state.js?v=0.37.12-assistant-20261027"></script>
-  <script src="/js/composer-send-guard.js?v=outbound-20261028"></script>
-  <script src="/js/app.js?v=0.37.12-assistant-20261027"></script>
-  <script src="/js/conversation-archive.js?v=archive-20261029"></script>
-  <script src="/js/whatsapp-send-wizard.js?v=0.37.12-assistant-20261027"></script>
-  <script src="/js/follow-ups-ui.js?v=0.37.12-assistant-20261027"></script>
-  <script src="/js/release-loader.js?v=0.37.12-assistant-20261027"></script>
-  <script src="/js/internal-chat.js?v=0.37.12-assistant-20261027"></script>
-  <script src="/js/pwa.js?v=0.37.12-assistant-20261027"></script>
-  <script src="/js/command-palette.js?v=0.37.12-assistant-20261027"></script>
-  <script src="/js/layout-fit.js?v=0.37.12-assistant-20261027"></script>
-  <script src="/js/crm-context.js?v=0.37.12-assistant-20261027" defer></script>
-  <script src="/js/contact-warning.js?v=0.37.12-assistant-20261027" defer></script>
-  <script src="/js/crm-proposal-draft.js?v=0.37.12-assistant-20261027" defer></script>
-  <script src="/js/central-navigation.js?v=0.37.12-assistant-20261027" defer></script>
-  <script src="/js/crm-access-admin.js?v=0.37.12-assistant-20261027" defer></script>
+  <div id="chat-action-menu" role="menu" aria-label="Ações da mensagem" hidden></div>
+  <dialog id="chat-dialog"></dialog>
+  <script src="/js/optional-panels.js?v=0.38.1-admin-ui-20261105"></script>
+  <script src="/js/central-session-state.js?v=0.38.1-admin-ui-20261105"></script>
+  <script src="/js/composer-send-guard.js?v=0.38.1-admin-ui-20261105"></script>
+  <script src="/js/emoji-data.js?v=0.38.1-chat-fix-20261105"></script>
+  <script src="/js/chat-features.js?v=0.38.1-chat-fix-20261105"></script>
+  <script src="/js/ad-origin.js"></script>
+  <script src="/js/app.js?v=0.38.5"></script>
+  <script src="/js/conversation-archive.js?v=0.38.1-admin-ui-20261105"></script>
+  <script src="/js/whatsapp-send-wizard.js?v=0.38.1-admin-ui-20261105"></script>
+  <script src="/js/follow-ups-ui.js?v=0.38.2-categorias-agenda"></script>
+  <script src="/js/release-loader.js?v=0.38.6"></script>
+  <script src="/js/internal-chat.js?v=0.38.1-admin-ui-20261105"></script>
+  <script src="/js/pwa.js?v=0.38.1-admin-ui-20261105"></script>
+  <script src="/js/command-palette.js?v=0.38.1-admin-ui-20261105"></script>
+  <script src="/js/layout-fit.js?v=0.38.1-admin-ui-20261105"></script>
+  <script src="/js/crm-context.js?v=0.38.1-admin-ui-20261105" defer></script>
+  <script src="/js/contact-warning.js?v=0.38.1-admin-ui-20261105" defer></script>
+  <script src="/js/crm-proposal-draft.js?v=0.38.1-admin-ui-20261105" defer></script>
+  <script src="/js/central-navigation.js?v=0.38.1-admin-ui-20261105" defer></script>
+  <script src="/js/crm-access-admin.js?v=0.38.1-admin-ui-20261105" defer></script>
 </body>
 </html>

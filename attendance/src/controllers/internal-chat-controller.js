@@ -54,6 +54,16 @@ module.exports = {
     }
   },
 
+  async react(req, res, next) {
+    try {
+      const result = await chats.reactToMessage(req.params.messageId, req.body?.emoji, req.user, { company: workspace(req) });
+      await notifyMembers(result.chatId, "reaction");
+      return res.json(result);
+    } catch (error) {
+      return next(error);
+    }
+  },
+
   async messages(req, res, next) {
     try {
       return res.json(await chats.listMessages(req.params.id, req.user, { company: workspace(req),page:req.query.page,before:req.query.before,after:req.query.after,around:req.query.around,limit:req.query.limit }));

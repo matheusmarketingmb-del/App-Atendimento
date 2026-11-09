@@ -813,37 +813,12 @@ async function openAgentDrawer(userId) {
 // ---------------------------------------------------------------------
 // Boot / orquestração
 // ---------------------------------------------------------------------
-let sincrofitEntriesRequest = 0;
-async function loadSincrofitEntries() {
-  const request = ++sincrofitEntriesRequest;
-  const summary = $("#sincrofit-entries-summary"), bars = $("#sincrofit-entry-bars");
-  const panel = $("#sincrofit-entries-panel");
-  const selectedCompany = filterContext.companies?.find(c => c.slug === state.company || c.id === state.company);
-  const available = filterContext.companies?.some(c => c.slug === "sincrofit");
-  panel.hidden = !available || Boolean(selectedCompany && selectedCompany.slug !== "sincrofit");
-  if (panel.hidden) return;
-  summary.textContent = "Carregando…"; bars.replaceChildren();
-  try {
-    const data = await api(`/api/reports/sincrofit-entries?${queryFromState({ entryPattern: $("#sincrofit-entry-pattern").value })}`);
-    if (request !== sincrofitEntriesRequest) return;
-    if (data.truncated) { summary.textContent = "Período muito grande. Reduza o período para obter uma contagem completa."; return; }
-    summary.textContent = `${data.period.label} · ${data.uniqueContacts} contato(s) único(s)`;
-    renderRank("sincrofit-entry-bars", data.items, { metaFn: item => `${item.count} contato(s) · ${item.messages} mensagem(ns)`, emptyLabel: "Nenhuma entrada encontrada." });
-    // Unlike ranking bars, zero must be visibly zero.
-    $$("#sincrofit-entry-bars .rp-rank-fill").forEach((bar, index) => { if (!data.items[index].count) bar.style.width = "0%"; });
-  } catch (error) {
-    if (request === sincrofitEntriesRequest) summary.textContent = `Não foi possível carregar: ${error.message}`;
-  }
-}
-$("#sincrofit-entry-pattern").addEventListener("change", loadSincrofitEntries);
-
 async function loadAll() {
   writeStateToUrl();
   renderChips();
   renderKpis("kpi-main", MAIN_KPI_DEFS, null, false);
   renderKpis("kpi-quality", QUALITY_KPI_DEFS, null, true);
   loadProductivity();
-  loadSincrofitEntries();
   try {
     const [summary, status, channels, categories, heatmap, waitBuckets, alerts, companies] = await Promise.all([
       api(`/api/reports/conversations/summary?${queryFromState()}`),

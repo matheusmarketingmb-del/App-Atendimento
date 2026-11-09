@@ -3,6 +3,9 @@ const users = require("../services/user-management-service");
 const inboxEvents = require("../realtime/inbox-events");
 
 module.exports = {
+  async numbers(req, res, next) {
+    try { return res.json(await users.listNumberOptions(req.user)); } catch (error) { return next(error); }
+  },
   async list(req, res, next) {
     try { authorization.assertMaster(req.user); return res.json(await users.listUsers()); }
     catch (error) { return next(error); }

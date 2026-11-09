@@ -1,0 +1,6 @@
+.metrics-tabs { display:flex; flex-wrap:wrap; gap:6px; padding:12px 20px; border-bottom:1px solid var(--line,#37404b); background:var(--surface,#1d2229); }
+.metrics-tabs a { display:flex; align-items:center; min-height:40px; padding:8px 14px; border-radius:8px; color:var(--muted,#aeb8c5); text-decoration:none; font-size:13px; font-weight:600; }
+.metrics-tabs a:hover { color:var(--ink,#fff); background:var(--panel,#29313b); }
+.metrics-tabs a[aria-current=page] { background:var(--ink,#dce1e8); color:var(--surface,#161b22); }
+.metrics-tabs a:focus-visible { outline:2px solid var(--orange,#f26735); outline-offset:2px; }
+@media(max-width:600px) { .metrics-tabs { padding:8px 12px; }.metrics-tabs a { flex:1 1 40%; justify-content:center; } }

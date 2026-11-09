@@ -58,6 +58,14 @@ async function send({ channel, channelAccountId, kind = "text", ...params }) {
   const adapter = buildAdapter(channel, account);
   const capabilities = adapter.capabilities();
 
+  if (kind === "reaction") {
+    if (!capabilities.canSendReactions) throw channelError("NOT_SUPPORTED", `Canal ${channel} não suporta reações.`);
+    return adapter.sendReaction(params);
+  }
+  if (kind === "sticker") {
+    if (!capabilities.canSendStickers) throw channelError("NOT_SUPPORTED", `Canal ${channel} não suporta figurinhas.`);
+    return adapter.sendSticker(params);
+  }
   if (kind === "media") {
     if (!capabilities.canSendMedia) throw channelError("NOT_SUPPORTED", `Canal ${channel} não suporta envio de mídia.`);
     return adapter.sendMedia(params);

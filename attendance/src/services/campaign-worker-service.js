@@ -101,13 +101,17 @@ async function recoverStuckContacts(now) {
 }
 
 async function promoteQueuedCampaigns(now) {
+  const ready = { OR: [
+    { status: "QUEUED", OR: [{ scheduledAt: null }, { scheduledAt: { lte: now } }] },
+    { status: "SCHEDULED", scheduledAt: { lte: now } },
+  ] };
   await prisma.campaign.updateMany({
-    where: { status: "QUEUED", OR: [{ scheduledAt: null }, { scheduledAt: { lte: now } }] },
+    where: { ...ready, startedAt: null },
     data: { status: "RUNNING", startedAt: now },
   });
   await prisma.campaign.updateMany({
-    where: { status: "SCHEDULED", scheduledAt: { lte: now } },
-    data: { status: "RUNNING", startedAt: now },
+    where: { ...ready, startedAt: { not: null } },
+    data: { status: "RUNNING" },
   });
 }
 

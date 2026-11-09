@@ -9,10 +9,12 @@
   <script>try{const saved=localStorage.getItem("mibro-theme");document.documentElement.dataset.theme=saved||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light")}catch{}</script>
   <link rel="stylesheet" href="/css/relatorio-conversas.css?v=0.37.12-assistant-20261027">
   <link rel="stylesheet" href="/css/responsive.css?v=0.37.12-assistant-20261027">
+  <link rel="stylesheet" href="/css/metrics-tabs.css?v=0.38.1-admin-ui-20261105">
 </head>
 <body class="rp-body">
   <header class="rp-topbar">
     <a class="rp-brand" href="/"><img src="/assets/central-mark.svg" alt="Central de Atendimento"><small>Produtividade e Qualidade</small></a>
+
     <a class="rp-back" href="/">&larr; Central</a>
     <div class="rp-topbar-right">
       <button id="theme-toggle" class="rp-icon-btn" type="button" title="Alternar tema">&#9790;</button>
@@ -61,15 +63,6 @@
         <div class="rp-head-controls"><div class="rp-seg" id="prod-granularity" role="group" aria-label="Agrupar por"></div></div>
       </div>
       <div class="rp-chart-wrap"><svg class="rp-chart-svg" id="finalized-chart" role="img" aria-label="Atendimentos finalizados por período"></svg><div class="rp-chart-tooltip" id="finalized-tooltip"></div></div>
-    </section>
-
-    <section class="rp-card" id="sincrofit-entries-panel" aria-labelledby="sincrofit-entries-title">
-      <div class="rp-card-head">
-        <div><h3 id="sincrofit-entries-title">Sincrofit · Entradas por mensagem-padrão</h3><p id="sincrofit-entries-summary" role="status" aria-live="polite">Carregando…</p></div>
-        <label>Mensagem <select id="sincrofit-entry-pattern" aria-label="Filtrar mensagem de entrada"><option value="">Todas</option><option value="wholesale">Quero comprar no atacado</option><option value="information">Mais informações</option></select></label>
-      </div>
-      <div id="sincrofit-entry-bars" role="img" aria-label="Contatos únicos por mensagem-padrão"></div>
-      <p class="rp-time-basis">Cada contato conta uma vez por frase no período; pode aparecer nas duas. A contagem usa mensagens recebidas, não comprova origem em anúncio. Segue os filtros acima e as permissões; equipe, responsável e status são os atuais. Somente números Sincrofit identificados.</p>
     </section>
 
     <div class="rp-grid-2">
@@ -208,6 +201,7 @@
   <aside class="rp-drawer" id="agent-drawer"></aside>
 
   <div id="toast" class="rp-toast"></div>
-  <script src="/js/relatorio-conversas.js?v=0.37.12-assistant-20261027"></script>
+  <script src="/js/relatorio-conversas.js?v=0.37.21-nav-cleanup-20261103"></script>
+  <script src="/js/metrics-nav.js?v=0.38.1-admin-ui-20261105"></script>
 </body>
 </html>

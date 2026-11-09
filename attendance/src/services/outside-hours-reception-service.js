@@ -20,7 +20,7 @@ function noticeText(bot, conversation, holiday) {
 
 // Dependency injection keeps all tests offline. A durable unique claim precedes
 // provider I/O; ambiguous failures are never retried automatically.
-async function receiveOutsideHours({ db, conversation, message, active, now, automationEnabled, automationStillEnabled, send, isOptedOut, assertWindow, privateStamp }) {
+async function receiveOutsideHours({ db, conversation, message, active, now, automationEnabled, automationStillEnabled, continueWithAssistant, send, isOptedOut, assertWindow, privateStamp }) {
   if (!automationEnabled || conversation.channel !== 'META' || !humanFree(conversation) || !conversation.companyId) return false;
   // A unified inbox may currently display another sender. Only the inbound
   // message chooses the account; null is the historical primary number.
@@ -40,6 +40,7 @@ async function receiveOutsideHours({ db, conversation, message, active, now, aut
   if (active && active.botId !== bot.id && active.botId !== bot.featureFlags.assistantBotId) return false;
   const resolved = await resolveCalendar(db, bot, now);
   if (!resolved?.availability.configured || resolved.availability.open) return false;
+  if (await continueWithAssistant?.(bot)) return false;
   if (active?.status === 'RUNNING') return true; // owner finishes its turn; no parallel send
   const period = closedPeriod({ bot, ...resolved }, now);
   if (!period) return true; // no safe calendar: leave the inbound message for the team

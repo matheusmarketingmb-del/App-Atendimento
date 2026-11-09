@@ -1,7 +1,7 @@
 // Only version metadata loads with the inbox. Full history loads on demand.
 (() => {
-  const version='0.37.11';
-  const revision='security-performance-20261026';
+  const version='0.38.6';
+  const revision='meta-ads-20261109';
   const button=document.querySelector('#changelog-button'),label=document.querySelector('#app-version-label');
   if(label)label.textContent='v'+version;
   const dot=document.querySelector('#changelog-unread-dot');

@@ -136,6 +136,17 @@ function campaignListStateMarkup() {
   return '<div class="list-state"><b>Nenhuma campanha criada.</b><p>Use “+ Nova” para criar a primeira.</p></div>';
 }
 
+const campaignStartFormatter = new Intl.DateTimeFormat("pt-BR", {
+  timeZone: "America/Sao_Paulo", dateStyle: "short", timeStyle: "short",
+});
+
+function campaignStartMarkup(campaign) {
+  if (!campaign.startedAt) return "";
+  const start = new Date(campaign.startedAt);
+  if (Number.isNaN(start.getTime())) return "";
+  return `Iniciada em <time datetime="${start.toISOString()}">${campaignStartFormatter.format(start)}</time>`;
+}
+
 function renderCampaignList() {
   $("#campaign-count").textContent = state.listStatus === "ready" ? `${state.campaigns.length} campanha(s)` : state.listStatus === "loading" ? "Carregando..." : "Lista indisponível";
   $("#campaign-list").setAttribute("aria-busy", String(state.listStatus === "loading"));
@@ -143,6 +154,7 @@ function renderCampaignList() {
     <button class="bot-card ${state.selected?.id === campaign.id ? "active" : ""}" type="button" data-campaign-id="${escapeHtml(campaign.id)}" ${state.selected?.id === campaign.id ? 'aria-current="true"' : ""}>
       <header><b>${escapeHtml(campaign.name)}</b>${window.CompanyContext.badge(campaign.company)}<span class="mini-status ${campaign.status}">${statusLabels[campaign.status]}</span></header>
       <small>${escapeHtml(campaign.templateName)}${campaign.channelAccount ? ` · ${escapeHtml(campaign.channelAccount.name)}` : ""}</small>
+      ${campaign.startedAt ? `<small>${campaignStartMarkup(campaign)}</small>` : ""}
       <div class="bot-meta"><span>${campaign._count?.contacts ?? 0} contato(s)</span></div>
     </button>
   `).join("") : campaignListStateMarkup();
@@ -846,6 +858,8 @@ function renderEditor() {
   $("#editor-eyebrow").textContent = "CAMPANHA SELECIONADA";
   $("#editor-title").textContent = campaign.name;
   $("#editor-description").textContent = campaign.description || "Sem descrição.";
+  $("#editor-started-at").innerHTML = campaignStartMarkup(campaign);
+  $("#editor-started-at").hidden = !$("#editor-started-at").textContent;
   $("#status-actions").hidden = false;
   $("#status-badge").textContent = statusLabels[campaign.status];
   document.querySelectorAll(".requires-bot").forEach((element) => { element.hidden = false; });
@@ -861,6 +875,7 @@ function startNewCampaign() {
   $("#editor-eyebrow").textContent = "NOVA CAMPANHA";
   $("#editor-title").textContent = "Criar campanha";
   $("#editor-description").textContent = "Siga as etapas: identidade, número, template, variáveis e revisão.";
+  $("#editor-started-at").hidden = true;
   $("#status-actions").hidden = true;
   document.querySelectorAll(".requires-bot").forEach((element) => { element.hidden = true; });
   resetEditor();

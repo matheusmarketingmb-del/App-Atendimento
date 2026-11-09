@@ -412,6 +412,22 @@ async function listMessages(chatId, viewer, { company, page, before, after, arou
   }).then(messages=>messages.reverse());
 }
 
+// Reação local: nunca passa pela Meta nem pelas tabelas do WhatsApp.
+async function reactToMessage(messageId, emoji, viewer, { company } = {}) {
+  const features = require("./chat-features");
+  features.assertEnabled("internalReactions");
+  const normalized = features.normalizeEmoji(emoji);
+  const message = await prisma.internalMessage.findUnique({ where: { id: String(messageId) }, select: { id: true, chatId: true, type: true } });
+  if (!message) throw notFound("Mensagem não encontrada.");
+  const { chat } = await assertMember(message.chatId, viewer, { company });
+  assertWritable(chat);
+  if (message.type !== "USER") throw badRequest("Esta mensagem não aceita reações.");
+  const key = { messageId_userId: { messageId: message.id, userId: viewer.id } };
+  if (normalized) await prisma.internalMessageReaction.upsert({ where: key, update: { emoji: normalized }, create: { messageId: message.id, userId: viewer.id, emoji: normalized } });
+  else await prisma.internalMessageReaction.deleteMany({ where: { messageId: message.id, userId: viewer.id } });
+  return { chatId: message.chatId, messageId: message.id, emoji: normalized };
+}
+
 function assertWritable(chat) {
   if (chatScope(chat) === "LEGACY") throw forbidden(LEGACY_READ_ONLY);
   if (chat.archivedAt) throw forbidden("Este grupo foi encerrado e está somente para leitura.");
@@ -1011,6 +1027,7 @@ async function chatMemberIds(chatId) {
 }
 
 module.exports = {
+  reactToMessage,
   addGroupMembers,
   archiveGroup,
   chatAudience,

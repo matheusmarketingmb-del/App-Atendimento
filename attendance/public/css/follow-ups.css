@@ -8,6 +8,21 @@ html[data-theme="dark"] { --fu-critical:#f97066; --fu-critical-soft:#3a1d1b; --f
 .agenda-badge { position:absolute; top:6px; right:8px; min-width:18px; height:18px; padding:0 5px; display:inline-grid; place-items:center; border-radius:9px; color:var(--panel); background:var(--muted); font-size:10px; font-weight:800; line-height:1; }
 .agenda-badge.critical { color:#fff; background:var(--fu-critical); }
 .agenda-badge[hidden] { display:none; }
+.agenda-badge.due-today::after {
+  content:"";
+  position:absolute;
+  inset:-2px;
+  border:2px solid var(--orange);
+  border-radius:inherit;
+  pointer-events:none;
+}
+@media (prefers-reduced-motion:no-preference) {
+  .agenda-badge.due-today::after { animation:agenda-due-pulse 2s ease-in-out infinite; }
+}
+@keyframes agenda-due-pulse {
+  0%,100% { opacity:1; transform:scale(1); }
+  50% { opacity:.25; transform:scale(1.17); }
+}
 
 .follow-up-chip { margin-left:6px; padding:3px 8px; border:1px solid var(--line); border-radius:999px; color:var(--ink); background:var(--panel); font:inherit; font-size:10px; font-weight:700; white-space:nowrap; cursor:pointer; }
 .follow-up-chip.critical { border-color:var(--fu-critical); color:var(--fu-critical); background:var(--fu-critical-soft); }

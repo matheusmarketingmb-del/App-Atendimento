@@ -9,6 +9,8 @@ const MetaCloudChannel = require("./channels/meta-cloud-channel");
 const { routeMetaWebhook } = require("./services/meta-webhook-routing-service");
 const { saveIncoming, updateStatus, sendTextToPhone } = require("./services/message-service");
 const { createInboxController } = require("./controllers/inbox-controller");
+const { createChatController } = require("./controllers/chat-controller");
+const { applyReactionStatus } = require("./services/chat-message-service");
 const authController = require("./controllers/auth-controller");
 const companyController = require("./controllers/company-controller");
 const whatsappAccounts = require("./services/whatsapp-account-service");
@@ -18,6 +20,7 @@ const {
 } = require("./middleware/auth");
 const operationsPanel = require("./services/operations-panel-service");
 const metaCosts = require("./services/meta-cost-service");
+const metaAds = require("./services/meta-ads-service");
 const templatePerformance = require("./services/template-performance-service");
 const conversationSettingsController = require("./controllers/conversation-settings-controller");
 const afterHoursController = require("./controllers/after-hours-controller");
@@ -59,7 +62,7 @@ const omnichannelMessageService = require("./services/channels/omnichannel-messa
 const { getGlobalSettings } = require("./services/channels/integration-global-settings-service");
 const { checkInboundFlood, startPeriodicCleanup } = require("./services/inbound-flood-guard-service");
 const { verifyMediaToken } = require("./services/channels/social-media-link-service");
-const { resolveMedia } = require("./services/media-storage-service");
+const { resolveMedia, validateSticker } = require("./services/media-storage-service");
 
 function decryptAccountSecretsSafe(account) {
   try { return decryptSecrets(account); }
@@ -143,6 +146,8 @@ function createApp({ channel = new MetaCloudChannel() } = {}) {
   const app = express();
   if (process.env.NODE_ENV === "production") app.set("trust proxy", 1);
   const inbox = createInboxController(channel);
+  const chatApi = createChatController(channel);
+  const libraryUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 16 * 1024 * 1024, files: 1 } }).single("file");
   const campaignController = createCampaignController(channel);
   const outboundBulkController = createOutboundBulkController(channel);
   app.use(helmet({ contentSecurityPolicy: false }));
@@ -232,14 +237,21 @@ function createApp({ channel = new MetaCloudChannel() } = {}) {
             if (["image", "audio", "video", "sticker", "document"].includes(event.type) && event.mediaId) {
               const existing = await prisma.message.findUnique({ where: { externalId: event.externalId }, select: { id: true } });
               if (existing) continue;
-              const media = await eventChannel.downloadMedia(event.mediaId, {
-                maxSize: event.type === "sticker" ? 500 * 1024
-                  : (event.type === "image" ? 5 * 1024 * 1024
-                    : (event.type === "document" ? 100 * 1024 * 1024 : 16 * 1024 * 1024)),
-              });
-              event.mediaBuffer = media.buffer;
-              event.mediaMimeType = media.mimeType;
-              event.mediaFileName ||= media.fileName;
+              try {
+                const media = await eventChannel.downloadMedia(event.mediaId, {
+                  maxSize: event.type === "sticker" ? 500 * 1024
+                    : (event.type === "image" ? 5 * 1024 * 1024
+                      : (event.type === "document" ? 100 * 1024 * 1024 : 16 * 1024 * 1024)),
+                });
+                if (event.type === "sticker") validateSticker(media);
+                event.mediaBuffer = media.buffer;
+                event.mediaMimeType = media.mimeType;
+                event.mediaFileName ||= media.fileName;
+              } catch (mediaError) {
+                // Figurinha com falha não some da conversa: fica "indisponível".
+                if (event.type !== "sticker") throw mediaError;
+                console.warn("[WEBHOOK] figurinha sem mídia válida; mensagem mantida:", mediaError.message);
+              }
             }
             const result = await saveIncoming(event, account);
             if (!result.duplicate) {
@@ -310,6 +322,7 @@ function createApp({ channel = new MetaCloudChannel() } = {}) {
             if (statusAccount) changedCompanyIds.add(statusAccount.companyId);
             const result = await updateStatus(event);
             if (result?.count) changed = true;
+            if (await applyReactionStatus(event)) changed = true;
             // Custos Meta: estimativa a partir do `pricing` do status (nunca
             // bloqueia nem derruba o webhook).
             metaCosts.recordStatusEvent(event).catch(() => {});
@@ -472,6 +485,8 @@ function createApp({ channel = new MetaCloudChannel() } = {}) {
   app.get(["/configuracoes", "/configuracoes.html"], requireConversationSettingsPage, (_req, res) => (
     res.sendFile(path.join(process.cwd(), "public", "configuracoes.html"))
   ));
+  app.get(["/recursos-chat", "/recursos-chat.html"], requireMasterPage, (_req, res) => res.sendFile(path.join(process.cwd(), "public", "recursos-chat.html")));
+  app.get(["/metricas", "/metricas.html"], requirePageAuth, (_req, res) => res.sendFile(path.join(process.cwd(), "public", "metricas.html")));
   app.get(["/fora-do-expediente", "/fora-do-expediente.html"], requireAfterHoursPage, (_req, res) => (
     res.sendFile(path.join(process.cwd(), "public", "fora-do-expediente.html"))
   ));
@@ -481,8 +496,16 @@ function createApp({ channel = new MetaCloudChannel() } = {}) {
     return res.sendFile(path.join(process.cwd(), "public", "service-worker.js"));
   });
   app.use(require("./middleware/precompressed-static").precompressedStatic());
+  app.get(['/anuncios-meta', '/anuncios-meta.html'], requireMasterPage, (_req, res) => res.sendFile(path.join(process.cwd(), 'public', 'anuncios-meta.html')));
   app.use(express.static("public", { index: false }));
   app.use("/api", authenticate);
+  app.use(["/api/chat", "/api/messages", "/api/conversations", "/api/internal-chats"], require("./services/chat-feature-settings-service").middleware);
+  app.get("/api/admin/chat-features", async (req, res, next) => {
+    try { res.set("Cache-Control", "no-store"); res.json(await require("./services/chat-feature-settings-service").read(req.user)); } catch (error) { next(error); }
+  });
+  app.patch("/api/admin/chat-features", async (req, res, next) => {
+    try { res.json(await require("./services/chat-feature-settings-service").save(req.user, req.body)); } catch (error) { next(error); }
+  });
   app.get("/api/events", inboxEvents.handle);
   app.get("/api/push/public-key", pushController.publicKey);
   app.post("/api/push/subscriptions", pushController.subscribe);
@@ -535,6 +558,7 @@ app.post(
   // Grupos do chat interno (permissões de membro/admin validadas no serviço).
   app.post("/api/internal-chats/groups", internalChatController.createGroup);
   app.get("/api/internal-chats/:id/group", internalChatController.group);
+  app.post("/api/internal-chats/messages/:messageId/reactions", internalChatController.react);
   app.patch("/api/internal-chats/:id/group", internalChatController.renameGroup);
   app.post("/api/internal-chats/:id/members", internalChatController.addGroupMembers);
   app.patch("/api/internal-chats/:id/members/:userId", internalChatController.setGroupMemberRole);
@@ -592,6 +616,8 @@ app.post(
     try { return res.json(await require("./services/operational-health-service").getDiagnostics(req.user)); }
     catch (error) { return next(error); }
   });
+  app.get('/api/meta-ads/accounts', async (req,res,next) => { try { res.set('Cache-Control','no-store'); res.json(await metaAds.getAccounts(req.user,req.query)); } catch(error) { next(error); } });
+  app.get('/api/meta-ads/report', async (req,res,next) => { try { res.set('Cache-Control','no-store'); res.json(await metaAds.getReport(req.user,req.query)); } catch(error) { next(error); } });
   // Custos Meta (Master): relatório estimado, preços versionados e orçamento.
   app.get("/api/meta-costs/report", async (req, res, next) => {
     try { return res.json(await metaCosts.getCostReport(req.user, req.query)); } catch (error) { return next(error); }
@@ -649,6 +675,23 @@ app.post(
   app.post("/api/conversations/:id/audios", audioUpload, inbox.replyAudio);
   app.post("/api/conversations/:id/finalize", inbox.finalize);
   app.get("/api/messages/:messageId/media", inbox.media);
+  app.get("/api/chat/features", chatApi.features);
+  app.post("/api/messages/:messageId/reactions", chatApi.react);
+  app.put("/api/messages/:messageId/star", chatApi.star);
+  app.put("/api/messages/:messageId/pin", chatApi.pin);
+  app.post("/api/messages/:messageId/forward", chatApi.forward);
+  app.post("/api/messages/:messageId/save-sticker", chatApi.saveSticker);
+  app.get("/api/conversations/:id/stars", chatApi.stars);
+  app.get("/api/conversations/:id/pins", chatApi.pins);
+  app.get("/api/conversations/:id/message-search", chatApi.search);
+  app.get("/api/conversations/:id/messages/:messageId/locate", chatApi.locate);
+  app.get("/api/conversations/:id/messages/:messageId/context", chatApi.context);
+  app.post("/api/conversations/:id/library-send", chatApi.sendAsset);
+  app.get("/api/media-library", chatApi.libraryList);
+  app.post("/api/media-library", libraryUpload, chatApi.libraryUpload);
+  app.put("/api/media-library/:assetId/favorite", chatApi.libraryFavorite);
+  app.delete("/api/media-library/:assetId", chatApi.libraryRemove);
+  app.get("/api/media-library/:assetId/file", chatApi.libraryFile);
   app.post("/api/messages/:messageId/moderate", inbox.moderateComment);
   app.get("/api/categories", inbox.categories);
   app.get("/api/category-visibility", inbox.categoryVisibility);
@@ -693,6 +736,7 @@ app.post(
   app.patch("/api/contacts/:contactId/notes/:noteId", inbox.pinNote);
   app.delete("/api/contacts/:contactId/notes/:noteId", inbox.deleteNote);
   app.get("/api/admin/users", userManagementController.list);
+  app.get("/api/admin/users/number-options", userManagementController.numbers);
   app.get("/api/admin/audit-logs", auditController.list);
   app.post("/api/admin/users", userManagementController.create);
   app.patch("/api/admin/users/:id", userManagementController.update);
@@ -774,7 +818,6 @@ app.post(
   // antigo relatório semanal embutido em Configurações → Conversas.
   app.get("/api/reports/access", conversationReportController.access);
   app.get("/api/reports/productivity", conversationReportController.productivity);
-  app.get("/api/reports/sincrofit-entries", conversationReportController.sincrofitEntries);
   app.get("/api/reports/productivity/export", conversationReportController.exportAgentsCsv);
   app.get("/api/reports/productivity/agents/:userId", conversationReportController.productivityAgent);
   app.get("/api/reports/conversations/summary", conversationReportController.summary);

@@ -32,8 +32,17 @@ function renderReport(report) {
     ["Templates", report.total.templates],
     ["Templates respondidos", `${report.total.repliedTemplates || 0} / ${report.total.responseEligibleTemplates || 0}`],
     ["Taxa de resposta", responseRate(report.total.templateResponseRate)],
-    ["Custo estimado", money(report.total.estimatedCost)],
+    ["Cobrança estimada · recibos", money(report.total.estimatedCost)],
+    ["Valor de tabela · templates entregues", report.tariff?.unpricedCount ? "Parcial · " + money(Math.round(report.tariff.tableValue * 100) / 100) : money(report.tariff?.tableValue == null ? null : Math.round(report.tariff.tableValue * 100) / 100)],
   ].map(([label, value]) => `<article class="ops-card"><span>${esc(label)}</span><strong>${esc(value)}</strong></article>`).join("");
+  let explanation = document.getElementById("cost-tariff-note");
+  if (!explanation) {
+    explanation = document.createElement("div"); explanation.id = "cost-tariff-note"; explanation.className = "ops-panel";
+    $("#cost-total").after(explanation);
+  }
+  const tariff = report.tariff;
+  explanation.innerHTML = `<p class="ops-note">Valor de tabela: tarifa cadastrada vigente no envio, antes de gratuidades, apenas para templates entregues. Não é uma fatura. A cobrança estimada mantém os valores dos recibos da Meta. ${Number(tariff?.freeCount) || 0} template(s) entregue(s) com gratuidade indicada.${tariff?.unpricedCount ? ` ${Number(tariff.unpricedCount)} sem tarifa: valor de tabela parcial.` : ""}</p>
+    ${(report.templateTariffs || []).length ? `<details><summary>Detalhar valor de tabela por template · período selecionado acima</summary><div class="cost-table"><table><thead><tr><th>Template / número</th><th>Entregues</th><th>Valor de tabela</th></tr></thead><tbody>${report.templateTariffs.map(row => `<tr><td>${esc(row.templateName || "Não identificado")}<br><small>${esc(report.companies.find(c => c.companyId === row.companyId)?.accounts.find(a => a.channelAccountId === row.channelAccountId)?.name || "Sem número vinculado")}</small></td><td>${Number(row.delivered)}</td><td>${esc(money(row.tableValue == null ? null : Math.round(row.tableValue * 100) / 100))}${row.unpricedCount ? " · parcial/sem tarifa" : ""}</td></tr>`).join("")}</tbody></table></div></details>` : ""}`;
   $("#cost-unpriced").hidden = !report.unpricedCount;
   $("#cost-unpriced").textContent = `${report.unpricedCount} envio(s) sem preço cadastrado para a categoria/país — cadastre na tabela de preços para entrar no total.`;
   $("#cost-companies").innerHTML = report.companies.map((company) => {
@@ -48,7 +57,7 @@ function renderReport(report) {
         <dt>Templates autenticação</dt><dd>${company.byCategory.AUTHENTICATION}</dd>
         <dt>Templates respondidos / avaliáveis</dt><dd>${company.repliedTemplates || 0} / ${company.responseEligibleTemplates || 0}</dd>
         <dt>Taxa de resposta</dt><dd>${responseRate(company.templateResponseRate)}</dd>
-        <dt>Custo estimado</dt><dd>${money(company.estimatedCost)}</dd>
+        <dt>Cobrança estimada · recibos</dt><dd>${money(company.estimatedCost)}</dd>
       </dl>
       ${budget ? `<div class="cost-budget ${tone}"><i style="--value:${Math.min(100, budget.percent || 0)}%"></i><small>Orçamento do mês: ${money(budget.usedThisMonth)} de ${money(budget.monthlyBudget)} (${budget.percent ?? 0}%)</small></div>` : ""}
       ${company.accounts.length > 1 ? `<div class="cost-table"><table><thead><tr><th>Número</th><th>Serviço</th><th>Templates</th><th>Custo</th></tr></thead><tbody>${company.accounts.map((account) => `<tr><td>${esc(account.name)}</td><td>${account.serviceMessages}</td><td>${account.templates}</td><td>${money(account.estimatedCost)}</td></tr>`).join("")}</tbody></table></div>` : ""}
@@ -106,9 +115,36 @@ function renderAuthorCosts(rows) {
   $("#cost-author-detail").innerHTML = rows.length ? `<div class="author-cost-grid">${people.map(authorCostCard).join('')}</div>${!people.length ? '<p class="ops-note">Nenhum gasto estimado atribuído a atendentes neste período.</p>' : ''}${zeroCost.length ? `<details class="cost-secondary"><summary>Atendentes sem custo estimado (${zeroCost.length})</summary><div class="author-cost-grid">${zeroCost.map(authorCostCard).join('')}</div></details>` : ''}${other.length ? `<details class="cost-secondary"><summary>Bot, campanhas automáticas e outras origens · ${esc(costMoney(other.reduce((sum,group) => sum + group.cost,0)))}</summary><div class="author-cost-grid">${other.map(authorCostCard).join('')}</div></details>` : ''}` : `<p class="ops-note">Nenhum envio para detalhar.</p>`;
 }
 
+function costPeriodParams() {
+  const period = $("#cost-period").value;
+  const daily = period === "date";
+  $("#cost-date-filter").hidden = !daily;
+  document.querySelectorAll("[data-cost-range]").forEach(label => { label.hidden = label.dataset.costRange !== period; });
+  const monthly = period === "month-range";
+  if (!daily && !monthly && period !== "date-range") return new URLSearchParams({ period });
+  const today = new Intl.DateTimeFormat("sv-SE", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+  const endLimit = monthly ? today.slice(0, 7) : today;
+  const startInput = $(daily ? "#cost-date" : monthly ? "#cost-from-month" : "#cost-from-date");
+  const endInput = daily ? startInput : $(monthly ? "#cost-to-month" : "#cost-to-date");
+  startInput.max = endLimit;
+  endInput.max = endLimit;
+  startInput.value ||= endLimit;
+  endInput.value ||= endLimit;
+  const { value: first } = startInput;
+  const { value: last } = endInput;
+  const format = monthly ? /^\d{4}-(0[1-9]|1[0-2])$/ : /^\d{4}-\d{2}-\d{2}$/;
+  if (!format.test(first) || !format.test(last) || first > last || last > endLimit) {
+    throw new Error("Escolha um intervalo válido, com início até o fim e sem datas futuras.");
+  }
+  const from = monthly ? `${first}-01` : first;
+  const to = monthly ? new Date(Date.UTC(Number(last.slice(0, 4)), Number(last.slice(5)), 0)).toISOString().slice(0, 10) : last;
+  return new URLSearchParams({ from: `${from}T00:00:00.000-03:00`, to: `${to}T23:59:59.999-03:00` });
+}
+
 async function loadReport() {
   const sequence = ++reportSequence;
-  const params = new URLSearchParams({ period: $("#cost-period").value });
+  let params;
+  try { params = costPeriodParams(); } catch (error) { toast(error.message, true); return; }
   if (state.company !== "ALL") params.set("company", state.company);
   if ($("#cost-account").value) params.set("channelAccountId", $("#cost-account").value);
   try {

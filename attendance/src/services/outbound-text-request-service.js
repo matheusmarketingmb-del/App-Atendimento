@@ -4,7 +4,7 @@ const fail = (message, code, statusCode = 409) => Object.assign(new Error(messag
 
 // Existing ledger's unique constraint claims the operation before the external
 // side effect. A replay never sends again, even after process restart.
-async function sendOnce({ client, userId, conversationId, requestId, text, crmProposal, send }) {
+async function sendOnce({ client, userId, conversationId, requestId, text, crmProposal, replyToMessageId, send }) {
   if (requestId === undefined) return send(async () => {}); // older clients
   if (typeof requestId !== "string" || !/^[a-zA-Z0-9_-]{16,100}$/.test(requestId)) {
     throw fail("Identificação do envio inválida. Atualize a página.", "INVALID_SEND_REQUEST", 400);
@@ -12,7 +12,7 @@ async function sendOnce({ client, userId, conversationId, requestId, text, crmPr
   const conversation = await client.conversation.findUnique({ where: { id: conversationId }, select: { channel: true, channelAccountId: true, companyId: true } });
   if (!conversation) throw fail("Conversa não encontrada.", "CONVERSATION_NOT_FOUND", 404);
   const externalEventId = `outbound-text-v1:${digest([conversation.companyId, conversationId, userId, requestId])}`;
-  const fingerprint = digest([text, crmProposal || null]);
+  const fingerprint = digest(replyToMessageId ? [text, crmProposal || null, replyToMessageId] : [text, crmProposal || null]);
   const where = { channel_externalEventId: { channel: conversation.channel, externalEventId } };
   let event;
   try {

@@ -50,6 +50,8 @@ const companyBadge = (company, extraClass = "") => (company && state.companies.s
 const multiCompany = () => state.companies.length > 1;
 const companyQuery = () => (state.companyFilter && state.companyFilter !== "ALL" ? state.companyFilter : "");
 const activeCompany = () => state.companies.find((company) => company.slug === state.companyFilter) || null;
+const canViewSidebarUncategorized = () => state.currentUser?.isMaster
+  || (activeCompany()?.permissions?.canViewUncategorized ?? state.currentUser?.canViewUncategorized);
 
 // A visão "Todas" reúne setores de mesmo código. Nesse caso a borda
 // mostra as cores de todas as empresas, sem atribuir o filtro a só uma.
@@ -176,6 +178,29 @@ function handoffNoticeMarkup(c) {
   }
   if (c.messageHistoryLimited) parts.push("As mensagens anteriores ao encaminhamento estão ocultas para esta conta.");
   return parts.length ? `<div class="limited-history-notice">${parts.join("<br>")}</div>` : "";
+}
+
+function renderAssistantIntake(intake, wasOpen) {
+  const messages = $("#messages");
+  let card = $("#assistant-intake");
+  const signature = intake?.fields?.length ? JSON.stringify(intake) : "";
+  if (!signature) {
+    card?.remove();
+    return;
+  }
+  if (card?.dataset.signature !== signature) {
+    card?.remove();
+    card = document.createElement("details");
+    card.id = "assistant-intake";
+    card.dataset.signature = signature;
+    card.open = wasOpen;
+    const date = intake.finishedAt ? new Date(intake.finishedAt).toLocaleString("pt-BR", {
+      timeZone: "America/Sao_Paulo", dateStyle: "short", timeStyle: "short",
+    }) : "";
+    card.innerHTML = `<summary>Ficha do bot <small>Interna${date ? ` · ${escapeHtml(date)}` : ""}</small></summary>
+      <dl>${intake.fields.map(({ label, text }) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(text)}</dd></div>`).join("")}</dl>`;
+  }
+  if (messages.lastElementChild !== card) messages.append(card);
 }
 
 function closeConversationView() {
@@ -388,8 +413,9 @@ function renderConversationCards(conversations) {
 }
 
 function renderWhatsAppText(value) {
-  const escaped = escapeHtml(String(value ?? ""));
-  return escaped.split(/(```[\s\S]*?```)/g).map((part) => {
+  const links = [];
+  const escaped = window.ChatFeatures?.protectLinks(escapeHtml(String(value ?? "")), links) ?? escapeHtml(String(value ?? ""));
+  const html = escaped.split(/(```[\s\S]*?```)/g).map((part) => {
     if (part.startsWith("```") && part.endsWith("```") && part.length >= 6) {
       return `<code class="whatsapp-code">${part.slice(3, -3)}</code>`;
     }
@@ -400,6 +426,7 @@ function renderWhatsAppText(value) {
       .replace(/`([^`\n]+)`/g, '<code class="whatsapp-inline-code">$1</code>')
       .replace(/\n/g, "<br>");
   }).join("");
+  return links.length ? window.ChatFeatures.restoreLinks(html, links) : html;
 }
 
 // Read only the shared cards, never the sender profile in the webhook envelope.
@@ -437,7 +464,7 @@ function messageContent(message) {
     // Player próprio (play/pause, progresso, duração) — controlado por
     // delegação em #messages (ver bloco "Player de áudio nas mensagens").
     const durationMs = Number(message.mediaDurationMs) || 0;
-    return `<div class="audio-player" data-audio-player data-duration-ms="${durationMs}"><button type="button" class="audio-play" data-audio-play aria-label="Reproduzir áudio">▶</button><input type="range" class="audio-progress" data-audio-progress min="0" max="1000" step="1" value="0" aria-label="Progresso do áudio"><span class="audio-time" data-audio-time>${durationMs ? formatAudioDuration(durationMs) : "--:--"}</span><audio preload="metadata" data-audio-element><source src="${mediaUrl}" type="${escapeHtml(message.mediaMimeType || "audio/ogg")}"></audio></div><a class="audio-download" href="${mediaUrl}" download>Baixar áudio</a>`;
+    return `<div class="audio-player" data-audio-player data-duration-ms="${durationMs}"><button type="button" class="audio-play" data-audio-play aria-label="Reproduzir áudio">▶</button><input type="range" class="audio-progress" data-audio-progress min="0" max="1000" step="1" value="0" aria-label="Progresso do áudio"><span class="audio-time" data-audio-time>${durationMs ? formatAudioDuration(durationMs) : "--:--"}</span>${window.ChatFeatures?.audioSpeedButton() || ""}<audio preload="metadata" data-audio-element><source src="${mediaUrl}" type="${escapeHtml(message.mediaMimeType || "audio/ogg")}"></audio></div><a class="audio-download" href="${mediaUrl}" download>Baixar áudio</a>`;
   }
   if (message.type === "video" && message.mediaStorageKey) {
     return `<video class="message-video" controls preload="metadata" playsinline><source src="${mediaUrl}" type="${escapeHtml(message.mediaMimeType || "video/mp4")}">Seu navegador não conseguiu reproduzir este vídeo.</video>${message.text && message.text !== "[video]" ? `<p>${renderWhatsAppText(message.text)}</p>` : ""}<a class="media-download" href="${mediaUrl}" download>Baixar vídeo</a>`;
@@ -482,7 +509,10 @@ function restrictedSegmentMarkup(message) {
 function messageRowMarkup(message) {
   if (message.restricted) return restrictedSegmentMarkup(message);
   const [symbol, label, statusClass] = deliveryStatus(message.status);
-  return `<div class="message-row ${message.direction === "ENVIADA" ? "sent" : "received"}" data-message-id="${escapeHtml(message.id)}"><div class="bubble ${["image", "audio", "video", "sticker", "document"].includes(message.type) ? `${message.type}-bubble` : ""} ${message.reactionEmoji ? "has-reaction" : ""}">${messageContent(message)}<footer>${message.sentByUser ? `<span class="author">${escapeHtml(message.sentByUser.name)}</span>` : message.rawPayload?.system === "after_hours_reminder" ? `<span class="author automation-author" title="Mensagem automática — não foi enviada por um atendente">Automação — Fora do expediente</span>` : ""}<span>${time(message.occurredAt)}</span>${message.direction === "ENVIADA" ? `<span class="delivery-status ${statusClass}" title="${label}" aria-label="${label}">${symbol}</span>` : ""}</footer>${message.reactionEmoji ? `<span class="message-reaction" title="Reação do cliente">${escapeHtml(message.reactionEmoji)}</span>` : ""}${moderationActionsMarkup(message)}</div></div>`;
+  const extra = window.ChatFeatures?.rowParts(message) || { top: "", footer: "", reactions: "", actions: "" };
+  // Reação antiga (só em rawPayload) segue visível enquanto não houver registro novo do cliente.
+  const legacyReaction = message.reactionEmoji && !message.reactions?.some((reaction) => reaction.side === "CUSTOMER") ? message.reactionEmoji : "";
+  return `<div class="message-row ${message.direction === "ENVIADA" ? "sent" : "received"}" data-message-id="${escapeHtml(message.id)}"><div class="bubble ${["image", "audio", "video", "sticker", "document"].includes(message.type) ? `${message.type}-bubble` : ""} ${legacyReaction ? "has-reaction" : ""}">${extra.top}${messageContent(message)}<footer>${message.sentByUser ? `<span class="author">${escapeHtml(message.sentByUser.name)}</span>` : message.rawPayload?.system === "after_hours_reminder" ? `<span class="author automation-author" title="Mensagem automática — não foi enviada por um atendente">Automação — Fora do expediente</span>` : ""}${extra.footer}<span>${time(message.occurredAt)}</span>${message.direction === "ENVIADA" ? `<span class="delivery-status ${statusClass}" title="${label}" aria-label="${label}">${symbol}</span>` : ""}</footer>${legacyReaction ? `<span class="message-reaction" title="Reação do cliente">${escapeHtml(legacyReaction)}</span>` : ""}${extra.reactions}${moderationActionsMarkup(message)}</div>${extra.actions}</div>`;
 }
 
 function messageDateKey(value) {
@@ -651,6 +681,19 @@ function renderFaq() {
   if (!user) return;
   const profile = ({ ADMIN:"Master", SUPERVISOR:"Supervisor", ATENDENTE:"Atendente" })[user.role] || user.role;
   const common = [
+    ["Como vejo somente as minhas conversas?", "Selecione Minhas na lateral. Esse filtro mostra as conversas em que você é o responsável atual, respeitando a empresa, os canais e os demais filtros selecionados. Atendente fixo é um vínculo diferente do responsável da conversa."],
+    ["Como alterno entre Mibro e Sincrofit?", "Selecione a empresa no topo antes de procurar uma conversa ou iniciar um envio. Os contatos, números e categorias exibidos respeitam os acessos da sua conta. Ter acesso a uma empresa não libera automaticamente a outra."],
+    ["Como inicio uma conversa com template?", "Clique em + Nova, confira a empresa e o número de atendimento e escolha um template aprovado. Você pode selecionar o contato e o template em qualquer ordem; procure o contato pelo nome ou telefone, confira nome e número e preencha as variáveis obrigatórias. Revise a prévia e clique em Enviar pelo WhatsApp. Se o botão estiver desabilitado, confira a indicação do que falta."],
+    ["O que conferir antes de enviar um template?", "Confira o remetente, o destinatário e os campos do template. Campos automáticos acompanham o contato; textos que você editar manualmente são preservados. Ao trocar o número de atendimento, selecione novamente um template disponível para esse número. Envio individual e campanhas dependem das permissões da sua conta."],
+    ["Como sei se uma mensagem foi entregue?", "Consulte o indicador de status na mensagem. Enviada, entregue, lida e falha são situações diferentes; aceitar o envio não comprova entrega. A atualização depende dos retornos do canal. Se houver erro, confira o aviso antes de tentar novamente para evitar duplicação."],
+    ["Como funciona o atendente fixo?", "Nos detalhes do cliente, confira Atendente fixo e Responsável. O primeiro orienta novos atendimentos daquele cliente na empresa; o segundo indica quem cuida da conversa atual. No Comercial — Atacado, clientes com vínculo fixo mantêm sua categoria no retorno. Mudanças de vínculo e transferências devem ser feitas pelas opções autorizadas da conversa."],
+    ["Como arquivo uma conversa sem perder o histórico?", "Nos detalhes do cliente, em Organizar conversa, clique em Arquivar conversa e confirme. Ela sai das listas de atendimento, inclusive Todos. Mensagens, anexos e cadastro continuam preservados. Novas mensagens não recuperam a conversa automaticamente."],
+    ["Onde encontro e recupero uma conversa arquivada?", "Abra Configurações e a aba Arquivados, ou use Ver arquivados nos detalhes. Localize o cliente, abra a conversa e use Recuperar conversa nos detalhes para devolvê-la às listas. A consulta e a recuperação continuam respeitando seus acessos."],
+    ["Como consulto ou cadastro o cliente no CRM?", "Abra a aba CRM no contexto da conversa ou Dados e CRM no perfil do cliente. Se houver um vínculo acessível, consulte a ficha comercial; caso contrário, revise os dados preenchidos e use a opção de cadastro no CRM. É necessário acesso aos dois sistemas. Cadastrar ou abrir a ficha não envia mensagem nem troca o responsável do atendimento."],
+    ["Como envio uma proposta pelo WhatsApp?", "Na proposta do CRM, use Enviar pelo Atendimento e revise o resumo na conversa indicada antes de enviar. Esse resumo não é o PDF. Para compartilhar o arquivo, baixe o PDF no CRM e anexe-o à conversa. Confira sempre empresa, número, cliente, permissões e janela do WhatsApp; preparar o envio não dispara mensagem automaticamente."],
+    ["Como copio o nome e o número do cliente?", "Abra o perfil do cliente pelo cabeçalho da conversa e use Copiar nome ou Copiar número. O botão do número aparece quando existe um telefone informado."],
+    ["Onde vejo os retornos e compromissos dos dois sistemas?", "Abra Atividades no topo e selecione a empresa. A tela reúne os itens acessíveis do CRM e os retornos do Atendimento. Concluir ou reagendar atualiza o registro de origem; abrir a tela não envia mensagens."],
+    ["Como funcionam os horários e o SLA?", "Os avisos automáticos dependem dos bots e horários configurados para a empresa. Fora do expediente, o SLA de resposta considera apenas o tempo útil do calendário configurado. O aviso de fechamento não significa que um atendente está disponível naquele momento."],
     ["Quais conversas aparecem para mim?", "Você vê conversas atribuídas a você ou pertencentes às categorias e aos números/canais liberados para sua conta. Categorias não liberadas não aparecem na barra lateral."],
     ["Posso transferir para uma categoria que não vejo?", "Sim. Ao abrir uma conversa, o seletor de destino mostra as categorias ativas permitidas para aquele canal. Categorias Somente Master não aparecem para Atendentes ou Supervisores."],
     ["O que acontece após transferir para uma categoria sem acesso?", "A transferência é concluída e a conversa sai da sua tela, pois você não possui acesso à fila de destino."],
@@ -699,6 +742,7 @@ async function loadCurrentUser() {
   const status = await api("/api/auth/status");
   if (!status.authenticated) return location.replace("/login.html");
   state.currentUser = status.user;
+  window.ChatFeatures?.init();
   state.centralResume = window.CentralSessionState?.init(status.user.id);
   state.companies = status.companyAccess?.companies || [];
   for (const key of ["canManageCampaigns", "canStartEmailConversations", "canStartWhatsAppConversations"]) {
@@ -722,14 +766,12 @@ async function loadCurrentUser() {
   $("#integrations-button").hidden = !status.user.isMaster;
   $("#campaigns-button").hidden = !status.user.canManageCampaigns;
   // Central de Operação: Master ou Supervisor em alguma empresa (backend revalida).
-  $("#operations-button").hidden = !status.user.isMaster && !state.companies.some((company) => company.role === "SUPERVISOR");
 
   $("#new-conversation").hidden = !(status.user.canStartConversations || status.user.canManageCampaigns);
-  $("#meta-costs-button").hidden = !status.user.isMaster;
   // Produtividade: Master, Supervisor ou Atendente liberado (backend revalida).
-  $("#productivity-button").hidden = !status.user.canOpenProductivity;
   // Agenda: todo usuário tem a própria (escopo aplicado nas APIs).
   window.FollowUpsUI?.init(status.user);
+  $("#metrics-button").hidden = !status.user.isMaster && !status.user.canOpenProductivity && !state.companies.some(company => company.role === "SUPERVISOR");
   $("#conversation-settings-button").hidden = !status.user.isMaster && status.user.role !== "SUPERVISOR";
   $("#team-button").hidden = !status.user.isMaster;
   // Supervisão: Master → "Equipes" (todas); Supervisor → "Minha equipe" (só a dele).
@@ -747,16 +789,11 @@ async function loadCurrentUser() {
   $("#priority-select").disabled = !(status.user.isMaster || status.user.role === "SUPERVISOR" || status.user.canSetConversationPriority);
   $("#history-toggle").hidden = !status.user.canViewConversationHistory;
   configureNotificationButton();
-  const cursorKey = `mibro-alert-cursor:${status.user.id}:${companyQuery()}`;
+  const cursorKey = `mibro-alert-cursor:${status.user.id}:all-workspaces`;
   let storedCursor = null;
   try { storedCursor = localStorage.getItem(cursorKey); } catch {}
   state.alertCursor = storedCursor && !Number.isNaN(new Date(storedCursor).getTime()) ? storedCursor : new Date().toISOString();
   try { localStorage.setItem(cursorKey, state.alertCursor); } catch {}
-  workspace.alertStart = state.alertCursor;
-  for (const company of state.companies) {
-    const key = `mibro-alert-cursor:${status.user.id}:${company.slug}`;
-    try { if (!localStorage.getItem(key)) localStorage.setItem(key, workspace.alertStart); } catch {}
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -784,6 +821,7 @@ const workspace = {
   unreadRunning: false, unreadQueued: false, unreadTimer: null,
 };
 const WORKSPACE_FILTER_KEYS = ["search", "category", "channel", "status", "slaBreached", "unassigned", "preferredAssignee", "assignedUser", "assignedUserActiveOnly", "emailMailbox"];
+const WORKSPACE_FILTER_DEFAULTS = Object.freeze({ search: "", category: "", channel: "", status: "", slaBreached: false, unassigned: false, preferredAssignee: "", assignedUser: "", assignedUserActiveOnly: false, emailMailbox: "GENERAL" });
 const workspaceStorageKey = (suffix) => `mibro-workspace-${suffix}:${state.currentUser?.id || "anon"}`;
 function readWorkspaceStore(suffix, fallback) {
   try { const raw = localStorage.getItem(workspaceStorageKey(suffix)); return raw ? JSON.parse(raw) || fallback : fallback; } catch { return fallback; }
@@ -809,8 +847,7 @@ function restoreWorkspaceFilters(slug) {
   if (!Object.keys(workspace.seen).length) workspace.seen = readWorkspaceStore("seen", {});
   if (!Object.keys(workspace.sound).length) workspace.sound = readWorkspaceStore("sound", {});
   const saved = workspace.saved[slug] || {};
-  const defaults = { search: "", category: "", channel: "", status: "", slaBreached: false, unassigned: false, preferredAssignee: "", assignedUser: "", assignedUserActiveOnly: false, emailMailbox: "GENERAL" };
-  for (const key of WORKSPACE_FILTER_KEYS) state[key] = saved[key] ?? defaults[key];
+  for (const key of WORKSPACE_FILTER_KEYS) state[key] = saved[key] ?? WORKSPACE_FILTER_DEFAULTS[key];
   // Categoria salva de outra empresa (ou removida) nunca é reaplicada.
   if (state.category && !["null", "UNCATEGORIZED"].includes(state.category) && state.categories.length
     && !state.categories.some((category) => (category.code === state.category || category.id === state.category) && category.company?.slug === slug)) state.category = "";
@@ -881,8 +918,7 @@ function renderCompanyFilter() {
   document.body.dataset.workspace = current?.slug || "";
   renderWorkspaceHeading();
   if (!containers.length) return;
-  if (!multiCompany()) { containers.forEach((container) => { container.hidden = true; container.innerHTML = ""; }); return; }
-  const tabs = state.companies.map((company) => {
+  const tabs = (multiCompany() ? state.companies : []).map((company) => {
     const active = company.slug === state.companyFilter;
     const unread = workspace.unread.get(company.id);
     const count = unread?.unreadMessages || 0;
@@ -894,13 +930,19 @@ function renderCompanyFilter() {
       <i class="company-dot" aria-hidden="true"></i><span class="workspace-tab-name">${escapeHtml(company.displayName)}</span>${count ? `<span class="workspace-tab-count" aria-hidden="true">${count > 99 ? "99+" : count}</span>` : ""}${internalCount ? `<span class="workspace-tab-internal" aria-hidden="true">💬${internalCount > 99 ? "99+" : internalCount}</span>` : ""}<i class="workspace-tab-status" data-state="${connection.state}" aria-hidden="true"></i>
     </button>`;
   }).join("");
-  const sound = `<details class="workspace-sound"><summary title="Som ao chegar mensagem em outra empresa" aria-label="Som de notificação por empresa">🔔</summary><div class="workspace-sound-menu" role="group" aria-label="Som por empresa">${state.companies.map((company) => `<label${companyStyleAttr(company)}><input type="checkbox" data-workspace-sound="${escapeHtml(company.id)}" ${workspace.sound[company.id] ? "checked" : ""}><i class="company-dot" aria-hidden="true"></i>Som — ${escapeHtml(company.displayName)}</label>`).join("")}<small>Toca quando chega mensagem na empresa que não está aberta.</small></div></details>`;
+  const sound = state.companies.length ? `<details class="workspace-sound"><summary title="Som de novos atendimentos e mensagens" aria-label="Som de notificação por empresa">🔔</summary><div class="workspace-sound-menu" role="group" aria-label="Som por empresa">${state.companies.map((company) => `<label${companyStyleAttr(company)}><input type="checkbox" data-workspace-sound="${escapeHtml(company.id)}" ${workspace.sound[company.id] ? "checked" : ""}><i class="company-dot" aria-hidden="true"></i>Som — ${escapeHtml(company.displayName)}</label>`).join("")}<small>Toca quando chega uma mensagem ou um atendimento na sua caixa.</small></div></details>` : "";
   containers.forEach((container) => {
     const keepSoundOpen = container.querySelector(".workspace-sound")?.open;
-    container.hidden = false;
-    container.setAttribute("role", "tablist");
-    container.setAttribute("aria-label", "Área de trabalho (empresa)");
-    container.innerHTML = tabs + (container.id === "workspace-switcher" ? sound : "");
+    const content = tabs + (container.id === "workspace-switcher" ? sound : "");
+    container.hidden = !content;
+    if (tabs) {
+      container.setAttribute("role", "tablist");
+      container.setAttribute("aria-label", "Área de trabalho (empresa)");
+    } else {
+      container.removeAttribute("role");
+      container.removeAttribute("aria-label");
+    }
+    container.innerHTML = content;
     if (keepSoundOpen) container.querySelector(".workspace-sound")?.setAttribute("open", "");
   });
 }
@@ -918,10 +960,52 @@ function renderWorkspaceHeading() {
 }
 
 let workspaceAudioContext = null;
-function playWorkspaceSound(companyId) {
-  if (!workspace.sound[companyId]) return;
+let inboxAlertBuffer = null;
+let inboxAlertPlaying = false;
+const inboxAlertGain = 1.2;
+
+function loadInboxAlertSound() {
+  inboxAlertBuffer ||= fetch("/assets/inbox-notification.mp3")
+    .then((response) => {
+      if (!response.ok) throw new Error("Toque de alerta indisponível.");
+      return response.arrayBuffer();
+    })
+    .then((bytes) => workspaceAudioContext.decodeAudioData(bytes))
+    .catch(() => { inboxAlertBuffer = null; return null; });
+  return inboxAlertBuffer;
+}
+
+async function unlockWorkspaceAudio() {
   try {
     workspaceAudioContext ||= new (window.AudioContext || window.webkitAudioContext)();
+    if (workspaceAudioContext.state !== "running") await workspaceAudioContext.resume();
+    void loadInboxAlertSound();
+  } catch {}
+}
+
+document.addEventListener("click", () => {
+  if (Object.values(workspace.sound).some(Boolean)) void unlockWorkspaceAudio();
+}, { once: true });
+
+async function playInboxAlertSound(companyId) {
+  if (!workspace.sound[companyId] || workspaceAudioContext?.state !== "running" || inboxAlertPlaying) return;
+  try {
+    const buffer = await loadInboxAlertSound();
+    if (!buffer || !workspace.sound[companyId] || workspaceAudioContext.state !== "running" || inboxAlertPlaying) return;
+    const source = workspaceAudioContext.createBufferSource();
+    const gain = workspaceAudioContext.createGain();
+    source.buffer = buffer;
+    gain.gain.value = inboxAlertGain;
+    source.connect(gain).connect(workspaceAudioContext.destination);
+    source.onended = () => { inboxAlertPlaying = false; gain.disconnect(); };
+    source.start();
+    inboxAlertPlaying = true;
+  } catch {}
+}
+
+function playWorkspaceSound(companyId) {
+  if (!workspace.sound[companyId] || workspaceAudioContext?.state !== "running") return;
+  try {
     const now = workspaceAudioContext.currentTime;
     for (const [offset, frequency] of [[0, 880], [0.16, 1175]]) {
       const oscillator = workspaceAudioContext.createOscillator();
@@ -949,7 +1033,6 @@ async function refreshWorkspaceUnread() {
     const data = await api("/api/workspaces/unread");
     let seenChanged = false;
     for (const item of data.workspaces || []) {
-      const before = workspace.unread.get(item.companyId);
       workspace.unread.set(item.companyId, item);
       // Primeira leitura sem marcador salvo: o que já existia é histórico.
       if (!(item.companyId in workspace.seen)) { workspace.seen[item.companyId] = item.latestUnreadId || null; seenChanged = true; }
@@ -958,7 +1041,6 @@ async function refreshWorkspaceUnread() {
         workspace.seen[item.companyId] = item.latestUnreadId || null;
         seenChanged = true;
       }
-      if (before && !active && item.unreadMessages > 0 && item.latestUnreadId && item.latestUnreadId !== before.latestUnreadId) playWorkspaceSound(item.companyId);
     }
     if (seenChanged) writeWorkspaceStore("seen", workspace.seen);
     renderCompanyFilter();
@@ -990,8 +1072,6 @@ async function setCompanyFilter(slug, { openConversationId = null } = {}) {
   state.companyFilter = slug;
   // Chat interno e demais módulos da tela acompanham o MESMO workspace.
   document.dispatchEvent(new CustomEvent("central:workspace-changed", { detail: { company: target } }));
-  state.alertCursor = workspace.alertStart;
-  try { state.alertCursor = localStorage.getItem(`mibro-alert-cursor:${state.currentUser.id}:${slug}`) || workspace.alertStart; } catch {}
   const saved = restoreWorkspaceFilters(slug);
   syncWorkspaceFilterControls();
   markWorkspaceSeen(target.id);
@@ -1063,7 +1143,9 @@ for (const container of [$("#workspace-switcher"), $("#company-filter-mobile")])
     if (!input) return;
     workspace.sound[input.dataset.workspaceSound] = input.checked;
     writeWorkspaceStore("sound", workspace.sound);
-    if (input.checked) playWorkspaceSound(input.dataset.workspaceSound);
+    if (input.checked) {
+      void unlockWorkspaceAudio().then(() => playInboxAlertSound(input.dataset.workspaceSound));
+    }
   });
   // Setas ←/→ entre as abas (padrão de tablist).
   container?.addEventListener("keydown", (event) => {
@@ -1101,7 +1183,7 @@ async function api(path, options) {
   const headers = new Headers(options?.headers || {});
   if (options?.body && !(options.body instanceof FormData) && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
   const response = await fetch(path, { ...options, headers });
-  const data = await response.json().catch(() => ({}));
+  const data = await response.json().catch(error => { if (error.name === "AbortError") throw error; return {}; });
   if (!response.ok) {
     const error = new Error(data.error || "Não foi possível concluir a operação.");
     error.code = data.code;
@@ -1434,24 +1516,31 @@ async function loadDevices() {
   }
 }
 
-async function checkAlerts() {
-  if (!state.currentUser || !state.alertCursor || state.checkingAlerts) return;
+let alertRefreshTimer;
+let alertRefreshQueued = false;
+function scheduleInboxAlerts() {
+  if (alertRefreshTimer) return;
+  alertRefreshTimer = setTimeout(() => {
+    alertRefreshTimer = null;
+    checkAlerts().catch(() => {});
+  }, 160);
+}
+
+async function checkAlerts({ signal } = {}) {
+  const userId = state.currentUser?.id;
+  if (!userId || !state.alertCursor) return;
+  if (state.checkingAlerts) { alertRefreshQueued = true; return; }
   state.checkingAlerts = true;
   try {
-    // Avisos só do workspace ativo; a outra empresa sinaliza na própria aba.
-    const company = companyQuery();
-    const epoch = workspace.epoch;
-    const result = await api(`/api/alerts?since=${encodeURIComponent(state.alertCursor)}${company ? `&company=${encodeURIComponent(company)}` : ""}`);
-    if (epoch !== workspace.epoch || company !== companyQuery()) return;
+    const result = await api(`/api/alerts?allCompanies=true&since=${encodeURIComponent(state.alertCursor)}`, { signal });
+    if (state.currentUser?.id !== userId) return;
     state.alertCursor = result.checkedAt;
-    try { localStorage.setItem(`mibro-alert-cursor:${state.currentUser.id}:${company}`, state.alertCursor); } catch {}
+    try { localStorage.setItem(`mibro-alert-cursor:${userId}:all-workspaces`, state.alertCursor); } catch {}
     if (!result.alerts?.length) return;
     const latest = result.alerts[result.alerts.length - 1];
-    toast(
-  result.alerts.length === 1
-    ? latest.title
-    : `${result.alerts.length} novas mensagens.`
-);
+    toast(result.alerts.length === 1 ? latest.title : `${latest.title} · +${result.alerts.length - 1} aviso(s)`);
+    const audibleAlert = result.alerts.findLast((alert) => workspace.sound[alert.companyId]);
+    if (audibleAlert) void playInboxAlertSound(audibleAlert.companyId);
     if (document.hidden && typeof window.mibroNotify === "function") {
       for (const alert of result.alerts.slice(-3)) {
         await window.mibroNotify(alert.title, {
@@ -1464,7 +1553,10 @@ async function checkAlerts() {
     }
   } catch (error) {
     console.warn("Não foi possível consultar os alertas.", error);
-  } finally { state.checkingAlerts = false; }
+  } finally {
+    state.checkingAlerts = false;
+    if (alertRefreshQueued) { alertRefreshQueued = false; scheduleInboxAlerts(); }
+  }
 }
 
 async function setCategoryHidden(categoryId, hidden) {
@@ -1476,9 +1568,9 @@ async function setCategoryHidden(categoryId, hidden) {
   toast(hidden ? "Categoria ocultada para sua conta." : "Categoria exibida novamente.");
 }
 
-async function loadCategories() {
+async function loadCategories({ signal } = {}) {
   const epoch = workspace.epoch;
-  const [allCategories, visibility] = await Promise.all([api("/api/categories"), api("/api/category-visibility")]);
+  const [allCategories, visibility] = await Promise.all([api("/api/categories", { signal }), api("/api/category-visibility", { signal })]);
   if (epoch !== workspace.epoch) return;
   // Preserve the current contact/operator choice, not a snapshot taken before
   // the request (another conversation may have opened in the meantime).
@@ -1489,20 +1581,20 @@ async function loadCategories() {
   state.categories = allCategories;
   state.categoryVisibility = visibility;
   const categories = sidebarCategories(allCategories);
-  const signature = JSON.stringify([state.visibilityMode, state.companyFilter, visibility, state.companies.map((company) => [company.id, company.name, company.primaryColor]), allCategories.map((category) => [category.id, category.companyId, category.parentId, category.parent?.name, category.code, category.name, category.color, category.active, category.masterOnly, category.displayOrder, category.hidden])]);
+  const signature = JSON.stringify([state.visibilityMode, state.companyFilter, canViewSidebarUncategorized(), visibility, state.companies.map((company) => [company.id, company.name, company.primaryColor]), allCategories.map((category) => [category.id, category.companyId, category.parentId, category.parent?.name, category.code, category.name, category.color, category.active, category.masterOnly, category.displayOrder, category.hidden, category.selectable])]);
   if (signature === state.categorySignature) return;
   state.categorySignature = signature;
   state.selectedHeaderSignature = "";
   const activeIds = new Set(categories.filter((category) => category.active).map((category) => category.id));
   const allActive = orderedCategories(categories.filter((category) => category.active && (!category.parentId || activeIds.has(category.parentId))));
   const shown = state.visibilityMode ? allActive : allActive.filter((category) => !category.hidden);
-  if (state.category === "UNCATEGORIZED" && visibility.hideUncategorized && !state.visibilityMode) state.category = "";
+  if (state.category === "UNCATEGORIZED" && (!canViewSidebarUncategorized() || (visibility.hideUncategorized && !state.visibilityMode))) state.category = "";
   if (state.category && state.category !== "UNCATEGORIZED" && !shown.some((category) => category.code === state.category)) state.category = "";
   const roots = allActive.filter((category) => !category.parentId);
   const displayRoots = roots.filter((root) => state.visibilityMode
     || !root.hidden
     || shown.some((category) => category.parentId === root.id));
-  const uncategorized = state.currentUser?.canViewUncategorized
+  const uncategorized = canViewSidebarUncategorized()
     ? `<div class="category-filter-item ${visibility.hideUncategorized ? "category-hidden" : ""}" ${visibility.hideUncategorized && !state.visibilityMode ? "hidden" : ""}><button class="filter" data-category="UNCATEGORIZED"><span><i class="category-dot uncategorized-dot"></i>Sem categoria</span><strong data-uncategorized-count>0</strong></button><button class="category-eye" data-hide-category="UNCATEGORIZED" data-hidden="${visibility.hideUncategorized}" title="${visibility.hideUncategorized ? "Exibir" : "Ocultar"}">${visibility.hideUncategorized ? "◉" : "⊘"}</button></div>`
     : "";
   $("#category-filters").innerHTML = uncategorized + displayRoots.map((root) => {
@@ -1534,6 +1626,10 @@ async function loadCategories() {
 // Barra lateral: empresa escolhida, ou — em "Todas" — um setor por código
 // (subsetores remapeados para a principal mantida).
 function sidebarCategories(categories) {
+  const allowed = categories.filter((category) => category.selectable !== false);
+  const allowedIds = new Set(allowed.map((category) => category.id));
+  categories = allowed.map((category) => category.parentId && !allowedIds.has(category.parentId) && category.parent?.active !== false
+    ? { ...category, parentId: null } : category);
   if (state.companyFilter && state.companyFilter !== "ALL") {
     return categories.filter((category) => category.company?.slug === state.companyFilter);
   }
@@ -1624,7 +1720,7 @@ function sharePendingSidebarRead(key, load) {
   return entry.promise;
 }
 const conversationPageState={key:null,cursor:null,total:0,loadingMore:false};
-async function loadConversations({append=false}={}) {
+async function loadConversations({append=false,signal}={}) {
   const mineOnly = state.status === "MINE";
   if (mineOnly && !state.currentUser?.id) return;
   const params = new URLSearchParams();
@@ -1654,7 +1750,7 @@ async function loadConversations({append=false}={}) {
   if(appendPage)params.set('cursor',conversationPageState.cursor);
   if(!MARKETPLACE_UI_ENABLED)params.set('excludeMarketplaces','true');
   if(state.channel==='EMAIL')params.set('mailbox',state.emailMailbox);
-  const listRequest=api(`/api/conversations?${params}`);
+  const listRequest=api(`/api/conversations?${params}`, { signal });
   const sidebarRequest=sharePendingSidebarRead(`${state.currentUser?.id}|${company}|${epoch}|summary`,()=>api(`/api/conversations/summary?sidebar=true&excludeMarketplaces=${!MARKETPLACE_UI_ENABLED}${company?'&company='+encodeURIComponent(company):''}`)).then(summary=>({summary}),error=>({error}));
   const page=await listRequest;
   const fresh=Array.isArray(page)?page:page.items;
@@ -1698,16 +1794,17 @@ async function loadConversations({append=false}={}) {
   $("#count-unassigned").textContent = displaySummary.unassigned || 0;
   // Multiempresa: em "Todas", setores de mesmo código (ex.: Suporte da Mibro
   // e da Sincrofit) aparecem numa linha só — o contador soma por código.
-  const codeById = new Map(state.categories.map((item) => [item.id, item.code]));
+  const visibleSidebarCategories = sidebarCategories(state.categories);
+  const codeById = new Map(visibleSidebarCategories.map((item) => [item.id, item.code]));
   const countByCode = {};
   for (const [id, total] of Object.entries(displaySummary.categories || {})) {
     const code = codeById.get(id);
     if (code) countByCode[code] = (countByCode[code] || 0) + total;
   }
   document.querySelectorAll("[data-category-count]").forEach((counter) => {
-    const category = state.categories.find((item) => item.id === counter.dataset.categoryCount);
+    const category = visibleSidebarCategories.find((item) => item.id === counter.dataset.categoryCount);
     if (!category) { counter.textContent = 0; return; }
-    const childCodes = category.parentId ? [] : [...new Set(state.categories.filter((item) => item.parentId && item.parent?.code === category.code).map((item) => item.code))];
+    const childCodes = category.parentId ? [] : [...new Set(visibleSidebarCategories.filter((item) => item.parentId === category.id).map((item) => item.code))];
     counter.textContent = [category.code, ...childCodes].reduce((total, code) => total + (countByCode[code] || 0), 0);
   });
   document.querySelector("[data-uncategorized-count]")?.replaceChildren(String(displaySummary.categories.null || 0));
@@ -1850,7 +1947,7 @@ async function openConversationInWorkspace(id) {
 
 let timelinePage={id:null,expanded:false,cursor:null,hasMore:false,scope:null,raw:[]};
 let timelineResizeAnchor=null;
-function resetTimelineState(){timelinePage={id:null,expanded:false,cursor:null,hasMore:false,scope:null,raw:[]};timelineResizeAnchor=null;state.sharedContentMessages=null;}
+function resetTimelineState(){timelinePage={id:null,expanded:false,cursor:null,hasMore:false,scope:null,raw:[]};timelineResizeAnchor=null;state.sharedContentMessages=null;window.AdOrigin?.clear();}
 // Browser anchoring must not compete with the explicit message-ID anchor.
 $('#messages').style.overflowAnchor='none';
 if(window.ResizeObserver)new ResizeObserver(()=>restoreTimelineAnchor(timelineResizeAnchor)).observe($('#messages'));
@@ -1863,12 +1960,14 @@ function renderHistoryButton(){ $('#load-older-messages')?.remove();if(timelineP
 $('#messages').addEventListener('scroll',()=>{timelineResizeAnchor=captureTimelineAnchor();const box=$('#messages');if(box.scrollTop<80&&box.scrollHeight>box.clientHeight+100&&!historyLoading)loadOlderMessages();},{passive:true});
 $('#messages').addEventListener('load',()=>restoreTimelineAnchor(timelineResizeAnchor),true);
 $('#messages').addEventListener('click',event=>{if(event.target.closest('#load-older-messages'))loadOlderMessages();});
-async function openConversation(id, { refreshList = true, markRead = true,historyBefore=null } = {}) {
+async function openConversation(id, { refreshList = true, markRead = true,historyBefore=null,signal } = {}) {
   const loadSequence = ++conversationLoadSequence;
   const changedConversation = state.selectedId !== id;
   if(changedConversation){timelinePage={id:null,expanded:false,cursor:null,hasMore:false,scope:null,raw:[]};timelineResizeAnchor=null;window.CentralSessionState?.keep(state.composerConversationId,$('#message-input').value);state.composerConversationId=null;$('#message-input').value='';}
   state.selectedId = id;
   if (changedConversation) {
+    window.AdOrigin?.clear();
+    window.ChatFeatures?.onConversationChange();
     window.CrmProposalDraft?.clear();
     window.CrmContext?.select(null);
     window.ContactWarning?.select(null);
@@ -1892,11 +1991,12 @@ async function openConversation(id, { refreshList = true, markRead = true,histor
     // bloqueados para não transferir/alterar com dados errados.
     setConversationControlsLoading(true);
   }
-  if (markRead) await api(`/api/conversations/${id}/read`, { method:"POST" });
+  if (markRead) await api(`/api/conversations/${id}/read`, { method:"POST", signal });
   const historyParams=new URLSearchParams({historyPage:'true'});
+  if (window.AdOrigin?.needsLookup(id)) historyParams.set("adOrigin", "true");
   if(historyBefore)historyParams.set('historyBefore',historyBefore);
   else if(timelinePage.id===id&&timelinePage.expanded&&timelinePage.cursor)historyParams.set('historyFrom',timelinePage.cursor);
-  const c = await api(`/api/conversations/${id}?${historyParams}`);
+  const c = await api(`/api/conversations/${id}?${historyParams}`, { signal });
   if (loadSequence !== conversationLoadSequence || state.selectedId !== id) return;
   if (c.id !== id) { state.selectedId = c.id; id = c.id; }
   // Workspaces: conversa de outra empresa nunca abre dentro do workspace
@@ -1907,6 +2007,7 @@ async function openConversation(id, { refreshList = true, markRead = true,histor
   }
   if(historyBefore&&timelinePage.scope!==c.messagePage?.scope){timelinePage={id:null,expanded:false,cursor:null,hasMore:false,scope:null,raw:[]};return openConversation(id,{refreshList:false,markRead:false});}
   const previousTimeline=captureTimelineAnchor();
+  window.AdOrigin?.update(c);
   if(historyBefore)c.messages=[...new Map([...c.messages,...timelinePage.raw].map(row=>[row.id,row])).values()].sort((a,b)=>new Date(a.occurredAt)-new Date(b.occurredAt)||a.id.localeCompare(b.id));
   const oldPage=timelinePage;
   timelinePage={id:c.id,expanded:Boolean(historyBefore)||(oldPage.id===c.id&&oldPage.expanded),scope:c.messagePage?.scope,hasMore:c.messagePage?.hasMore===null?oldPage.hasMore:Boolean(c.messagePage?.hasMore),cursor:c.messagePage?.nextCursor||(historyBefore?oldPage.cursor:null),raw:c.messages};
@@ -1942,8 +2043,8 @@ async function openConversation(id, { refreshList = true, markRead = true,histor
   state.selectedContactName = c.contact.customName || c.contact.name || c.contact.email || c.contact.phone;
   state.selectedContactPhone = c.contact.phone || '';
   const hasReactionEvents = displayMessages.length !== c.messages.length;
-  const messageItems = displayMessages.map((message) => JSON.stringify([message.id, message.externalId, message.direction, message.type, message.text, message.occurredAt, message.mediaStorageKey, message.mediaMimeType, message.mediaFileName, message.mediaSize, message.reactionEmoji, message.sentByUser?.id, message.sentByUser?.name]));
-  const messagesSignature = JSON.stringify([c.messageHistoryLimited, c.accessMode, c.visibleWindows, c.currentHandoff, messageItems]);
+  const messageItems = displayMessages.map((message) => JSON.stringify([message.id, message.externalId, message.direction, message.type, message.text, message.occurredAt, message.mediaStorageKey, message.mediaMimeType, message.mediaFileName, message.mediaSize, message.reactionEmoji, message.sentByUser?.id, message.sentByUser?.name, message.reactions, message.starred, message.pinned, message.replyPreview]));
+  const messagesSignature = JSON.stringify([c.messageHistoryLimited, c.accessMode, c.visibleWindows, c.currentHandoff, c.customerServiceWindow?.requiresTemplate, messageItems]);
   // Aberta só por supervisão: esconde resposta/assumir/transferir/finalizar
   // (o backend também bloqueia — isto é só para não oferecer a ação).
   $("#chat-content").classList.toggle("supervision-readonly", c.accessMode === "SUPERVISION" || Boolean(c.archivedAt));
@@ -2024,6 +2125,7 @@ async function openConversation(id, { refreshList = true, markRead = true,histor
     if (!c.canViewHistory && activeContextTab() === "history") setContextTab("details", { open:false });
   }
   setConversationControlsLoading(false);
+  const intakeWasOpen = !changedConversation && Boolean($("#assistant-intake")?.open);
   if (messagesSignature !== state.selectedMessagesSignature) {
     state.selectedMessagesSignature = messagesSignature;
     const canAppend = !hasReactionEvents && !changedConversation && state.selectedMessageItems.length <= messageItems.length
@@ -2036,7 +2138,9 @@ async function openConversation(id, { refreshList = true, markRead = true,histor
     }
     state.selectedMessageItems = messageItems;
   }
+  renderAssistantIntake(c.assistantIntake, intakeWasOpen);
   renderHistoryButton();
+  window.ChatFeatures?.onConversation(c, displayMessages.length);
   if(changedConversation||(!historyBefore&&previousTimeline.bottom))setTimelineScroll($('#messages').scrollHeight);
   else restoreTimelineAnchor({...previousTimeline,bottom:false});
   timelineResizeAnchor=captureTimelineAnchor();
@@ -2059,27 +2163,48 @@ async function openConversation(id, { refreshList = true, markRead = true,histor
 let realtimeRefreshTimer;
 let realtimeRefreshRunning = false;
 let realtimeRefreshPending = false;
+const realtimeBackgroundReads = new Map();
+function startRealtimeBackgroundRead(name, context, task) {
+  const previous = realtimeBackgroundReads.get(name);
+  if (previous?.context === context) return;
+  previous?.controller.abort();
+  const controller = new AbortController();
+  const deadline = setTimeout(() => controller.abort(), 15000);
+  const job = { controller, context };
+  realtimeBackgroundReads.set(name, job);
+  Promise.resolve().then(() => task(controller.signal)).catch(() => {}).finally(() => {
+    clearTimeout(deadline);
+    if (realtimeBackgroundReads.get(name) === job) realtimeBackgroundReads.delete(name);
+  });
+}
 async function refreshInbox() {
   if (realtimeRefreshRunning) { realtimeRefreshPending=true; return; }
   realtimeRefreshRunning = true;
   realtimeRefreshPending = false;
-  const categoryRefresh=loadCategories().catch(()=>{});
+  // A lista não aguarda a conversa selecionada, categorias ou alertas.
+  const controller = new AbortController();
+  const deadline = setTimeout(() => controller.abort(), 15000);
+  const signal = controller.signal;
   try {
     if(historyLoading)historyNeedsRefresh=true;
-    if (state.selectedId&&!historyLoading) {
-      try {
-        await openConversation(state.selectedId, { refreshList:false, markRead:!document.hidden });
-      } catch (error) {
-        // Outro atendente assumiu (403) ou a conversa saiu do seu acesso
-        // (404): fecha a tela sem derrubar a atualização da fila.
-        if (![403, 404].includes(error.status)) throw error;
-        closeConversationView();
-        toast(error.message, true);
-      }
+    const selectedId = state.selectedId;
+    const epoch = workspace.epoch;
+    if (selectedId && !historyLoading) {
+      startRealtimeBackgroundRead("conversation", `${epoch}:${selectedId}`, async readSignal => {
+        try { await openConversation(selectedId, { refreshList:false, markRead:!document.hidden, signal:readSignal }); }
+        catch (error) {
+          if ([403, 404].includes(error.status) && state.selectedId === selectedId && workspace.epoch === epoch) {
+            closeConversationView(); toast(error.message, true);
+          }
+        }
+      });
     }
-    await Promise.all([loadConversations(),checkAlerts(),categoryRefresh]);
+    startRealtimeBackgroundRead("alerts", state.currentUser?.id, readSignal => checkAlerts({ signal:readSignal }));
+    startRealtimeBackgroundRead("categories", epoch, readSignal => loadCategories({ signal:readSignal }));
+    await loadConversations({ signal });
     scheduleWorkspaceUnread();
   } finally {
+    clearTimeout(deadline);
     realtimeRefreshRunning = false;
     if(realtimeRefreshPending){realtimeRefreshPending=false;setTimeout(()=>refreshInbox().catch(()=>{}),0);}
   }
@@ -2109,7 +2234,10 @@ function connectRealtime() {
     let companyIds = [];
     try { companyIds = JSON.parse(event.data || "{}").companyIds || []; } catch {}
     scheduleWorkspaceUnread();
-    if (companyIds.length && activeCompany() && !companyIds.includes(activeCompany().id)) return;
+    if (companyIds.length && activeCompany() && !companyIds.includes(activeCompany().id)) {
+      scheduleInboxAlerts();
+      return;
+    }
     clearTimeout(realtimeRefreshTimer);
     realtimeRefreshTimer = setTimeout(() => refreshInbox().catch(() => {}), 120);
   });
@@ -2286,6 +2414,9 @@ function activityText(activity) {
     PRIVATE_SEGMENT_STARTED: `🔒 conversa entrou em ${details.category || "setor protegido"} (histórico restrito ao setor)`,
     PRIVATE_SEGMENT_ENDED: details.finalized ? "🔒 atendimento do setor protegido foi finalizado" : `🔒 conversa saiu de ${details.category || "setor protegido"} para ${details.to || "outro setor"}`,
     ROUTED_TO_PREFERRED_ASSIGNEE: `Novo atendimento direcionado ao atendente fixo ${details.to || ""}`.trim(),
+    MESSAGE_PINNED: "fixou uma mensagem",
+    MESSAGE_UNPINNED: "desafixou uma mensagem",
+    MESSAGE_FORWARDED: "encaminhou uma mensagem para esta conversa",
     AUTO_FINALIZED_INACTIVITY: `Sistema finalizou a conversa após ${details.inactivityMinutes || 1440} minutos sem resposta do cliente`,
     AFTER_HOURS_REMINDER_SENT: "enviou o lembrete automático fora do expediente (Automação — Fora do expediente)",
     AFTER_HOURS_REMINDER_FAILED: "não conseguiu enviar o lembrete automático fora do expediente — a Meta recusou o envio",
@@ -2305,7 +2436,8 @@ function renderTeamCompanyAccess(access = []) {
   $("#team-company-access").innerHTML = state.companies.map((company) => {
     const entry = byCompany.get(company.id);
     const checked = entry ? entry.active !== false : false;
-    return `<div class="team-company-row" data-company-row="${escapeHtml(company.id)}"${companyStyleAttr(company)}>
+    const defaults = state.adminUsers?.find(user => user.id === state.editingUserId) || {};
+    return `<div class="team-company-row" data-company-row="${escapeHtml(company.id)}" data-original-permissions="${escapeHtml(JSON.stringify(entry?.permissions || null))}"${companyStyleAttr(company)}>
       <label class="team-company-check"><input class="team-company-input" type="checkbox" value="${escapeHtml(company.id)}" ${checked ? "checked" : ""}>${companyBadge(company)}<span>${escapeHtml(company.name)}</span></label>
       <select class="team-company-role" aria-label="Cargo em ${escapeHtml(company.name)}">
         <option value="" ${!entry?.role ? "selected" : ""}>Cargo padrão</option>
@@ -2314,7 +2446,7 @@ function renderTeamCompanyAccess(access = []) {
       </select>
       <details class="team-company-permissions" ${entry?.permissions ? "open" : ""}>
         <summary><label><input class="team-company-custom" type="checkbox" ${entry?.permissions ? "checked" : ""}> Personalizar permissões nesta empresa</label></summary>
-        <div class="team-company-permission-list">${COMPANY_PERMISSION_LABELS.map(([key, label]) => `<label><input type="checkbox" data-company-permission="${key}" ${entry?.permissions?.[key] ? "checked" : ""}> ${escapeHtml(label)}</label>`).join("")}</div>
+        <div class="team-company-permission-list">${COMPANY_PERMISSION_LABELS.map(([key, label]) => `<label><input type="checkbox" data-company-permission="${key}" ${(entry?.permissions?.[key] ?? defaults[key]) ? "checked" : ""} data-initial-checked="${Boolean(entry?.permissions?.[key] ?? defaults[key])}"> ${escapeHtml(label)}</label>`).join("")}</div>
       </details>
     </div>`;
   }).join("");
@@ -2331,14 +2463,17 @@ const COMPANY_PERMISSION_LABELS = [
 ];
 
 function teamCompanyAccessBody() {
-  return [...document.querySelectorAll("#team-company-access [data-company-row]")].map((row) => ({
-    companyId: row.dataset.companyRow,
-    role: row.querySelector(".team-company-role").value || null,
-    active: row.querySelector(".team-company-input").checked,
-    permissions: row.querySelector(".team-company-custom").checked
-      ? Object.fromEntries([...row.querySelectorAll("[data-company-permission]")].map((input) => [input.dataset.companyPermission, input.checked]))
-      : null,
-  })).filter((entry) => entry.active);
+  return [...document.querySelectorAll("#team-company-access [data-company-row]")].map(row => {
+    let permissions = row.querySelector(".team-company-custom").checked ? { ...JSON.parse(row.dataset.originalPermissions || "null") } : null;
+    if (permissions) for (const input of row.querySelectorAll("[data-company-permission]")) {
+      const key = input.dataset.companyPermission;
+      if (Object.hasOwn(permissions, key) || String(input.checked) !== input.dataset.initialChecked) permissions[key] = input.checked;
+    }
+    const uncategorized = [...document.querySelectorAll("[data-uncategorized-company]")].find(input => input.dataset.uncategorizedCompany === row.dataset.companyRow);
+    if (uncategorized?.dataset.dirty === "true") permissions = { ...permissions, canViewUncategorized: uncategorized.checked };
+    return { companyId: row.dataset.companyRow, role: row.querySelector(".team-company-role").value || null,
+      active: row.querySelector(".team-company-input").checked, permissions: permissions && Object.keys(permissions).length ? permissions : null };
+  }).filter(entry => entry.active);
 }
 
 function renderTeamCategoryAccess(selectedIds = [], canViewUncategorized = false) {
@@ -2348,9 +2483,13 @@ function renderTeamCategoryAccess(selectedIds = [], canViewUncategorized = false
   const roots = active.filter((category) => !category.parentId)
     .sort((left, right) => String(left.company?.name || "").localeCompare(String(right.company?.name || ""), "pt-BR"));
   $("#team-category-access").innerHTML = `<div class="team-category-groups">
-    <section class="team-category-group uncategorized">
-      <label class="team-category-option root"><input id="permission-uncategorized" type="checkbox" ${canViewUncategorized ? "checked" : ""}><i class="category-dot uncategorized-dot"></i><span><b>Sem categoria</b><small>Conversas que ainda não foram classificadas.</small></span></label>
-    </section>
+    <input id="permission-uncategorized" type="checkbox" hidden ${canViewUncategorized ? "checked" : ""}>
+    ${state.companies.map(company => {
+      const user = state.adminUsers?.find(row => row.id === state.editingUserId);
+      const permissions = user?.companyAccess?.find(entry => entry.companyId === company.id)?.permissions;
+      const allowed = $("#team-role").value === "ADMIN" || (permissions?.canViewUncategorized ?? canViewUncategorized);
+      return `<section class="team-category-group uncategorized" data-category-company="${escapeHtml(company.id)}"><label class="team-category-option root"><input type="checkbox" data-uncategorized-company="${escapeHtml(company.id)}" ${allowed ? "checked" : ""}><i class="category-dot uncategorized-dot"></i><span><b>Sem categoria ${companyBadge(company)}</b><small>Conversas ainda não classificadas nesta empresa.</small></span></label></section>`;
+    }).join("")}
     ${roots.map((root) => {
     const children = active.filter((category) => category.parentId === root.id);
     const rootSelected = selected.has(root.id);
@@ -2361,13 +2500,50 @@ function renderTeamCategoryAccess(selectedIds = [], canViewUncategorized = false
   }).join("")}</div>`;
 }
 
+function setTeamPane(name) {
+  $("#team-form").scrollTop = 0;
+  document.querySelectorAll("[data-team-pane]").forEach(pane => { pane.hidden = pane.dataset.teamPane !== name; });
+  document.querySelectorAll("[data-team-tab]").forEach(button => button.setAttribute("aria-pressed", String(button.dataset.teamTab === name)));
+}
+
+function syncTeamNumbers() {
+  const master = $("#team-role").value === "ADMIN";
+  const allowed = new Set(teamCompanyAccessBody().map(row => row.companyId));
+  document.querySelectorAll("#team-number-access input").forEach(input => {
+    input.disabled = master || !allowed.has(input.dataset.companyId);
+    input.closest("label").classList.toggle("number-unavailable", input.disabled);
+  });
+  document.querySelectorAll("#team-category-access [data-category-company]").forEach(group => {
+    group.querySelectorAll("input").forEach(input => { input.disabled = master || !allowed.has(group.dataset.categoryCompany); });
+  });
+  $("#team-number-access").dataset.master = String(master);
+}
+
+function renderTeamNumberAccess() {
+  const options = state.teamNumberOptions;
+  const host = $("#team-number-access");
+  if (!Array.isArray(options)) { host.textContent = "Não foi possível carregar os números. Os acessos atuais serão preservados ao salvar."; return; }
+  const user = state.adminUsers?.find(row => row.id === state.editingUserId);
+  const selected = new Set(user ? (user.channelAccountAccess || []).map(row => row.channelAccountId) : options.filter(row => row.defaultUserAccess).map(row => row.id));
+  host.dataset.userKey = state.editingUserId || "new";
+  host.innerHTML = '<p class="master-number-note">Master tem acesso a todos os números.</p>' + state.companies.map(company => {
+    const rows = options.filter(row => row.companyId === company.id);
+    if (!rows.length) return "";
+    return `<section class="team-number-company"><h4>${escapeHtml(company.name)}</h4>${rows.map(row => `<label class="team-number-option"><input type="checkbox" value="${escapeHtml(row.id)}" data-company-id="${escapeHtml(row.companyId)}" ${selected.has(row.id) ? "checked" : ""}><span><strong>${escapeHtml(row.name)}</strong><small>${escapeHtml(row.displayNumber || "WhatsApp")}${!row.enabled || row.status !== "CONNECTED" ? " · Indisponível no momento" : ""}</small></span></label>`).join("")}</section>`;
+  }).join("") || "<p>Nenhum número de WhatsApp cadastrado.</p>";
+  syncTeamNumbers();
+}
+
 function syncMasterForm() {
   const master = $("#team-role").value === "ADMIN";
   document.querySelectorAll(".team-permissions input,.team-categories input,.team-companies input,.team-companies select").forEach((input) => { input.disabled = master; });
+  if ($("#team-number-access").dataset.userKey !== (state.editingUserId || "new")) renderTeamNumberAccess();
+  else syncTeamNumbers();
 }
 
 function resetTeamForm() {
   state.editingUserId = null;
+  setTeamPane("account");
   window.CrmAccessAdmin?.load(null);
   $("#configure-conversation-observers").disabled = true;
   $("#team-form").reset();
@@ -2387,6 +2563,7 @@ function editTeamUser(userId) {
   const user = state.adminUsers.find((item) => item.id === userId);
   if (!user) return;
   state.editingUserId = user.id;
+  setTeamPane("account");
   window.CrmAccessAdmin?.load(user.id);
   $("#configure-conversation-observers").disabled = user.role === "ADMIN";
   $("#team-name").value = user.name;
@@ -2460,7 +2637,10 @@ async function loadAuditLogs() {
 
 async function loadAdminUsers() {
   if (!state.currentUser?.isMaster) return;
-  state.adminUsers = await api("/api/admin/users");
+  const [users, numbers] = await Promise.all([api("/api/admin/users"), api("/api/admin/users/number-options").catch(() => null)]);
+  state.adminUsers = users;
+  state.teamNumberOptions = numbers;
+  renderTeamNumberAccess();
   renderAdminUsers();
 }
 
@@ -2630,7 +2810,33 @@ document.querySelectorAll(".channel-workspace-item").forEach((item) => item.addE
   setChannelWorkspace(item.dataset.channelView);
   $("#app-sidebar").classList.remove("mobile-open");
 }));
-$("#refresh").addEventListener("click", loadConversations);
+$("#refresh").addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  const company = companyQuery();
+  if (!company || button.disabled) return;
+  const epoch = workspace.epoch;
+  button.disabled = true;
+  clearTimeout(searchTimer);
+  for (const key of WORKSPACE_FILTER_KEYS) state[key] = WORKSPACE_FILTER_DEFAULTS[key];
+  state.statusToggle.clear();
+  state.priorityToggle.clear();
+  setChannelWorkspace("", { load: false });
+  syncWorkspaceFilterControls();
+  saveWorkspaceFilters();
+  document.querySelectorAll(".filter").forEach((item) => item.classList.remove("active"));
+  document.querySelector('[data-status=""]')?.classList.add("active");
+  try {
+    const visibility = await api("/api/category-visibility", { method: "PATCH", body: JSON.stringify({ reset: true, company }) });
+    if (epoch !== workspace.epoch) return;
+    state.categoryVisibility = visibility;
+    await loadCategories();
+  } catch (error) {
+    if (epoch === workspace.epoch) toast(`Não foi possível restaurar a exibição das categorias. ${error.message}`, true);
+  } finally {
+    button.disabled = false;
+    if (epoch === workspace.epoch) loadConversations().catch((error) => toast(error.message, true));
+  }
+});
 $("#new-conversation").addEventListener("click", openOutboundConversation);
 $("#close-outbound-channels").addEventListener("click", () => $("#outbound-channel-dialog").close());
 $("#outbound-channel-dialog").addEventListener("click", (event) => { if (event.target === $("#outbound-channel-dialog")) $("#outbound-channel-dialog").close(); });
@@ -2793,10 +2999,8 @@ $("#bots-button").addEventListener("click", () => { location.href = "/bots"; });
 $("#quick-replies-admin-button").addEventListener("click", () => { location.href = "/quick-replies"; });
 $("#templates-library-button").addEventListener("click", () => { location.href = "/templates"; });
 $("#campaigns-button").addEventListener("click", () => { location.href = "/campaigns"; });
-$("#operations-button").addEventListener("click", () => { location.href = "/operacao"; });
 window.setContextTabFromFollowUps = () => setContextTab("agenda");
-$("#productivity-button").addEventListener("click", () => { location.href = "/produtividade"; });
-$("#meta-costs-button").addEventListener("click", () => { location.href = "/custos-meta"; });
+$("#metrics-button").addEventListener("click", () => { location.href = "/metricas"; });
 $("#conversation-settings-button").addEventListener("click", () => { location.href = "/configuracoes"; });
 $("#integrations-button").addEventListener("click", () => { location.href = "/integrations"; });
 $("#user-button").addEventListener("click", async () => { await api("/api/auth/logout", { method:"POST" }); window.CentralSessionState?.clear();state.currentUser=null; location.replace("/login.html"); });
@@ -2991,12 +3195,37 @@ $("#team-user-list").addEventListener("click", (event) => {
     window.WaSupervision.open({ memberId: view.dataset.viewUser, tab: "history" }).catch((error) => toast(error.message, true));
   }
 });
+$("#team-category-access").addEventListener("change", event => {
+  const input = event.target.closest("[data-uncategorized-company]");
+  if (!input) return;
+  input.dataset.dirty = "true";
+  const row = [...document.querySelectorAll("[data-company-row]")].find(row => row.dataset.companyRow === input.dataset.uncategorizedCompany);
+  const mirror = row?.querySelector('[data-company-permission="canViewUncategorized"]');
+  if (mirror) mirror.checked = input.checked;
+});
+$("#team-company-access").addEventListener("change", event => {
+  const row = event.target.closest("[data-company-row]");
+  if (!row) return;
+  const tile = [...document.querySelectorAll("[data-uncategorized-company]")].find(input => input.dataset.uncategorizedCompany === row.dataset.companyRow);
+  if (!tile) return;
+  if (event.target.matches('[data-company-permission="canViewUncategorized"]')) { tile.checked = event.target.checked; tile.dataset.dirty = "true"; }
+  if (event.target.matches('.team-company-custom') && !event.target.checked) { tile.checked = $("#permission-uncategorized").checked; delete tile.dataset.dirty; }
+});
 $("#configure-conversation-observers").addEventListener("click", () => {
   if (!state.currentUser?.isMaster || !state.editingUserId) return;
   const observerId = state.editingUserId;
   $("#team-dialog").close();
   window.WaSupervision.open({ observerId }).catch((error) => toast(error.message, true));
 });
+document.querySelector(".team-editor-tabs").addEventListener("click", event => {
+  const button = event.target.closest("[data-team-tab]");
+  if (button) setTeamPane(button.dataset.teamTab);
+});
+$("#team-form").addEventListener("invalid", event => {
+  const pane = event.target.closest("[data-team-pane]");
+  if (pane) setTeamPane(pane.dataset.teamPane);
+}, true);
+$("#team-company-access").addEventListener("change", syncTeamNumbers);
 $("#team-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const password = $("#team-password").value;
@@ -3017,6 +3246,8 @@ $("#team-form").addEventListener("submit", async (event) => {
     categoryIds: [...document.querySelectorAll("#team-category-access .team-category-access-input:checked")].map((input) => input.value),
     companyAccess: teamCompanyAccessBody(),
   };
+  if (body.role !== "ADMIN") body.categoryIds = [...document.querySelectorAll("#team-category-access .team-category-access-input:checked:not(:disabled)")].map(input => input.value);
+  if (Array.isArray(state.teamNumberOptions) && body.role !== "ADMIN") body.channelAccountIds = [...document.querySelectorAll("#team-number-access input:checked:not(:disabled)")].map(input => input.value);
   if (password) body.password = password;
   if (state.editingUserId) body.active = $("#team-active").checked;
   const submit = event.submitter; submit.disabled = true;
@@ -3640,11 +3871,13 @@ async function sendPendingAudio() {
   const form = new FormData();
   form.append("audio", audio.blob, audio.fileName);
   if (audio.durationMs) form.append("durationMs", String(Math.round(audio.durationMs)));
+  window.ChatFeatures?.appendReply(form, conversationId);
   $("#send-button").disabled = true;
   try {
     if(window.ContactWarning&&!(await window.ContactWarning.confirm({conversationId})))return;
     if(state.selectedId!==conversationId)return;
     await api(`/api/conversations/${conversationId}/audios`, { method:"POST", body:form });
+    window.ChatFeatures?.onSent(conversationId);
     if (pendingAudio === audio) setPendingAudio(null);
     if (state.selectedId === conversationId) await openConversation(conversationId);
   } catch (e) {
@@ -4224,7 +4457,7 @@ $("#composer").addEventListener("submit", async (event) => {
   const pendingSuggestion = state.pendingBotSuggestion;
   $("#send-button").disabled = true;
   try {
-    const proposalPayload = window.CrmProposalDraft?.payload(sendingConversationId) || {};
+    const proposalPayload = { ...(window.CrmProposalDraft?.payload(sendingConversationId) || {}), ...(window.ChatFeatures?.replyPayload(sendingConversationId) || {}) };
     const clientRequestId = !sendingAttachment ? composerSendGuard.request(sendingConversationId, text, proposalPayload) : null;
     const warningConversation=sendingConversationId;
     if(window.ContactWarning&&!(await window.ContactWarning.confirm({conversationId:warningConversation})))return;
@@ -4237,6 +4470,7 @@ $("#composer").addEventListener("submit", async (event) => {
       const form = new FormData();
       form.append(field, sendingAttachment);
       if (text) form.append("caption", text);
+      window.ChatFeatures?.appendReply(form, sendingConversationId);
       await api(`/api/conversations/${sendingConversationId}/${endpoint}`, { method:"POST", body:form });
       if (state.selectedId !== sendingConversationId) return;
       if (selectedAttachment === sendingAttachment) clearSelectedAttachment();
@@ -4245,6 +4479,7 @@ $("#composer").addEventListener("submit", async (event) => {
       composerSendGuard.complete(sendingConversationId, clientRequestId);
       window.CrmProposalDraft?.sent(sendingConversationId);
     }
+    window.ChatFeatures?.onSent(sendingConversationId);
     if (pendingSuggestion?.observationId && text) {
       const action = text === pendingSuggestion.originalText.trim() ? "USED" : "EDITED";
       await api("/api/bot-suggestion-feedback", {

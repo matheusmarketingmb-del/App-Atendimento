@@ -2557,3 +2557,16 @@ html .list-heading .workspace-switcher .workspace-tab:hover { color:var(--text-1
 .archive-card-actions a { color:var(--text-3,var(--muted)); font-size:10px; font-weight:550; text-decoration:none; }
 .archive-card-actions a:hover { color:var(--text-1,var(--ink)); text-decoration:underline; }
 .contact-files-dialog .contact-profile-phone { margin:5px 0; color:var(--text-2,var(--muted)); font-size:13px; font-variant-numeric:tabular-nums; }
+
+
+/* Keep icon shortcuts centered and aligned with the message field. */
+.composer .composer-tools > .composer-emoji-button:not([hidden]) { display:inline-flex; align-items:center; justify-content:center; box-sizing:border-box; width:44px; min-width:44px; height:44px; padding:0; flex:0 0 44px; align-self:flex-end; }
+.composer-input-wrap > textarea { display:block; }
+@media (max-width:700px) { .composer .composer-tools > .composer-emoji-button:not([hidden]) { display:none; } }
+
+#assistant-intake { align-self:center; width:min(100%, 540px); flex:none; margin:8px auto; padding:10px 14px; border:1px solid var(--line); border-radius:12px; background:var(--panel); color:var(--ink); font-size:13px; }
+#assistant-intake summary { font-weight:700; cursor:pointer; }
+#assistant-intake summary small { margin-inline-start:6px; color:var(--muted); font-weight:500; }
+#assistant-intake dl { display:grid; gap:10px; margin:10px 0 0; }
+#assistant-intake dt { font-weight:700; }
+#assistant-intake dd { margin:2px 0 0; white-space:pre-wrap; overflow-wrap:anywhere; }

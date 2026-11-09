@@ -126,6 +126,7 @@ const publicSelection = {
   canManageCampaigns: true,
   canViewOwnProductivity: true,
   canManageAfterHours: true,
+  channelAccountAccess: { select: { channelAccountId: true, channelAccount: { select: { channel: true } } } },
   categoryAccess: { include: { category: { select: { id: true, name: true, parentId: true, color: true, companyId: true } } } },
   companyAccess: {
     select: { companyId: true, role: true, active: true, permissions: true, company: { select: { id: true, name: true, slug: true, displayName: true, primaryColor: true } } },
@@ -139,6 +140,7 @@ function accessSnapshot(user) {
     email: user.email,
     role: user.role,
     active: user.active,
+    channelAccountIds: (user.channelAccountAccess || []).filter(row => row.channelAccount.channel === "META").map(row => row.channelAccountId),
     permissions: Object.fromEntries(booleanPermissions.map((key) => [key, Boolean(user[key])])),
     categories: (user.categoryAccess || []).map(({ category }) => ({
       id: category.id,
@@ -154,6 +156,34 @@ function accessSnapshot(user) {
 
 async function listUsers() {
   return prisma.user.findMany({ where: { role: { not: "BOT" } }, select: publicSelection, orderBy: { name: "asc" } });
+}
+
+async function listNumberOptions(viewer) {
+  authorization.assertMaster(viewer);
+  const rows = await prisma.channelAccount.findMany({ where: { channel: "META", company: { is: { active: true } } },
+    select: { id: true, name: true, companyId: true, enabled: true, status: true, config: true }, orderBy: [{ companyId: "asc" }, { name: "asc" }] });
+  return rows.map(row => ({ id: row.id, name: row.name, companyId: row.companyId, enabled: row.enabled, status: row.status,
+    displayNumber: row.config?.displayNumber || row.config?.displayPhoneNumber || null, defaultUserAccess: row.config?.defaultUserAccess === true }));
+}
+
+async function validateNumberIds(ids, companyIds) {
+  if (ids === undefined) return undefined;
+  if (!Array.isArray(ids) || ids.length > 500 || ids.some(id => typeof id !== "string" || !id) || new Set(ids).size !== ids.length) {
+    throw Object.assign(new Error("Seleção de números inválida."), { statusCode: 400 });
+  }
+  const rows = await prisma.channelAccount.findMany({ where: { id: { in: ids }, channel: "META", company: { is: { active: true } } }, select: { id: true, companyId: true } });
+  if (rows.length !== ids.length || (companyIds && rows.some(row => !companyIds.includes(row.companyId)))) {
+    throw Object.assign(new Error("Selecione apenas números das empresas liberadas para esta pessoa."), { statusCode: 400 });
+  }
+  return ids;
+}
+
+async function saveNumberAccess(tx, userId, ids) {
+  if (ids === undefined) return;
+  // Atualiza somente o vínculo da pessoa com números META das empresas ativas.
+  // A configuração das contas, setores e vínculos de outras pessoas é independente.
+  await tx.channelAccountUserAccess.deleteMany({ where: { userId, channelAccount: { is: { channel: "META", company: { is: { active: true } } } } } });
+  if (ids.length) await tx.channelAccountUserAccess.createMany({ data: ids.map(channelAccountId => ({ userId, channelAccountId })), skipDuplicates: true });
 }
 
 async function listTeamActivity(viewer, { company } = {}) {
@@ -193,6 +223,7 @@ async function createUser(data, actor) {
   const password = validatePassword(data.password, true);
   const companyAccess = (await validateCompanyAccess(data.companyAccess, role)) ?? (role === "ADMIN" ? [] : await validateCompanyAccess([], role));
   const categoryIds = await validateCategoryIds(data.categoryIds, role === "ADMIN" ? null : companyAccess.filter((row) => row.active).map((row) => row.companyId));
+  const numberIds = await validateNumberIds(data.channelAccountIds, role === "ADMIN" ? null : companyAccess.filter(row => row.active).map(row => row.companyId));
   const passwordHash = await bcrypt.hash(password, 12);
   try {
     return await prisma.$transaction(async (transaction) => {
@@ -205,25 +236,27 @@ async function createUser(data, actor) {
         select: publicSelection,
       });
       // Acesso padrão por conta, sem ampliar categorias ou permissões do usuário.
-      const defaultAccounts = await transaction.channelAccount.findMany({
+      const defaultAccounts = numberIds === undefined ? await transaction.channelAccount.findMany({
         where: { channel: "META", enabled: true, config: { path: ["defaultUserAccess"], equals: true } },
         select: { id: true },
-      });
+      }) : [];
       if (defaultAccounts.length) {
         await transaction.channelAccountUserAccess.createMany({
           data: defaultAccounts.map(({ id }) => ({ channelAccountId: id, userId: user.id })),
           skipDuplicates: true,
         });
       }
+      await saveNumberAccess(transaction, user.id, numberIds);
+      const savedUser = await transaction.user.findUnique({ where: { id: user.id }, select: publicSelection });
       await audit.recordAudit({
         actor,
         action: "USER_CREATED",
         entityType: "USER",
         entityId: user.id,
         summary: `Criou a conta ${user.name} (${user.email})`,
-        details: { access: accessSnapshot(user) },
+        details: { access: accessSnapshot(savedUser) },
       }, transaction);
-      return user;
+      return savedUser;
     });
   } catch (error) {
     if (error.code === "P2002") throw Object.assign(new Error("Já existe uma conta com este e-mail."), { statusCode: 409 });
@@ -261,6 +294,7 @@ async function updateUser(id, data, currentMasterId, actor) {
   }
   const categoryIds = data.categoryIds === undefined ? null
     : await validateCategoryIds(data.categoryIds, effectiveRole === "ADMIN" ? null : activeCompanyIds);
+  const numberIds = await validateNumberIds(data.channelAccountIds, effectiveRole === "ADMIN" ? null : activeCompanyIds);
   // Perder acesso a uma empresa ou trocar de cargo nela muda o que a pessoa
   // vê — derruba as sessões abertas para valer imediatamente.
   if (companyAccess !== undefined) update.sessionVersion = { increment: 1 };
@@ -277,6 +311,7 @@ async function updateUser(id, data, currentMasterId, actor) {
         await transaction.userCategoryAccess.deleteMany({ where: { userId: id, OR: [{ category: { is: { company: { is: { active: true } } } } }, { categoryId: { in: categoryIds } }] } });
         if (categoryIds.length) await transaction.userCategoryAccess.createMany({ data: categoryIds.map((categoryId) => ({ userId: id, categoryId })) });
       }
+      await saveNumberAccess(transaction, id, numberIds);
       const user = await transaction.user.update({ where: { id }, data: update, select: publicSelection });
       await audit.recordAudit({
         actor,
@@ -298,4 +333,4 @@ async function updateUser(id, data, currentMasterId, actor) {
   }
 }
 
-module.exports = { createUser, listTeamActivity, listUsers, updateUser };
+module.exports = { createUser, listTeamActivity, listUsers, updateUser, listNumberOptions };

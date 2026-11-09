@@ -10,11 +10,13 @@
   <link rel="stylesheet" href="/css/skeleton.css">
   <link rel="stylesheet" href="/css/bots.css">
   <link rel="stylesheet" href="/css/operacao.css">
+  <link rel="stylesheet" href="/css/metrics-tabs.css?v=0.38.1-admin-ui-20261105">
 </head>
 <body class="meta-cost-page">
   <header class="topbar">
     <a class="brand" href="/"><img src="/assets/central-mark.svg" alt="Central de Atendimento"><span></span><small>Custos Meta</small></a>
     <div class="phase-badge">CUSTOS META &bull; ESTIMATIVA</div>
+
     <a class="back-link" href="/">&larr; Central</a>
     <button id="theme-toggle" class="round-button" type="button" title="Alternar tema">&#9790;</button>
     <button id="logout" class="user-button" type="button"><span id="current-user">Usuário</span> &bull; Sair</button>
@@ -22,12 +24,17 @@
 
   <main class="ops-shell">
     <div class="ops-heading">
-      <div><span>WHATSAPP</span><h1>Custos da Meta</h1><p>Estimativa a partir da categoria informada pela própria Meta em cada envio. Não bloqueia nenhum envio.</p></div>
+      <div><span>WHATSAPP</span><h1>Custos da Meta</h1><p>Envios, valor de tabela e cobrança estimada dos recibos da Meta. Não bloqueia nenhum envio.</p></div>
     </div>
 
     <form id="cost-filters" class="ops-filters" aria-label="Filtros">
       <div id="cost-company-filter" class="company-filter" role="radiogroup" aria-label="Empresa" hidden></div>
-      <label><span>Período</span><select id="cost-period"><option value="day">Hoje</option><option value="week">Últimos 7 dias</option><option value="month" selected>Este mês</option></select></label>
+      <label><span>Período</span><select id="cost-period"><option value="day">Hoje</option><option value="date">Escolher um dia</option><option value="date-range">Intervalo de dias</option><option value="month-range">Intervalo de meses</option><option value="week">Últimos 7 dias</option><option value="month" selected>Este mês</option><option value="3months">Últimos 3 meses</option><option value="all">Todo o período</option></select></label>
+      <label id="cost-date-filter" hidden><span>Dia (horário de Brasília)</span><input id="cost-date" type="date"></label>
+      <label data-cost-range="date-range" hidden><span>Dia inicial</span><input id="cost-from-date" type="date"></label>
+      <label data-cost-range="date-range" hidden><span>Dia final</span><input id="cost-to-date" type="date"></label>
+      <label data-cost-range="month-range" hidden><span>Mês inicial</span><input id="cost-from-month" type="month" placeholder="AAAA-MM"></label>
+      <label data-cost-range="month-range" hidden><span>Mês final</span><input id="cost-to-month" type="month" placeholder="AAAA-MM"></label>
       <label><span>Número</span><select id="cost-account"><option value="">Todos os números</option></select></label>
     </form>
 
@@ -112,8 +119,14 @@
   </main>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <style>
+    #cost-filters label[hidden] { display:none; }
+    #cost-filters input { box-sizing:border-box; width:100%; min-height:36px; padding:0 10px; border:1px solid var(--line); border-radius:8px; color:var(--ink); background:var(--surface); font:inherit; font-size:12px; }
     /* bots.css fixa a tela para o editor; este relatório precisa rolar inteiro. */
     body.meta-cost-page { height:auto; min-height:100vh; min-height:100dvh; overflow-x:hidden; overflow-y:auto; }
+    #cost-tariff-note { margin-bottom:16px; }
+    #cost-tariff-note table { width:100%; table-layout:fixed; }
+    #cost-tariff-note th:first-child { width:50%; }
+    #cost-tariff-note td { white-space:normal; overflow-wrap:anywhere; }
     .cost-companies { display:grid; grid-template-columns:repeat(auto-fit, minmax(min(100%,300px), 1fr)); gap:12px; margin-bottom:12px; }
     .meta-cost-page .topbar { height:auto;min-height:64px;flex-wrap:wrap;padding:12px 18px; }
     .meta-cost-page .brand img { width:32px;height:32px; }
@@ -234,6 +247,7 @@
   </style>
   <script src="/js/company-context.js"></script>
   <script src="/js/template-ranking.js?v=0.37.6-authors-1"></script>
-  <script src="/js/custos-meta.js?v=0.37.6"></script>
+  <script src="/js/custos-meta.js?v=0.38.1-admin-ui-20261105"></script>
+  <script src="/js/metrics-nav.js?v=0.38.1-admin-ui-20261105"></script>
 </body>
 </html>

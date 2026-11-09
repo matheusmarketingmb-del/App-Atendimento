@@ -75,7 +75,7 @@ function baseContext(seed = {}) {
     conversation: { ...(seed.conversation || {}) },
     bot: { ...(seed.bot || {}) },
     flow: { ...(seed.flow || {}) }, customer: {}, vars: {}, custom: {},
-    _engine: { attempts: {}, visited: [] },
+    _engine: { attempts: {}, visited: [], ...(seed.intakeAnswers ? { intakeAnswers: seed.intakeAnswers } : {}) },
   };
 }
 
@@ -212,6 +212,12 @@ function formatFollowUpAt(date) {
   return `${pad(p.day)}/${pad(p.month)}/${p.year} às ${pad(p.hour)}:${pad(p.minute)}`;
 }
 
+const MENU_NUMBER_PATTERN = /^(?:opcao|op|numero|n)?\s*(\d{1,2})(?:\s|$)/;
+
+function normalizeMenuInput(input) {
+  return normalizeText(input).replace(/[!?.,;:]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
 // Aceita clique na lista do WhatsApp (replyId), "2", "opção 2", "suporte",
 // "quero suporte" ou um sinônimo cadastrado — nunca chama IA. Só escolhe por
 // conteúdo quando exatamente UMA opção bate (evita chute).
@@ -220,9 +226,9 @@ function matchMenuOption(options, input, replyId = null) {
     const byReply = options.find((option) => option.id === String(replyId).slice(MENU_REPLY_PREFIX.length));
     if (byReply) return byReply;
   }
-  const normalized = normalizeText(input).replace(/[!?.,;:]+/g, " ").replace(/\s+/g, " ").trim();
+  const normalized = normalizeMenuInput(input);
   if (!normalized) return null;
-  const numberMatch = normalized.match(/^(?:opcao|op|numero|n)?\s*(\d{1,2})(?:\s|$)/);
+  const numberMatch = normalized.match(MENU_NUMBER_PATTERN);
   if (numberMatch) {
     const option = options[Number(numberMatch[1]) - 1];
     if (option) return option;
@@ -342,10 +348,20 @@ const HANDLERS = {
     delete run.context._engine.attempts[node.key];
     setPath(run.context, node.config.variable, value);
     run.context.flow.lastAnswer = value;
+    if (input.messageId && (run.context.bot.assistantAfterTriage || node.config.variable === "flow.atendimentoNeed")
+      && !String(node.config.variable || "").startsWith("flow.rating")) {
+      const answers = (run.context._engine.intakeAnswers || []).filter(answer => answer.variable !== node.config.variable);
+      if (normalizeText(value) !== "pular") answers.push({
+        variable: node.config.variable, messageId: input.messageId,
+        question: node.config.text.replace(/\{\{[^}]*\}\}/g, "").trim().slice(0, 240),
+      });
+      run.context._engine.intakeAnswers = answers.slice(-20);
+    }
     return { branch: "next", output: { variable: node.config.variable, value } };
   },
 
   async menu(node, run) {
+    delete run.context._engine.menuClarificationSent;
     await sendMenu(node, run);
     return { wait: "CUSTOMER" };
   },
@@ -353,7 +369,19 @@ const HANDLERS = {
     node = effectiveMenu(node, run.context);
     const option = matchMenuOption(node.config.options || [], input.text, input.replyId);
     if (!option) {
-      return retryOrFail(node, run, node.config.invalidMessage || DEFAULT_MENU_INVALID_MESSAGE, renderMenuText(node.config, run.context));
+      const invalidMessage = node.config.invalidMessage || DEFAULT_MENU_INVALID_MESSAGE;
+      const menuText = renderMenuText(node.config, run.context);
+      const assistantMenu = run.context.bot.assistantAfterTriage && !String(node.config.variable || "").startsWith("flow.rating");
+      if (assistantMenu && !input.replyId && !MENU_NUMBER_PATTERN.test(normalizeMenuInput(input.text))) {
+        // Texto livre pode chegar antes da escolha. O menu atual continua
+        // aguardando, com um único lembrete até o cliente escolher ou voltar.
+        if (!run.context._engine.menuClarificationSent) {
+          await run.adapter.send([invalidMessage, menuText].filter(Boolean).join("\n"));
+          run.context._engine.menuClarificationSent = true;
+        }
+        return { stay: true, output: { awaitingMenuOption: true } };
+      }
+      return retryOrFail(node, run, invalidMessage, menuText);
     }
     delete run.context._engine.attempts[node.key];
     setPath(run.context, node.config.variable, option.label);
@@ -484,6 +512,9 @@ async function runTurn({
   const inputAt = Date.now();
   const humanRequestText = input?.type === "MESSAGE" ? input.text : run.context.flow.initialNeed;
   if (!FINISHED_STATUSES.has(next.status) && run.context.bot.assistantAfterTriage && /(?:falar|conversar|quero|preciso|chamar).*(?:atendente|humano|pessoa|vendedor)|^(?:atendente|humano|pessoa|vendedor)$/.test(normalizeText(humanRequestText))) {
+    if (input?.type === "START" && run.context.bot.introduceAfterTriage) {
+      await adapter.send(renderTemplate(indexed.start?.config?.initialMessage || "", run.context));
+    }
     await adapter.handoff({ message: "Claro, vou chamar nossa equipe para continuar seu atendimento.", reason: "Cliente pediu atendimento humano", categoryId: run.context.flow.initialCategoryId || null });
     next.status = STATUS.HANDED_OFF;
     return { state: next, trace: [{ nodeKey: next.currentNodeKey || "start", nodeType: "human_handoff", result: "DONE", output: { requestedByCustomer: true }, durationMs: Date.now() - inputAt }] };
@@ -491,7 +522,7 @@ async function runTurn({
   if (input?.type === "MESSAGE" && next.context._engine.promptAt) {
     run.customerReplyMs = Math.max(0, now.getTime() - next.context._engine.promptAt);
   }
-  if (run.context.bot.availabilityManaged && !run.context.bot.withinBusinessHours) {
+  if (run.context.bot.availabilityManaged && !run.context.bot.withinBusinessHours && !run.context.bot.allowOutsideHours) {
     if (run.context.bot.queueOutsideHours) {
       await adapter.handoff({ reason: 'OUTSIDE_HOURS_QUEUED', message: '' });
       next.status = STATUS.HANDED_OFF;
@@ -570,6 +601,7 @@ async function runTurn({
         const target = previous && indexed.nodes.get(previous.nodeKey);
         if (target && RESUMERS[target.type]) {
           run.context.flow = JSON.parse(JSON.stringify(previous.flow));
+          run.context._engine.intakeAnswers = previous.intakeAnswers || [];
           current = target;
           next.currentNodeKey = current.key;
         }
@@ -656,7 +688,7 @@ async function runTurn({
     if (result.wait === "CUSTOMER") {
       if (run.context.bot.assistantAfterTriage && !String(current.config.variable || "").startsWith("flow.rating")) {
         const history = next.context._engine.promptHistory ||= [];
-        history.push({ nodeKey: current.key, flow: JSON.parse(JSON.stringify(run.context.flow)) });
+        history.push({ nodeKey: current.key, flow: JSON.parse(JSON.stringify(run.context.flow)), intakeAnswers: run.context._engine.intakeAnswers });
         if (history.length > 30) history.shift();
       }
       next.context._engine.promptAt = now.getTime();

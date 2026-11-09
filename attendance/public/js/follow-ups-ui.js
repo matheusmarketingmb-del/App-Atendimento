@@ -30,7 +30,8 @@
 
   async function refreshBadge() {
     const badge = $("#agenda-badge");
-    if (!badge || !ui.user) return;
+    const button = $("#agenda-button");
+    if (!badge || !button || !ui.user) return;
     try {
       const summary = await api("/api/follow-ups/summary");
       const overdue = summary.mine?.overdue || 0;
@@ -38,8 +39,15 @@
       badge.hidden = !(overdue || today);
       badge.textContent = overdue ? String(overdue) : String(today);
       badge.classList.toggle("critical", Boolean(overdue));
-      $("#agenda-button").title = overdue ? `${overdue} retorno(s) atrasado(s)` : today ? `${today} retorno(s) para hoje` : "Agenda e follow-ups";
-    } catch { badge.hidden = true; }
+      badge.classList.toggle("due-today", Boolean(today));
+      const details = [today && `${today} retorno(s) para hoje`, overdue && `${overdue} retorno(s) atrasado(s)`].filter(Boolean);
+      button.title = details.length ? `Agenda · ${details.join(" · ")}` : "Agenda e follow-ups";
+      button.setAttribute("aria-label", button.title);
+    } catch {
+      badge.hidden = true;
+      button.title = "Agenda e follow-ups";
+      button.setAttribute("aria-label", button.title);
+    }
   }
 
   function itemMarkup(item) {
@@ -144,6 +152,7 @@
     $("#cancel-follow-up")?.addEventListener("click", () => $("#follow-up-dialog").close());
     refreshBadge();
     setInterval(() => { if (!document.hidden) refreshBadge(); }, 5 * 60 * 1000);
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshBadge(); });
   }
 
   function onConversation(conversation) {
